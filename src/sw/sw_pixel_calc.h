@@ -277,6 +277,45 @@ void alphaBlend(uintpixel_t* dcolor, uintpixel_t scolor, int blendmode, int srca
 #endif // SW_DITHERED_BLENDING
 }
 
+#if PIXEL_SIZE == 16 && !defined SW_DITHERED_BLENDING
+
+// Fast path for bm_normal blending at a constant partial alpha in 15-bit mode.
+//
+// alphaBlend() multiplies each of the three channels of both pixels per call.
+// When the source colour is constant over a run (a rectangle fill, or a small
+// sprite stretched over a large area) its half can be premultiplied once, and
+// the destination's red and blue can share one multiply by moving red up to
+// bit 16 so the two 13-bit products cannot touch. The result is bit-identical
+// to alphaBlend() for bm_normal.
+#define SW_HAS_PREMUL_BLEND
+
+// alphaBlend() treats alpha outside this range as "skip" or "opaque copy".
+FORCE_INLINE bool swrIsPartialAlpha(int alpha)
+{
+    return alpha >= 4 && alpha <= 253;
+}
+
+FORCE_INLINE uint32_t swrSpreadRedBlue(uint32_t color)
+{
+    return ((color & 0x7C00) << 6) | (color & 0x1F);
+}
+
+FORCE_INLINE uint32_t swrGreen(uint32_t color)
+{
+    return (color >> 5) & 0x1F;
+}
+
+// srcRedBlue / srcGreen are swrSpreadRedBlue(src) * srcalpha and
+// swrGreen(src) * srcalpha; dstalpha is 256 - srcalpha.
+FORCE_INLINE uintpixel_t swrBlendPremultiplied(uintpixel_t dcolor, uint32_t srcRedBlue, uint32_t srcGreen, uint32_t dstalpha)
+{
+    uint32_t redBlue = (swrSpreadRedBlue(dcolor) * dstalpha + srcRedBlue) >> 8;
+    uint32_t green = (swrGreen(dcolor) * dstalpha + srcGreen) >> 8;
+    return (uintpixel_t)(0x8000 | ((redBlue >> 6) & 0x7C00) | ((green & 0x1F) << 5) | (redBlue & 0x1F));
+}
+
+#endif // PIXEL_SIZE == 16 && !defined SW_DITHERED_BLENDING
+
 // Calculates an internal "alpha" value from GML-provided "alpha" values.
 FORCE_INLINE int swrIntAlpha(float alphaf)
 {

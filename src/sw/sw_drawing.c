@@ -32,6 +32,17 @@ static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixe
     if (color == color2)
     {
         uintpixel_t *line = &swr->fb[dy * swr->fbPitch + dx];
+#ifdef SW_HAS_PREMUL_BLEND
+        if (blendmode == bm_normal && swrIsPartialAlpha(alpha))
+        {
+            uint32_t srcRedBlue = swrSpreadRedBlue(color) * alpha;
+            uint32_t srcGreen = swrGreen(color) * alpha;
+            uint32_t dstalpha = 256 - alpha;
+            for (int i = 0; i < dw; i++)
+                line[i] = swrBlendPremultiplied(line[i], srcRedBlue, srcGreen, dstalpha);
+            return;
+        }
+#endif
         for (int i = 0; i < dw; i++)
             alphaBlend(&line[i], color, blendmode, alpha);
     }
@@ -332,6 +343,45 @@ static void swrDrawSpriteInternal(
     fixedp_t iys2 = iys * ystep;
     
     int blendmode = swr->blendMode;
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    // Translucent sprites (fades, overlays): premultiply the tinted source
+    // colour and reuse it while consecutive source pixels are the same.
+    if (blendmode == bm_normal && swrIsPartialAlpha(alpha))
+    {
+        uint32_t dstalpha = 256 - alpha;
+        uint32_t lastPixel = 0xFFFFFFFF;
+        uint32_t srcRedBlue = 0, srcGreen = 0;
+        
+        fixedp_t ys2 = iys2;
+        for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
+        {
+            uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
+            const uintpixel_t* srcline;
+            if (dh == sh)
+                srcline = &texture->buffer[(sy + ys) * texture->width + sx];
+            else
+                srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
+            
+            fixedp_t xs2 = ixs2;
+            for (int x = 0; x < dw; x++, xs2 += oxs2)
+            {
+                uintpixel_t pixel = srcline[(int)(xs2 >> fp_prec)];
+                if (!swrIsOpaque(pixel))
+                    continue;
+                
+                if (pixel != lastPixel) {
+                    uintpixel_t tinted = tint(tintColor, pixel);
+                    srcRedBlue = swrSpreadRedBlue(tinted) * alpha;
+                    srcGreen = swrGreen(tinted) * alpha;
+                    lastPixel = pixel;
+                }
+                dstline[x] = swrBlendPremultiplied(dstline[x], srcRedBlue, srcGreen, dstalpha);
+            }
+        }
+        return;
+    }
+#endif
     
     if (sw == dw)
     {
