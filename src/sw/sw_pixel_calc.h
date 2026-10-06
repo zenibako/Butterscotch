@@ -370,7 +370,7 @@ FORCE_INLINE uintpixel_t swrFourWayBlend(uintpixel_t color1, uintpixel_t color2,
     int c1b = color1 & 0x1F, c1g = (color1 >> 5) & 0x1F, c1r = (color1 >> 10) & 0x1F;
     int c2b = color2 & 0x1F, c2g = (color2 >> 5) & 0x1F, c2r = (color2 >> 10) & 0x1F;
     int c3b = color3 & 0x1F, c3g = (color3 >> 5) & 0x1F, c3r = (color3 >> 10) & 0x1F;
-    int c4b = color4 & 0x1F, c4g = (color4 >> 5) & 0x1F, c4b = (color4 >> 10) & 0x1F;
+    int c4b = color4 & 0x1F, c4g = (color4 >> 5) & 0x1F, c4r = (color4 >> 10) & 0x1F;
     int ca = color1 & 0x8000;
     int cr = (c1r * frac1 + c2r * frac2 + c3r * frac3 + c4r * frac4) >> 16;
     int cg = (c1g * frac1 + c2g * frac2 + c3g * frac3 + c4g * frac4) >> 16;
