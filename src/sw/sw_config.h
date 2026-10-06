@@ -4,7 +4,10 @@
 // -======- USER CONFIG START -======-
 
 // Change the bit-depth of the final image. Valid values are 8, 16, or 32.
+// Can be overridden from the build system (-DPIXEL_SIZE=16).
+#ifndef PIXEL_SIZE
 #define PIXEL_SIZE 32
+#endif
 //#define PIXEL_SIZE 16
 //#define PIXEL_SIZE 8
 
@@ -38,7 +41,9 @@
 // Amount of textures that can be loaded in at once.  If too many are loaded,
 // start unloading.  Note that this isn't particularly effective towards memory
 // optimization, and we should be looking into something else.
+#ifndef TEXTURE_LRU_LENGTH
 #define TEXTURE_LRU_LENGTH 64
+#endif
 
 // Amount of surfaces that can be created at the same time.
 #define SURFACE_MAX_COUNT 64
