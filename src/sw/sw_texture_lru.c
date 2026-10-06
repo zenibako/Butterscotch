@@ -53,6 +53,7 @@ static bool evictLeastRecentlyUsed(SWRenderer* swr, bool includeCurrentFrame)
     
     if (victim == -1) return false;
     
+    logInfo("SWR: Unloaded TXTR page %d%s\n", victim, includeCurrentFrame ? " (in use, out of memory)" : "");
     swrEvictTextureFromCache(swr, victim);
     return true;
 }
@@ -136,6 +137,24 @@ static SWTexture* loadFromDataWin(SWRenderer* swr, uint32_t pageId)
     return texture;
 }
 
+#ifdef TEXTURE_CACHE_RESERVE_BYTES
+// On targets with a small fixed heap the byte budget alone is a guess: how
+// much the game itself needs varies by scene. After each load, make sure a
+// block of TEXTURE_CACHE_RESERVE_BYTES can still be allocated, and give up
+// the least recently used pages until it can.
+static void keepHeapReserve(SWRenderer* swr)
+{
+    for (;;) {
+        void* probe = malloc(TEXTURE_CACHE_RESERVE_BYTES);
+        if (probe) {
+            free(probe);
+            return;
+        }
+        if (!evictLeastRecentlyUsed(swr, false)) return;
+    }
+}
+#endif
+
 // Lazily loads a TXTR page on first access.
 // Returns true if the texture is ready, false if it failed to load.
 bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
@@ -159,6 +178,9 @@ bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
     
     texture->lastUsedFrame = swr->frameCounter;
     swr->textures[pageId] = texture;
+#ifdef TEXTURE_CACHE_RESERVE_BYTES
+    keepHeapReserve(swr);
+#endif
     
     logInfo("SWR: Loaded TXTR page %u (%dx%d, %s), cache %u KB\n", pageId, texture->width, texture->height,
             source, (unsigned)(cachedBytes(swr) / 1024));
