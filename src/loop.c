@@ -933,6 +933,9 @@ int loop(CommandLineArgs args, const char *argv0) {
             audioSystem = (AudioSystem*) AlAudioSystem_create();
 #elif defined(USE_MINIAUDIO)
             audioSystem = (AudioSystem*) MaAudioSystem_create(dataWin);
+#elif defined(USE_PLATFORM_AUDIO)
+            // The platform backend supplies its own AudioSystem implementation.
+            audioSystem = platformCreateAudioSystem();
 #else
             audioSystem = (AudioSystem*) NoopAudioSystem_create();
 #endif
