@@ -383,6 +383,56 @@ static void swrDrawSpriteInternal(
     }
 #endif
     
+#if PIXEL_SIZE == 16 && !defined SW_DITHERED_BLENDING
+    // Fully opaque draws, the common case: copy opaque texels straight
+    // through, tinting once per run of identical source pixels. alphaBlend()
+    // reduces to a plain store for bm_normal at this alpha.
+    if (blendmode == bm_normal && alpha > 253)
+    {
+        bool untinted = (tintColor & 0x7FFF) == 0x7FFF;
+        uint32_t lastPixel = 0xFFFFFFFF;
+        uintpixel_t lastTinted = 0;
+        
+        fixedp_t ys2 = iys2;
+        for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
+        {
+            uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
+            const uintpixel_t* srcline;
+            if (dh == sh)
+                srcline = &texture->buffer[(sy + ys) * texture->width + sx];
+            else
+                srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
+            
+            fixedp_t xs2 = ixs2;
+            if (untinted)
+            {
+                for (int x = 0; x < dw; x++, xs2 += oxs2)
+                {
+                    uintpixel_t pixel = srcline[(int)(xs2 >> fp_prec)];
+                    if (swrIsOpaque(pixel))
+                        dstline[x] = pixel;
+                }
+            }
+            else
+            {
+                for (int x = 0; x < dw; x++, xs2 += oxs2)
+                {
+                    uintpixel_t pixel = srcline[(int)(xs2 >> fp_prec)];
+                    if (!swrIsOpaque(pixel))
+                        continue;
+                    
+                    if (pixel != lastPixel) {
+                        lastTinted = tint(tintColor, pixel);
+                        lastPixel = pixel;
+                    }
+                    dstline[x] = lastTinted;
+                }
+            }
+        }
+        return;
+    }
+#endif
+    
     if (sw == dw)
     {
         fixedp_t ys2 = (fixedp_t) iys2;

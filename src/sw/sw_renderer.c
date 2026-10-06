@@ -651,10 +651,7 @@ static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alp
 #endif
     
     for (int y = 0; y < swr->height; y++) {
-        uintpixel_t* line = &swr->fb[y * swr->fbPitch];
-        for (int x = 0; x < swr->width; x++) {
-            line[x] = color;
-        }
+        swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->width, (uintpixel_t) color);
     }
 }
 
@@ -1237,10 +1234,7 @@ void SWRenderer_clearFrameBuffer(Renderer* renderer, uint32_t color)
     
     size_t fbSize = swr->fbPitch;
     fbSize *= swr->height;
-    for (size_t i = 0; i < fbSize; i++)
-    {
-        swr->fb[i] = pxcolor;
-    }
+    swrFillPixels(swr->fb, fbSize, pxcolor);
 }
 
 static uint32_t SWRenderer_spriteGetTexture(Renderer* renderer, int32_t tpagIndex)

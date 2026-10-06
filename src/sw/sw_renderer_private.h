@@ -104,6 +104,27 @@ SWRenderer;
 #include "sw_inlined.h"
 #include "sw_transform.h"
 
+// Fills `count` pixels with one colour, two at a time where it can.
+FORCE_INLINE void swrFillPixels(uintpixel_t* dst, size_t count, uintpixel_t color)
+{
+#if PIXEL_SIZE == 16
+    if (count > 0 && ((uintptr_t) dst & 2)) {
+        *dst++ = color;
+        count--;
+    }
+    uint32_t pair = ((uint32_t) color << 16) | color;
+    uint32_t* dst32 = (uint32_t*) (void*) dst;
+    size_t pairs = count / 2;
+    for (size_t i = 0; i < pairs; i++)
+        dst32[i] = pair;
+    if (count & 1)
+        dst[count - 1] = color;
+#else
+    for (size_t i = 0; i < count; i++)
+        dst[i] = color;
+#endif
+}
+
 #include "sw_texture.h"
 #include "sw_surface.h"
 #include "sw_drawing.h"
