@@ -20,6 +20,7 @@ typedef struct
 {
     uintpixel_t* buffer;
     uint16_t width, height;
+    uint32_t lastUsedFrame; // SWRenderer.frameCounter when last drawn, for cache eviction
 }
 SWTexture;
 
@@ -66,9 +67,7 @@ typedef struct
     
     SWTexture** textures;
     SWSurface** surfaces;
-    uint32_t* textureIndexLRU;
-    uint32_t textureIndexLRUHead;
-    uint32_t textureIndexLRUTail;
+    uint32_t frameCounter;
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;

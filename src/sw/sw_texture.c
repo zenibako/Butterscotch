@@ -28,6 +28,7 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     
     txt->width = (uint16_t) width;
     txt->height = (uint16_t) height;
+    txt->lastUsedFrame = 0;
     
     return txt;
 }

@@ -28,11 +28,6 @@ static void SWRenderer_init(Renderer* renderer, DataWin* dataWin)
     swr->textures = (SWTexture**) safeCalloc(swr->totalTextureCount, sizeof(SWTexture*));
     swr->surfaces = (SWSurface**) safeCalloc(swr->surfaceCount, sizeof(SWSurface*));
     
-    //allocate texture LRU cache to allow for dynamic unloading of textures
-    swr->textureIndexLRU = (uint32_t*) safeCalloc(TEXTURE_LRU_LENGTH, sizeof(uint32_t));
-    swr->textureIndexLRUHead = 0;
-    swr->textureIndexLRUTail = 0;
-    
     //HACK: this isn't good, really.  This should seriously be refactored.
     //expand datawin's tpag items list to include our surface count.
     swr->originalTPagCount = dataWin->tpag.count;
@@ -81,7 +76,6 @@ static void SWRenderer_destroy(Renderer* renderer)
     free(swr->textures);
     swr->textureCount = 0;
     swr->totalTextureCount = 0;
-    free(swr->textureIndexLRU);
     free(swr->vertexData);
     
     free(swr->mainFb);
@@ -94,6 +88,7 @@ static void SWRenderer_destroy(Renderer* renderer)
 static void SWRenderer_beginFrame(Renderer* renderer, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
+    swr->frameCounter++;
     swr->gameW = gameW;
     swr->gameH = gameH;
     swr->drawingToSurface = false;

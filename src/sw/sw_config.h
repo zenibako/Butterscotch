@@ -38,11 +38,11 @@
 // Completely exclude bm_subtract support.
 //#define SW_NO_SUBTRACT_SUPPORT
 
-// Amount of textures that can be loaded in at once.  If too many are loaded,
-// start unloading.  Note that this isn't particularly effective towards memory
-// optimization, and we should be looking into something else.
-#ifndef TEXTURE_LRU_LENGTH
-#define TEXTURE_LRU_LENGTH 64
+// How many bytes of decoded texture pages to keep in memory before the least
+// recently used ones are unloaded. Pages needed by the current frame are kept
+// even if that goes over this budget.
+#ifndef TEXTURE_CACHE_BYTES
+#define TEXTURE_CACHE_BYTES (256u * 1024u * 1024u)
 #endif
 
 // Amount of surfaces that can be created at the same time.
