@@ -2963,6 +2963,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         // Bulk-read the chunk data into memory for fast parsing
         LOAD_PHASE_BEGIN();
         uint8_t* chunkBuffer = nullptr;
+        bool borrowedChunkBuffer = false; // the reader points at memory this loop does not own
         if (shouldParse && chunkLength > 0 && options.loadType == DATAWINLOADTYPE_LOAD_PER_CHUNK) {
             // With lazily loaded textures only the entry table at the start of TXTR is parsed here; the image
             // blobs that make up nearly all of the chunk are read on demand later. Reading the whole chunk just
@@ -2971,6 +2972,14 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             if (options.lazyLoadTextures && memcmp(chunkName, "TXTR", 4) == 0 && bulkLength > TXTR_HEADER_READ_BYTES)
                 bulkLength = TXTR_HEADER_READ_BYTES;
 
+            // STRG was already read whole by the pre-pass above (other chunks point into it), so parse its table
+            // from that copy rather than reading the chunk from storage a second time.
+            bool reuseStrg = memcmp(chunkName, "STRG", 4) == 0 && dw->strgBuffer != nullptr &&
+                             dw->strgBufferBase == chunkDataStart && dw->mappedFile == nullptr;
+            if (reuseStrg) {
+                BinaryReader_setBuffer(&reader, dw->strgBuffer, chunkDataStart, chunkLength);
+                borrowedChunkBuffer = true;
+            } else
             chunkBuffer = (uint8_t *)malloc(bulkLength);
             LOAD_PHASE_END(0);
             if (chunkBuffer) {
@@ -3091,6 +3100,8 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         if (chunkBuffer != nullptr) {
             BinaryReader_clearBuffer(&reader);
             free(chunkBuffer);
+        } else if (borrowedChunkBuffer) {
+            BinaryReader_clearBuffer(&reader);
         }
         LOAD_PHASE_END(3);
 
