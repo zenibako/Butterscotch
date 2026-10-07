@@ -813,7 +813,14 @@ int loop(CommandLineArgs args, const char *argv0) {
         char* dataWinDir = safeStrdup(args.dataWinPath);
         bsGetDirname(dataWinDir);
         const char* savePath = args.saveFolder != nullptr ? args.saveFolder : dataWinDir;
+#ifdef USE_PLATFORM_FILE_SYSTEM
+        // The platform backend supplies its own FileSystem (e.g. fixed save slots instead of a directory).
+        (void) savePath;
+        FileSystem* gameFs = platformCreateFileSystem();
+#else
         OverlayFileSystem* overlayFs = OverlayFileSystem_create(dataWinDir, savePath);
+        FileSystem* gameFs = (FileSystem*) overlayFs;
+#endif
         free(dataWinDir);
 
         gfx = args.renderer;
@@ -942,7 +949,7 @@ int loop(CommandLineArgs args, const char *argv0) {
         }
 
         // Initialize the runner
-        Runner* runner = Runner_create(dataWin, vm, renderer, (FileSystem*) overlayFs, audioSystem, args.seed);
+        Runner* runner = Runner_create(dataWin, vm, renderer, gameFs, audioSystem, args.seed);
 
         if (!args.lazyTextures) {
             repeat(runner->dataWin->txtr.count, i) {
@@ -1470,7 +1477,11 @@ int loop(CommandLineArgs args, const char *argv0) {
         }
 
         Runner_free(runner);
+#ifdef USE_PLATFORM_FILE_SYSTEM
+        platformDestroyFileSystem(gameFs);
+#else
         OverlayFileSystem_destroy(overlayFs);
+#endif
 #ifdef ENABLE_VM_OPCODE_PROFILER
         VM_printOpcodeProfilerReport(vm);
 #endif

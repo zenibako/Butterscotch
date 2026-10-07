@@ -135,6 +135,10 @@ bool platformGetScaledWindowSize(int32_t* outW, int32_t* outH);
 void platformSetWindowSize(int32_t width, int32_t height);
 void platformSetWindowTitle(const char* title);
 void platformSleepUntil(uint64_t time);
+#ifdef USE_PLATFORM_FILE_SYSTEM
+FileSystem* platformCreateFileSystem(void);
+void platformDestroyFileSystem(FileSystem* fs);
+#endif
 #ifdef USE_PLATFORM_AUDIO
 AudioSystem* platformCreateAudioSystem(void);
 #endif
