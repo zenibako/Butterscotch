@@ -13,6 +13,30 @@
 
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
+#ifdef SW_PLATFORM_FRAMEBUFFER
+// Optional: lets the platform hand out the buffer each frame is drawn into
+// (typically the display's back buffer) so a finished frame does not have to
+// be copied to the screen. Must return width * height pixels with no row
+// padding, or NULL to make the renderer use its own buffer. It is called at
+// the start of every frame and may return a different buffer each time; the
+// contents are undefined, the renderer clears them.
+uintpixel_t* platformAcquireFramebuffer(int width, int height);
+
+static bool swrAcquirePlatformFramebuffer(SWRenderer* swr, int width, int height)
+{
+    uintpixel_t* fb = platformAcquireFramebuffer(width, height);
+    if (!fb) return false;
+    
+    if (!swr->fbIsPlatform) free(swr->mainFb);
+    swr->fbIsPlatform = true;
+    swr->fb = swr->mainFb = fb;
+    swr->fbPitch = width;
+    swr->width = swr->mainWidth = width;
+    swr->height = swr->mainHeight = height;
+    return true;
+}
+#endif
+
 static void SWRenderer_gpuSetColorWriteEnable(Renderer* renderer, bool red, bool green, bool blue, bool alpha);
 
 static void SWRenderer_init(Renderer* renderer, DataWin* dataWin)
@@ -78,7 +102,7 @@ static void SWRenderer_destroy(Renderer* renderer)
     swr->totalTextureCount = 0;
     free(swr->vertexData);
     
-    free(swr->mainFb);
+    if (!swr->fbIsPlatform) free(swr->mainFb);
     swr->fb = swr->mainFb = NULL;
     
     free(swr);
@@ -93,6 +117,23 @@ static void SWRenderer_beginFrame(Renderer* renderer, int32_t gameW, int32_t gam
     swr->gameH = gameH;
     swr->drawingToSurface = false;
     swr->blendMode = bm_normal;
+
+#ifdef SW_PLATFORM_FRAMEBUFFER
+    {
+        bool resized = swr->width != windowW || swr->height != windowH;
+        if (swrAcquirePlatformFramebuffer(swr, windowW, windowH)) {
+            // clearFrameBuffer ran before this frame's size was known.
+            if (resized) swrFillPixels(swr->fb, (size_t) windowW * windowH, swrConvertPixel(0));
+            return;
+        }
+        if (swr->fbIsPlatform) {
+            // The platform stopped providing a buffer: go back to our own.
+            swr->fbIsPlatform = false;
+            swr->fb = swr->mainFb = NULL;
+            swr->width = swr->height = 0;
+        }
+    }
+#endif
 
     if (swr->width != windowW || swr->height != windowH)
     {
@@ -1231,6 +1272,13 @@ void SWRenderer_clearFrameBuffer(Renderer* renderer, uint32_t color)
     SWRenderer* swr = (SWRenderer*) renderer;
     
     uintpixel_t pxcolor = swrConvertPixel(color);
+    
+#ifdef SW_PLATFORM_FRAMEBUFFER
+    // This is the first thing drawn each frame, so it has to go to the buffer
+    // the coming frame will use, not the one that was just presented.
+    if (swr->fbIsPlatform && !swrAcquirePlatformFramebuffer(swr, swr->width, swr->height)) return;
+#endif
+    if (!swr->fb) return;
     
     size_t fbSize = swr->fbPitch;
     fbSize *= swr->height;

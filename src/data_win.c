@@ -2910,6 +2910,11 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             (options.parseAudo && memcmp(chunkName, "AUDO", 4) == 0) ||
             (memcmp(chunkName, "ACRV", 4) == 0);
 
+#ifdef DATAWIN_LOG_CHUNKS
+        // With timestamps in the platform log this shows where load time goes.
+        logInfo("DataWin: %.4s, %u KB%s\n", chunkName, (unsigned) (chunkLength / 1024), shouldParse ? "" : " (skipped)");
+#endif
+
         // Bulk-read the chunk data into memory for fast parsing
         uint8_t* chunkBuffer = nullptr;
         if (shouldParse && chunkLength > 0 && options.loadType == DATAWINLOADTYPE_LOAD_PER_CHUNK) {

@@ -68,6 +68,7 @@ typedef struct
     SWTexture** textures;
     SWSurface** surfaces;
     uint32_t frameCounter;
+    bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;
