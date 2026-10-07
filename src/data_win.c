@@ -2752,6 +2752,17 @@ void DataWin_loadAudoIfNeeded(DataWin* dw, uint32_t audioEntryId) {
 // textures load lazily. Real tables are a few kilobytes.
 #define TXTR_HEADER_READ_BYTES (256u * 1024u)
 
+#ifdef DATAWIN_LOG_CHUNKS
+#include "gettime.h"
+// Where bulk-loaded chunks spend their time, summed over the whole file and logged once at the end.
+static uint64_t loadPhaseNanos[4]; // allocate, read, parse, free
+#define LOAD_PHASE_BEGIN() uint64_t loadPhaseStart = nowNanos()
+#define LOAD_PHASE_END(phase) do { uint64_t loadPhaseNow = nowNanos(); loadPhaseNanos[phase] += loadPhaseNow - loadPhaseStart; loadPhaseStart = loadPhaseNow; } while (0)
+#else
+#define LOAD_PHASE_BEGIN() do { } while (0)
+#define LOAD_PHASE_END(phase) do { } while (0)
+#endif
+
 // Whole-chunk reads go through a second, unbuffered handle in fixed-size pieces. On some targets a large fread on a
 // buffered FILE is served far more slowly than the same bytes requested in plain 64 KB reads (about 1 MB/s against
 // 13 MB/s on openfpgaOS), and whole chunks are most of what loading reads.
@@ -2946,6 +2957,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
 #endif
 
         // Bulk-read the chunk data into memory for fast parsing
+        LOAD_PHASE_BEGIN();
         uint8_t* chunkBuffer = nullptr;
         if (shouldParse && chunkLength > 0 && options.loadType == DATAWINLOADTYPE_LOAD_PER_CHUNK) {
             // With lazily loaded textures only the entry table at the start of TXTR is parsed here; the image
@@ -2956,6 +2968,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
                 bulkLength = TXTR_HEADER_READ_BYTES;
 
             chunkBuffer = (uint8_t *)malloc(bulkLength);
+            LOAD_PHASE_END(0);
             if (chunkBuffer) {
                 if (!bulkReadAt(bulkFile, chunkDataStart, chunkBuffer, bulkLength)) {
                     // Fall back to the main handle, which is positioned at the start of the chunk data.
@@ -2967,6 +2980,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
                 }
                 BinaryReader_setBuffer(&reader, chunkBuffer, chunkDataStart, bulkLength);
             }
+            LOAD_PHASE_END(1);
         }
 
         if (options.parseGen8 && memcmp(chunkName, "GEN8", 4) == 0) {
@@ -3067,11 +3081,14 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             }
         }
 
+        LOAD_PHASE_END(2);
+
         // Free the chunk buffer and revert to FILE*-based reads for the next header
         if (chunkBuffer != nullptr) {
             BinaryReader_clearBuffer(&reader);
             free(chunkBuffer);
         }
+        LOAD_PHASE_END(3);
 
         // Seek to chunk end (skip any unread data or trailing padding)
         if (options.loadType != DATAWINLOADTYPE_LOAD_PER_CHUNK) {
@@ -3107,6 +3124,12 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
     if (options.loadType == DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME)
         free(wholeFileData);
     if (bulkFile != nullptr) fclose(bulkFile);
+
+#ifdef DATAWIN_LOG_CHUNKS
+    logInfo("DataWin: phases: alloc %u ms, read %u ms, parse %u ms, free %u ms\n",
+            (unsigned) (loadPhaseNanos[0] / 1000000u), (unsigned) (loadPhaseNanos[1] / 1000000u),
+            (unsigned) (loadPhaseNanos[2] / 1000000u), (unsigned) (loadPhaseNanos[3] / 1000000u));
+#endif
 
     return dw;
 }
