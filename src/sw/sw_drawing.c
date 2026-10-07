@@ -275,6 +275,106 @@ FORCE_INLINE void swrCalculateAlphaBlending(
 
 #endif
 
+// Stacked overlays. A game can draw the same solid sprite over the same area
+// many times in a row: Undertale adds one full-screen fade object per frame
+// for as long as the player stands in a doorway, a dozen or more deep. Each
+// is a read-blend-write of every pixel, and N blends with a constant colour
+// equal one blend with the combined colour and coverage. So a solid sprite
+// draw is held back, and draws of the same area that follow it directly are
+// folded into it. A draw nothing follows comes out exactly as it did before;
+// a folded stack is rounded once instead of once per layer.
+void swrOverlayFlush(SWRenderer* swr)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    int count = swr->overlayCount;
+    if (count == 0) return;
+    swr->overlayCount = 0;
+    
+    uint32_t dstalpha, srcRedBlue, srcGreen;
+    uintpixel_t fill = swr->overlayFirstColor;
+    if (count == 1) {
+        int alpha = swr->overlayFirstAlpha;
+        dstalpha = swrIsPartialAlpha(alpha) ? (uint32_t) (256 - alpha) : 0;
+        srcRedBlue = swrSpreadRedBlue(fill) * (uint32_t) alpha;
+        srcGreen = swrGreen(fill) * (uint32_t) alpha;
+    } else {
+        uint32_t red = (uint32_t) (swr->overlayRed + 0.5f);
+        uint32_t green = (uint32_t) (swr->overlayGreen + 0.5f);
+        uint32_t blue = (uint32_t) (swr->overlayBlue + 0.5f);
+        dstalpha = (uint32_t) (swr->overlayKeep * 256.0f + 0.5f);
+        srcRedBlue = (red << 16) | blue;
+        srcGreen = green;
+        fill = (uintpixel_t) (0x8000 | ((red >> 8) << 10) | ((green >> 8) << 5) | (blue >> 8));
+    }
+    
+    for (int y = 0; y < swr->overlayH; y++)
+    {
+        uintpixel_t* dstline = &swr->overlayFb[(swr->overlayY + y) * swr->overlayPitch + swr->overlayX];
+        if (dstalpha == 0) {
+            swrFillPixels(dstline, (size_t) swr->overlayW, fill);
+            continue;
+        }
+        for (int x = 0; x < swr->overlayW; x++)
+            dstline[x] = swrBlendPremultiplied(dstline[x], srcRedBlue, srcGreen, dstalpha);
+    }
+#else
+    (void) swr;
+#endif
+}
+
+#ifdef SW_HAS_PREMUL_BLEND
+#define SW_OVERLAY_MAX_SOURCE_TEXELS 4096
+
+// Holds the draw back if it is a solid overlay, folding it into the one
+// already held where it covers the same pixels. Returns false if the caller
+// has to draw it. Takes the clipped rectangles of an unflipped draw; lastCol
+// and lastRow are the furthest texels the draw would sample.
+static bool swrOverlayHold(SWRenderer* swr, int dx, int dy, int dw, int dh, SWTexture* texture,
+                           int sx, int sy, int lastCol, int lastRow, uintpixel_t tintColor, int alpha)
+{
+    if (lastCol >= texture->width || lastRow >= texture->height) return false;
+    if ((lastCol - sx + 1) * (lastRow - sy + 1) > SW_OVERLAY_MAX_SOURCE_TEXELS) return false;
+    
+    uintpixel_t texel = texture->buffer[sy * texture->width + sx];
+    if (!swrIsOpaque(texel)) return false;
+    for (int row = sy; row <= lastRow; row++) {
+        const uintpixel_t* srcline = &texture->buffer[row * texture->width];
+        for (int col = sx; col <= lastCol; col++)
+            if (srcline[col] != texel) return false;
+    }
+    
+    uintpixel_t color = tint(tintColor, texel);
+    float cover = alpha > 253 ? 1.0f : (float) alpha / 256.0f;
+    float red = (float) ((color >> 10) & 0x1F) * 256.0f;
+    float green = (float) swrGreen(color) * 256.0f;
+    float blue = (float) (color & 0x1F) * 256.0f;
+    
+    bool sameArea = swr->overlayCount > 0 && swr->overlayFb == swr->fb && swr->overlayPitch == swr->fbPitch &&
+                    swr->overlayX == dx && swr->overlayY == dy && swr->overlayW == dw && swr->overlayH == dh;
+    if (sameArea) {
+        swr->overlayCount++;
+        swr->overlayKeep *= 1.0f - cover;
+        swr->overlayRed = swr->overlayRed * (1.0f - cover) + red * cover;
+        swr->overlayGreen = swr->overlayGreen * (1.0f - cover) + green * cover;
+        swr->overlayBlue = swr->overlayBlue * (1.0f - cover) + blue * cover;
+        return true;
+    }
+    
+    swrOverlayFlush(swr);
+    swr->overlayCount = 1;
+    swr->overlayFb = swr->fb;
+    swr->overlayPitch = swr->fbPitch;
+    swr->overlayX = dx; swr->overlayY = dy; swr->overlayW = dw; swr->overlayH = dh;
+    swr->overlayFirstColor = color;
+    swr->overlayFirstAlpha = alpha;
+    swr->overlayKeep = 1.0f - cover;
+    swr->overlayRed = red * cover;
+    swr->overlayGreen = green * cover;
+    swr->overlayBlue = blue * cover;
+    return true;
+}
+#endif
+
 static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
@@ -347,6 +447,19 @@ static void swrDrawSpriteInternal(
     fixedp_t iys2 = iys * ystep;
     
     int blendmode = swr->blendMode;
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    // Solid overlays drawn at full size or enlarged may be held back and merged.
+    if (swr->overlayMergeAllowed && blendmode == bm_normal && alpha >= 4 && !flipX && !flipY &&
+        xstep <= (1 << fp_prec) && ystep <= (1 << fp_prec))
+    {
+        int lastCol = sx + (int) (((fixedp_t) (dw - 1) * xstep) >> fp_prec);
+        int lastRow = sy + ((dh == sh) ? dh - 1 : (int) (((fixedp_t) (dh - 1) * ystep) >> fp_prec));
+        if (swrOverlayHold(swr, dx, dy, dw, dh, texture, sx, sy, lastCol, lastRow, tintColor, alpha))
+            return;
+    }
+    swrOverlayFlush(swr);
+#endif
     
 #ifdef SW_HAS_PREMUL_BLEND
     // Shrinking by about half with nearest-neighbour sampling drops every

@@ -71,6 +71,18 @@ typedef struct
     bool pendingClear;      // clearFrameBuffer was requested but not done yet (see swrFlushPendingClear)
     uintpixel_t pendingClearColor;
     bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
+    
+    // A solid-colour sprite draw that has been held back so that identical
+    // draws stacked directly on top of it fold into one blend (see swrOverlayFlush).
+    bool overlayMergeAllowed;   // set only while SWRenderer_drawSprite is running
+    int overlayCount;           // draws held; 0 when nothing is pending
+    uintpixel_t* overlayFb;
+    int overlayPitch;
+    int overlayX, overlayY, overlayW, overlayH;
+    uintpixel_t overlayFirstColor;  // the first draw, kept exactly so that a lone draw is unchanged
+    int overlayFirstAlpha;
+    float overlayKeep;              // share of the destination that still shows through
+    float overlayRed, overlayGreen, overlayBlue; // accumulated colour, 5-bit channel * 256
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;
