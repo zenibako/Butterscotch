@@ -6,6 +6,7 @@
 #include "image/image_decoder.h"
 
 #include "sw_renderer_private.h"
+#include "gettime.h"
 
 #define MAX_TRIS 4096
 #define VERTICES_PER_TRIANGLE 3
@@ -1570,6 +1571,44 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
     
     UNIMP();
 }
+#ifdef SW_DRAW_PROFILE
+// Times each kind of draw call and hands the totals to the platform, which
+// can then say what a slow frame was spent drawing.
+void platformDrawProfile(int kind, uint64_t nanos);
+enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
+#define SWR_PROFILED(kind, call) do { uint64_t start_ = nowNanos(); call; platformDrawProfile(kind, nowNanos() - start_); } while (0)
+
+static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
+{
+    SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
+}
+
+static void SWRenderer_profDrawSpritePart(Renderer* renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha)
+{
+    SWR_PROFILED(SWR_PROF_PART, SWRenderer_drawSpritePart(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x, y, xscale, yscale, angleDeg, pivotX, pivotY, color, alpha));
+}
+
+static void SWRenderer_profDrawText(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, float angleDeg, float lineSeparation)
+{
+    SWR_PROFILED(SWR_PROF_TEXT, SWRenderer_drawText(renderer, text, x, y, xscale, yscale, angleDeg, lineSeparation));
+}
+
+static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, float x, float y, float xscale, float yscale, float angleDeg, int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha, float lineSeparation)
+{
+    SWR_PROFILED(SWR_PROF_TEXT, SWRenderer_drawTextColor(renderer, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, alpha, lineSeparation));
+}
+
+static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
+{
+    SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
+}
+
+static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
+{
+    SWR_PROFILED(SWR_PROF_RECT, SWRenderer_drawRectangle(renderer, x1, y1, x2, y2, color, alpha, outline));
+}
+#endif
+
 
 Renderer* SWRenderer_create(void)
 {
@@ -1645,6 +1684,14 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawVertex               = SWRenderer_drawVertex;
     swrVtable.drawVertexBuffer         = SWRenderer_drawVertexBuffer;
     swrVtable.drawTextUI               = SWRenderer_drawTextUI;
+#ifdef SW_DRAW_PROFILE
+    swrVtable.drawSprite               = SWRenderer_profDrawSprite;
+    swrVtable.drawSpritePart           = SWRenderer_profDrawSpritePart;
+    swrVtable.drawText                 = SWRenderer_profDrawText;
+    swrVtable.drawTextColor            = SWRenderer_profDrawTextColor;
+    swrVtable.drawSpriteTiled          = SWRenderer_profDrawSpriteTiled;
+    swrVtable.drawRectangle            = SWRenderer_profDrawRectangle;
+#endif
     
     swrVtable.drawTile                 = NULL;
     
