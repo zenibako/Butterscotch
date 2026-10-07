@@ -2769,6 +2769,12 @@ static uint64_t loadPhaseNanos[4]; // allocate, read, parse, free
 // The extra copy costs far less than it saves there and next to nothing elsewhere.
 #define BULK_READ_PIECE (64u * 1024u)
 
+#ifdef PLATFORM_BUSY_TICK
+// Called between the pieces of a long blocking read, so the platform can keep
+// time-critical work going (feeding its audio queue, for one).
+void platformBusyTick(void);
+#endif
+
 static bool bulkReadAt(FILE* bulkFile, size_t offset, uint8_t* dest, size_t bytes) {
     static uint8_t piece[BULK_READ_PIECE] __attribute__((aligned(512)));
 
@@ -2781,6 +2787,9 @@ static bool bulkReadAt(FILE* bulkFile, size_t offset, uint8_t* dest, size_t byte
         if (got == 0) return false;
         memcpy(dest + done, piece, got);
         done += got;
+#ifdef PLATFORM_BUSY_TICK
+        platformBusyTick();
+#endif
     }
     return true;
 }

@@ -67,6 +67,12 @@ bool swrTexturePackGetSize(uint32_t pageId, int* outW, int* outH)
     return true;
 }
 
+#ifdef PLATFORM_BUSY_TICK
+// Called between the pieces of a long blocking read, so the platform can keep
+// time-critical work going (feeding its audio queue, for one).
+void platformBusyTick(void);
+#endif
+
 bool swrTexturePackDecode(uint32_t pageId, uintpixel_t* buffer)
 {
     if (pageId >= packCount) return false;
@@ -88,6 +94,9 @@ bool swrTexturePackDecode(uint32_t pageId, uintpixel_t* buffer)
         size_t want = wordsLeft < PACK_READ_WORDS ? wordsLeft : PACK_READ_WORDS;
         if (fread(words, sizeof(uint16_t), want, packFile) != want) return false;
         wordsLeft -= want;
+#ifdef PLATFORM_BUSY_TICK
+        platformBusyTick();
+#endif
         
         for (size_t i = 0; i < want; i++)
         {
