@@ -2748,6 +2748,10 @@ void DataWin_loadAudoIfNeeded(DataWin* dw, uint32_t audioEntryId) {
     }
 }
 
+// Upper bound on the TXTR entry table (pointer list plus per-texture records), which is all that is parsed when
+// textures load lazily. Real tables are a few kilobytes.
+#define TXTR_HEADER_READ_BYTES (256u * 1024u)
+
 // ===[ MAIN PARSE FUNCTION ]===
 
 DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
@@ -2918,14 +2922,21 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         // Bulk-read the chunk data into memory for fast parsing
         uint8_t* chunkBuffer = nullptr;
         if (shouldParse && chunkLength > 0 && options.loadType == DATAWINLOADTYPE_LOAD_PER_CHUNK) {
-            chunkBuffer = (uint8_t *)malloc(chunkLength);
+            // With lazily loaded textures only the entry table at the start of TXTR is parsed here; the image
+            // blobs that make up nearly all of the chunk are read on demand later. Reading the whole chunk just
+            // to throw it away costs seconds on slow storage.
+            size_t bulkLength = chunkLength;
+            if (options.lazyLoadTextures && memcmp(chunkName, "TXTR", 4) == 0 && bulkLength > TXTR_HEADER_READ_BYTES)
+                bulkLength = TXTR_HEADER_READ_BYTES;
+
+            chunkBuffer = (uint8_t *)malloc(bulkLength);
             if (chunkBuffer) {
-                size_t read = fread(chunkBuffer, 1, chunkLength, reader.file);
-                if (read != chunkLength) {
-                    logError("DataWin: short read on chunk %.4s (expected %u, got %zu)\n", chunkName, chunkLength, read);
+                size_t read = fread(chunkBuffer, 1, bulkLength, reader.file);
+                if (read != bulkLength) {
+                    logError("DataWin: short read on chunk %.4s (expected %zu, got %zu)\n", chunkName, bulkLength, read);
                     exit(1);
                 }
-                BinaryReader_setBuffer(&reader, chunkBuffer, chunkDataStart, chunkLength);
+                BinaryReader_setBuffer(&reader, chunkBuffer, chunkDataStart, bulkLength);
             }
         }
 
