@@ -13,6 +13,8 @@
 
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
+static void swrFlushPendingClear(SWRenderer* swr);
+
 #ifdef SW_PLATFORM_FRAMEBUFFER
 // Optional: lets the platform hand out the buffer each frame is drawn into
 // (typically the display's back buffer) so a finished frame does not have to
@@ -170,6 +172,9 @@ static void SWRenderer_endFrameEnd(Renderer* renderer)
 #ifdef SW_DEBUG_FRAME_DRAW_BOUNDS
     logDebug("swr: end drawing frame\n");
 #endif
+    
+    // Nothing cleared the frame itself: do it now rather than present stale pixels.
+    swrFlushPendingClear(swr);
     
     platformSetNextFramebuffer(swr->fb, swr->width, swr->height, PIXEL_SIZE);
 
@@ -664,9 +669,29 @@ static void SWRenderer_drawSurfaceTiled(Renderer* renderer, int32_t surfaceID, f
     }
 }
 
+// The main loop clears the window (clearFrameBuffer) before every frame, and
+// the runner then clears the whole target again with the room's background
+// colour before drawing views. On slow memory two full-screen fills per frame
+// are expensive, so the first one is only recorded and is skipped when the
+// second one arrives. Anything else that could touch the main buffer first
+// performs it.
+static void swrFlushPendingClear(SWRenderer* swr)
+{
+    if (!swr->pendingClear) return;
+    swr->pendingClear = false;
+    if (!swr->mainFb) return;
+    swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->pendingClearColor);
+}
+
 static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
+    
+    // A clear of the whole main buffer makes the pending one redundant.
+    if (swr->fb == swr->mainFb && swr->fbPitch == swr->width)
+        swr->pendingClear = false;
+    else
+        swrFlushPendingClear(swr);
     
     color = swrConvertPixel(color);
 #ifdef TRANSPARENT_MASK
@@ -1278,11 +1303,8 @@ void SWRenderer_clearFrameBuffer(Renderer* renderer, uint32_t color)
     // the coming frame will use, not the one that was just presented.
     if (swr->fbIsPlatform && !swrAcquirePlatformFramebuffer(swr, swr->width, swr->height)) return;
 #endif
-    if (!swr->fb) return;
-    
-    size_t fbSize = swr->fbPitch;
-    fbSize *= swr->height;
-    swrFillPixels(swr->fb, fbSize, pxcolor);
+    swr->pendingClear = true;
+    swr->pendingClearColor = pxcolor;
 }
 
 static uint32_t SWRenderer_spriteGetTexture(Renderer* renderer, int32_t tpagIndex)

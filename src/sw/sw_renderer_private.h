@@ -68,6 +68,8 @@ typedef struct
     SWTexture** textures;
     SWSurface** surfaces;
     uint32_t frameCounter;
+    bool pendingClear;      // clearFrameBuffer was requested but not done yet (see swrFlushPendingClear)
+    uintpixel_t pendingClearColor;
     bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
     size_t textureCount;
     size_t surfaceCount;
