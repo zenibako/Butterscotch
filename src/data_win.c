@@ -2763,19 +2763,23 @@ static uint64_t loadPhaseNanos[4]; // allocate, read, parse, free
 #define LOAD_PHASE_END(phase) do { } while (0)
 #endif
 
-// Whole-chunk reads go through a second, unbuffered handle in fixed-size pieces. On some targets a large fread on a
-// buffered FILE is served far more slowly than the same bytes requested in plain 64 KB reads (about 1 MB/s against
-// 13 MB/s on openfpgaOS), and whole chunks are most of what loading reads.
+// Whole-chunk reads go through a second, unbuffered handle, one 64 KB piece at a time into a static buffer that is
+// then copied into place. On openfpgaOS reading straight into heap memory is roughly ten times slower than reading
+// into static memory (about 1.2 MB/s against 13 MB/s measured), and whole chunks are most of what loading reads.
+// The extra copy costs far less than it saves there and next to nothing elsewhere.
 #define BULK_READ_PIECE (64u * 1024u)
 
 static bool bulkReadAt(FILE* bulkFile, size_t offset, uint8_t* dest, size_t bytes) {
+    static uint8_t piece[BULK_READ_PIECE] __attribute__((aligned(512)));
+
     if (bulkFile == nullptr || fseek(bulkFile, (long) offset, SEEK_SET) != 0) return false;
     size_t done = 0;
     while (bytes > done) {
         size_t want = bytes - done;
         if (want > BULK_READ_PIECE) want = BULK_READ_PIECE;
-        size_t got = fread(dest + done, 1, want, bulkFile);
+        size_t got = fread(piece, 1, want, bulkFile);
         if (got == 0) return false;
+        memcpy(dest + done, piece, got);
         done += got;
     }
     return true;
