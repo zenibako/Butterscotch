@@ -2752,6 +2752,24 @@ void DataWin_loadAudoIfNeeded(DataWin* dw, uint32_t audioEntryId) {
 // textures load lazily. Real tables are a few kilobytes.
 #define TXTR_HEADER_READ_BYTES (256u * 1024u)
 
+// Whole-chunk reads go through a second, unbuffered handle in fixed-size pieces. On some targets a large fread on a
+// buffered FILE is served far more slowly than the same bytes requested in plain 64 KB reads (about 1 MB/s against
+// 13 MB/s on openfpgaOS), and whole chunks are most of what loading reads.
+#define BULK_READ_PIECE (64u * 1024u)
+
+static bool bulkReadAt(FILE* bulkFile, size_t offset, uint8_t* dest, size_t bytes) {
+    if (bulkFile == nullptr || fseek(bulkFile, (long) offset, SEEK_SET) != 0) return false;
+    size_t done = 0;
+    while (bytes > done) {
+        size_t want = bytes - done;
+        if (want > BULK_READ_PIECE) want = BULK_READ_PIECE;
+        size_t got = fread(dest + done, 1, want, bulkFile);
+        if (got == 0) return false;
+        done += got;
+    }
+    return true;
+}
+
 // ===[ MAIN PARSE FUNCTION ]===
 
 DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
@@ -2781,6 +2799,9 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
     DataWin* dw = (DataWin *)safeCalloc(1, sizeof(DataWin));
 
     BinaryReader reader = BinaryReader_create(file, (size_t) fileSize);
+
+    FILE* bulkFile = fopen(filePath, "rb");
+    if (bulkFile != nullptr) setvbuf(bulkFile, nullptr, _IONBF, 0);
 
     // Some WAD files, such as ones made with https://github.com/AlexWaveDiver/TranslaTale (I think?) have pointers inside a chunk pointing to data in OTHER chunks
     // The original runner doesn't care because it loads the entire file in memory up front, so we do the same if asked
@@ -2832,8 +2853,13 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
             dw->strgBufferBase = chunkDataStart;
             if (dw->mappedFile)
                 dw->strgBuffer = dw->mappedFile + chunkDataStart;
-            else
-                dw->strgBuffer = BinaryReader_readBytesAt(&reader, chunkDataStart, chunkLength);
+            else {
+                dw->strgBuffer = (uint8_t *)safeMalloc(chunkLength);
+                if (!bulkReadAt(bulkFile, chunkDataStart, dw->strgBuffer, chunkLength)) {
+                    free(dw->strgBuffer);
+                    dw->strgBuffer = BinaryReader_readBytesAt(&reader, chunkDataStart, chunkLength);
+                }
+            }
         }
 
         if ((memcmp(chunkName, "CODE", 4) == 0) && chunkLength > 0) {
@@ -2931,10 +2957,13 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
 
             chunkBuffer = (uint8_t *)malloc(bulkLength);
             if (chunkBuffer) {
-                size_t read = fread(chunkBuffer, 1, bulkLength, reader.file);
-                if (read != bulkLength) {
-                    logError("DataWin: short read on chunk %.4s (expected %zu, got %zu)\n", chunkName, bulkLength, read);
-                    exit(1);
+                if (!bulkReadAt(bulkFile, chunkDataStart, chunkBuffer, bulkLength)) {
+                    // Fall back to the main handle, which is positioned at the start of the chunk data.
+                    size_t read = fread(chunkBuffer, 1, bulkLength, reader.file);
+                    if (read != bulkLength) {
+                        logError("DataWin: short read on chunk %.4s (expected %zu, got %zu)\n", chunkName, bulkLength, read);
+                        exit(1);
+                    }
                 }
                 BinaryReader_setBuffer(&reader, chunkBuffer, chunkDataStart, bulkLength);
             }
@@ -3077,6 +3106,7 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
 
     if (options.loadType == DATAWINLOADTYPE_LOAD_IN_MEMORY_AHEAD_OF_TIME)
         free(wholeFileData);
+    if (bulkFile != nullptr) fclose(bulkFile);
 
     return dw;
 }

@@ -12,7 +12,8 @@ typedef struct
 }
 PackEntry;
 
-#define PACK_READ_WORDS 8192
+// 64 KB per read, unbuffered: the request shape that storage on small targets serves fastest.
+#define PACK_READ_WORDS 32768
 
 static FILE* packFile = NULL;
 static PackEntry* packEntries = NULL;
@@ -46,6 +47,7 @@ static void packOpen(void)
         return;
     }
     
+    setvbuf(file, NULL, _IONBF, 0);
     packFile = file;
     packEntries = entries;
     packCount = count;
