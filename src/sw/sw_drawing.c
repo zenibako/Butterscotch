@@ -357,6 +357,8 @@ static void swrDrawSpriteInternal(
         xstep > (3 << (fp_prec - 1)) && ystep > (3 << (fp_prec - 1)) && alpha >= 4)
     {
         int srcRight = sx + sw - 1, srcBottom = sy + sh - 1;
+        uint32_t lastColor = 0xFFFFFFFF;
+        uintpixel_t lastTinted = 0;
         
         fixedp_t ys2 = iys2;
         for (int y = 0; y < dh; y++, ys2 += oys2)
@@ -376,32 +378,44 @@ static void swrDrawSpriteInternal(
                 int col1 = col0 < srcRight ? col0 + 1 : -1;
                 
                 // Texels outside the sprite's source rectangle count as transparent.
-                uintpixel_t texels[4];
-                texels[0] = src0[col0];
-                texels[1] = col1 >= 0 ? src0[col1] : 0;
-                texels[2] = src1 ? src1[col0] : 0;
-                texels[3] = (src1 && col1 >= 0) ? src1[col1] : 0;
+                uintpixel_t t0 = src0[col0];
+                uintpixel_t t1 = col1 >= 0 ? src0[col1] : 0;
+                uintpixel_t t2 = src1 ? src1[col0] : 0;
+                uintpixel_t t3 = (src1 && col1 >= 0) ? src1[col1] : 0;
                 
-                uint32_t red = 0, green = 0, blue = 0, covered = 0;
-                for (int i = 0; i < 4; i++) {
-                    uintpixel_t texel = texels[i];
-                    if (!swrIsOpaque(texel)) continue;
-                    red += (texel >> 10) & 0x1F;
-                    green += (texel >> 5) & 0x1F;
-                    blue += texel & 0x1F;
-                    covered++;
+                uintpixel_t color;
+                int coverageAlpha = alpha;
+                if (t0 == t1 && t0 == t2 && t0 == t3) {
+                    // Flat area (most of any sprite): nothing to average.
+                    if (!swrIsOpaque(t0)) continue;
+                    color = t0;
+                } else {
+                    uint32_t red = 0, green = 0, blue = 0, covered = 0;
+                    #define SW_ACCUMULATE(texel) \
+                        if (swrIsOpaque(texel)) { \
+                            red += ((texel) >> 10) & 0x1F; green += ((texel) >> 5) & 0x1F; blue += (texel) & 0x1F; covered++; \
+                        }
+                    SW_ACCUMULATE(t0) SW_ACCUMULATE(t1) SW_ACCUMULATE(t2) SW_ACCUMULATE(t3)
+                    #undef SW_ACCUMULATE
+                    if (covered == 0) continue;
+                    
+                    // Divide by the 1..4 covered texels without a hardware divide: x * (65536 / n + 1) >> 16.
+                    static const uint32_t reciprocal[5] = { 0, 65536, 32768, 21846, 16384 };
+                    uint32_t scale = reciprocal[covered];
+                    color = (uintpixel_t)(0x8000 | (((red * scale) >> 16) << 10) | (((green * scale) >> 16) << 5) | ((blue * scale) >> 16));
+                    coverageAlpha = (alpha * (int) covered) >> 2;
                 }
-                if (covered == 0) continue;
                 
-                uintpixel_t color = (uintpixel_t)(0x8000 | ((red / covered) << 10) | ((green / covered) << 5) | (blue / covered));
-                color = tint(tintColor, color);
+                if (color != lastColor) {
+                    lastTinted = tint(tintColor, color);
+                    lastColor = color;
+                }
                 
-                int coverageAlpha = (alpha * (int) covered) >> 2;
                 if (coverageAlpha > 253)
-                    dstline[x] = color;
+                    dstline[x] = lastTinted;
                 else if (coverageAlpha >= 4)
-                    dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(color) * coverageAlpha,
-                                                       swrGreen(color) * coverageAlpha, 256 - coverageAlpha);
+                    dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(lastTinted) * coverageAlpha,
+                                                       swrGreen(lastTinted) * coverageAlpha, 256 - coverageAlpha);
             }
         }
         return;
