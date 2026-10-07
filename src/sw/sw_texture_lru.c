@@ -2,6 +2,7 @@
 #include "sw_renderer_private.h"
 #include "sw_texture_pack.h"
 #include "image/image_decoder.h"
+#include "gettime.h"
 
 // Texture pages are decoded on first use and kept until the cache goes over
 // TEXTURE_CACHE_BYTES, at which point the least recently used page goes.
@@ -168,6 +169,7 @@ bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
     // Only real texture pages can be loaded on demand.
     if (pageId >= swr->textureCount) return false;
     
+    uint64_t loadStart = nowNanos();
     const char* source = "pack";
     texture = loadFromPack(swr, pageId);
     if (!texture) {
@@ -182,7 +184,7 @@ bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
     keepHeapReserve(swr);
 #endif
     
-    logInfo("SWR: Loaded TXTR page %u (%dx%d, %s), cache %u KB\n", pageId, texture->width, texture->height,
-            source, (unsigned)(cachedBytes(swr) / 1024));
+    logInfo("SWR: Loaded TXTR page %u (%dx%d, %s) took %u ms, cache %u KB\n", pageId, texture->width, texture->height,
+            source, (unsigned)((nowNanos() - loadStart) / 1000000u), (unsigned)(cachedBytes(swr) / 1024));
     return true;
 }
