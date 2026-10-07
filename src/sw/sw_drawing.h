@@ -8,6 +8,9 @@ enum {
 };
 
 bool swrSwitchToSurface(Renderer* renderer, int32_t targetSurfaceId, bool restoreOldView);
+// When true, sprites drawn at roughly half size are box-filtered instead of point-sampled.
+extern bool swrSmoothMinify;
+
 void swrPlotPixel(Renderer* renderer, float x, float y, uintpixel_t color, float alpha);
 void swrDrawLine(Renderer* renderer, float x1, float y1, float x2, float y2, float width, uintpixel_t color, uintpixel_t color2, float alpha, int alignment);
 void swrDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t color, float alpha);

@@ -17,6 +17,10 @@ FORCE_INLINE void swrPlotPixel_(Renderer* renderer, int x, int y, uintpixel_t co
     alphaBlend(&swr->fb[y * swr->fbPitch + x], color, blendmode, alpha);
 }
 
+// See the minification path in swrDrawSpriteInternal. Off by default; the
+// platform turns it on when it renders a room below its native resolution.
+bool swrSmoothMinify = false;
+
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -345,6 +349,64 @@ static void swrDrawSpriteInternal(
     int blendmode = swr->blendMode;
     
 #ifdef SW_HAS_PREMUL_BLEND
+    // Shrinking by about half with nearest-neighbour sampling drops every
+    // other texel, which makes small text unreadable (a 640x480 screen drawn
+    // into 320x240). When enabled, average each 2x2 block of texels instead
+    // and use the opaque share of the block as coverage.
+    if (swrSmoothMinify && blendmode == bm_normal && !flipX && !flipY &&
+        xstep > (3 << (fp_prec - 1)) && ystep > (3 << (fp_prec - 1)) && alpha >= 4)
+    {
+        int srcRight = sx + sw - 1, srcBottom = sy + sh - 1;
+        
+        fixedp_t ys2 = iys2;
+        for (int y = 0; y < dh; y++, ys2 += oys2)
+        {
+            uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
+            int row0 = sy + (int)(ys2 >> fp_prec);
+            if (row0 > srcBottom) break;
+            int row1 = row0 < srcBottom ? row0 + 1 : -1;
+            const uintpixel_t* src0 = &texture->buffer[row0 * texture->width];
+            const uintpixel_t* src1 = row1 >= 0 ? &texture->buffer[row1 * texture->width] : NULL;
+            
+            fixedp_t xs2 = ixs2;
+            for (int x = 0; x < dw; x++, xs2 += oxs2)
+            {
+                int col0 = sx + (int)(xs2 >> fp_prec);
+                if (col0 > srcRight) break;
+                int col1 = col0 < srcRight ? col0 + 1 : -1;
+                
+                // Texels outside the sprite's source rectangle count as transparent.
+                uintpixel_t texels[4];
+                texels[0] = src0[col0];
+                texels[1] = col1 >= 0 ? src0[col1] : 0;
+                texels[2] = src1 ? src1[col0] : 0;
+                texels[3] = (src1 && col1 >= 0) ? src1[col1] : 0;
+                
+                uint32_t red = 0, green = 0, blue = 0, covered = 0;
+                for (int i = 0; i < 4; i++) {
+                    uintpixel_t texel = texels[i];
+                    if (!swrIsOpaque(texel)) continue;
+                    red += (texel >> 10) & 0x1F;
+                    green += (texel >> 5) & 0x1F;
+                    blue += texel & 0x1F;
+                    covered++;
+                }
+                if (covered == 0) continue;
+                
+                uintpixel_t color = (uintpixel_t)(0x8000 | ((red / covered) << 10) | ((green / covered) << 5) | (blue / covered));
+                color = tint(tintColor, color);
+                
+                int coverageAlpha = (alpha * (int) covered) >> 2;
+                if (coverageAlpha > 253)
+                    dstline[x] = color;
+                else if (coverageAlpha >= 4)
+                    dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(color) * coverageAlpha,
+                                                       swrGreen(color) * coverageAlpha, 256 - coverageAlpha);
+            }
+        }
+        return;
+    }
+    
     // Translucent sprites (fades, overlays): premultiply the tinted source
     // colour and reuse it while consecutive source pixels are the same.
     if (blendmode == bm_normal && swrIsPartialAlpha(alpha))
