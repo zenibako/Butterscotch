@@ -56,6 +56,8 @@ D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
 Start = Enter. Select toggles a frame-time overlay: three numbers in
 milliseconds over the last 30 frames (average work, worst work, worst frame
 period; 33 means full speed). R shows the last log lines over the game.
+In battle and menu rooms the top right corner shows 640 or 320, the width
+the room is being drawn at; build with `MODE_MARK=0` to leave it out.
 L switches 640x480 rooms between native resolution and smoothed 320x240.
 
 ## Resolution

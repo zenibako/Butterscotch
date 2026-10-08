@@ -176,6 +176,12 @@ static int drawNumber(uint16_t *fb, int width, int x, int y, unsigned value) {
     return x;
 }
 
+void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth) {
+    int markWidth = 3 * 4 * UT_PERF_SCALE;
+    if (width < markWidth + 4 || height < 16) return;
+    drawNumber(fb, width, width - markWidth - 2, 2, drawnWidth);
+}
+
 void utPerfFrame(uint16_t *fb, int width, int height) {
     /* The frame ends here: whatever follows (overlays, copy, flip) is "out"
      * and is reported with the next frame. */

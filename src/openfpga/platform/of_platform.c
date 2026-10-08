@@ -247,6 +247,9 @@ void platformSwapBuffers(void) {
     }
 #endif
     utPerfFrame(g_nextFb, g_nextW, g_nextH);
+#ifdef UT_MODE_MARK
+    if (visibleWidth(g_runner) > UT_SCREEN_W) utPerfDrawMode(g_nextFb, g_nextW, g_nextH, (unsigned) g_nextW);
+#endif
     utBenchFrame();
 #ifdef OF_PC
     dumpFrameIfRequested();
