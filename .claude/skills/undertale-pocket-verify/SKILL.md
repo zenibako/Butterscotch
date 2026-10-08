@@ -49,6 +49,10 @@ device):
 | `UT_AUDIO_LOG=1` | log every sound effect as it starts |
 | `UT_DUMP_STATE=n` | print every instance and its variables at frame n |
 | `UT_DISASM=name` | print that code entry's bytecode at start (`*` for all, about a million lines) |
+| `UT_DUMP_EVERY=n`, `UT_DUMP_DIR=d` | also write every nth frame to `d/f<frame>.ppm` on the way to `UT_DUMP_FRAME` |
+| `UT_NOFLIP=1` | never present to the window; without it a run is capped at the display's 60 fps even with `UT_UNCAPPED` |
+| `UT_GOTO="frame:room"` | jump to a room index on that frame; the game's own state is left as it was |
+| `UT_SET="frame:name=1,arr[2]=3"` | set numeric globals (or elements of existing global arrays) on that frame |
 
 `./undertale_pc --bench` runs the built-in benchmark; desktop numbers are
 meaningless for speed, but it exercises the whole scripted path and the
