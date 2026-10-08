@@ -46,4 +46,8 @@ bool swrTexturePackDecode(uint32_t pageId, uintpixel_t* buffer);
 // `buffer`. The rectangle must lie within the page.
 bool swrTexturePackDecodeRect(uint32_t pageId, int x, int y, int w, int h, uintpixel_t* buffer);
 
+// Why the last decode failed: "read" (with errno left as the C library set
+// it) or "data" for a tile that does not decode. Empty after a success.
+const char* swrTexturePackLastError(void);
+
 #endif//_SW_TEXTURE_PACK_H
