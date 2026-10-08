@@ -54,6 +54,13 @@
  * of the pack so that the next one starts on a whole sector. */
 #define UT_READ_PIECE 16384
 #define UT_READ_ALIGN 512
+/* With direct reads (see readDirect) a stream that is not running low is
+ * topped up in pieces this small instead: about 6 ms each, measured, where
+ * a 16 KB piece through fread costs about 28 ms and shows as a stutter. */
+#define UT_READ_STEADY 4096
+/* A direct read that has not finished after this long has failed; the OS
+ * gives up on one itself after 2 s. */
+#define UT_DIRECT_TIMEOUT_NANOS 2500000000ull
 
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
@@ -122,12 +129,19 @@ typedef struct {
     float masterGain;
     bool allPaused;
     FILE *dump; /* desktop only: raw copy of everything written to the output */
+    /* Direct reads of the pack; directStage is NULL when they are not in use. */
+    uint8_t *directStage;
+    uint32_t directSlot;
 } UtAudioSystem;
 
 /* The file idle hook has no user pointer, so the one instance is global. */
 static UtAudioSystem *g_audio = NULL;
 
 /* ===[ Pack lookup ]=== */
+
+#ifndef OF_PC
+static void openDirect(UtAudioSystem *ut);
+#endif
 
 static void openPack(UtAudioSystem *ut) {
     FILE *file = fopen(UT_MUSIC_PATH, "rb");
@@ -156,6 +170,9 @@ static void openPack(UtAudioSystem *ut) {
     /* Reads are explicit, buffer-sized chunks; stdio buffering would only add a copy. */
     setvbuf(file, NULL, _IONBF, 0);
     ut->file = file;
+#ifndef OF_PC
+    openDirect(ut);
+#endif
     ut->tracks = tracks;
     ut->trackCount = count;
     ut->cachedSounds = safeCalloc(count, sizeof(uint8_t *));
@@ -203,10 +220,81 @@ static void updateStep(const UtAudioSystem *ut, UtVoice *voice) {
     voice->step = (uint32_t) step;
 }
 
+/* ===[ Reading the pack ]===
+ *
+ * fread on openfpgaOS is served from the OS's file cache, which fetches a
+ * whole 32 KB block from the Pocket's host for any miss: about 28 ms however
+ * little was asked for. of_file_read_async fetches exactly what is asked,
+ * into staging memory the OS provides, at about 3.5 ms plus 0.6 ms per KB.
+ *
+ * The read is started and then waited for here, so it is not asynchronous
+ * in effect. It must not be: while one is in flight the OS fails every
+ * ordinary read with "busy" instead of queueing it, and Butterscotch reads
+ * files from many places. Finishing before returning means the two can
+ * never overlap. */
+#ifndef OF_PC
+static volatile int g_directDone;
+static volatile int g_directResult;
+
+/* Runs from the read-completion interrupt. */
+static void directCallback(int token, int result) {
+    (void) token;
+    g_directResult = result;
+    g_directDone = 1;
+}
+
+/* Reads `want` bytes at `filePos` of the pack into ut->directStage. */
+static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
+    g_directDone = 0;
+    g_directResult = 0;
+    uint64_t start = nowNanos();
+    /* Refused while the host is busy with something else; that passes quickly. */
+    while (of_file_read_async((int) ut->directSlot, filePos, ut->directStage, want, directCallback) < 0) {
+        if (nowNanos() - start > 50000000ull) return false;
+    }
+    /* The poll is the OS's fallback for a lost interrupt. */
+    while (!g_directDone && of_file_async_poll() != 1) {
+        if (nowNanos() - start > UT_DIRECT_TIMEOUT_NANOS) {
+            logWarn("Audio: a direct read timed out; using fread from here on.\n");
+            ut->directStage = NULL;
+            return false;
+        }
+    }
+    return g_directResult >= 0;
+}
+
+static void openDirect(UtAudioSystem *ut) {
+    uint32_t slot = 0;
+    if (of_file_async_max_read() < UT_READ_PIECE || of_file_slot_find(UT_MUSIC_PATH, &slot) != 0) return;
+    ut->directStage = of_file_dma_stage_alloc(UT_READ_PIECE, 4096);
+    ut->directSlot = slot;
+    if (ut->directStage != NULL) logInfo("Audio: music is read directly, %u KB at a time.\n", UT_READ_STEADY / 1024u);
+}
+#endif
+
+/* Reads `want` bytes at `filePos` of the pack into `dest`; returns the count read. */
+static size_t readPack(UtAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint32_t want) {
+#ifndef OF_PC
+    if (ut->directStage != NULL && readDirect(ut, filePos, want)) {
+        memcpy(dest, ut->directStage, want);
+        return want;
+    }
+#endif
+    if (fseek(ut->file, (long) filePos, SEEK_SET) != 0) return 0;
+    /* Read into static memory and copy: on openfpgaOS a read straight
+     * into the heap (where the voices live) is about ten times slower. */
+    static uint8_t scratch[UT_READ_PIECE] __attribute__((aligned(512)));
+    size_t got = fread(scratch, 1, want, ut->file);
+    memcpy(dest, scratch, got);
+    return got;
+}
+
 /* Tops up a voice's read-ahead from the pack. Main loop only: this blocks. */
 static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
     if (voice->streamSlot < 0) return;
-    if (voice->bufferLen - voice->bufferPos > UT_READAHEAD - UT_READ_PIECE) return;
+    uint32_t piece = UT_READ_PIECE;
+    if (ut->directStage != NULL && voice->bufferLen - voice->bufferPos >= UT_READ_PIECE / 2) piece = UT_READ_STEADY;
+    if (voice->bufferLen - voice->bufferPos > UT_READAHEAD - piece) return;
 
     const UtMusicTrack *track = &ut->tracks[voice->track];
     uint32_t total = trackBytes(track);
@@ -226,7 +314,7 @@ static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
             voice->fileBytePos = 0;
         }
         uint32_t want = UT_READAHEAD - voice->bufferLen;
-        if (want > UT_READ_PIECE) want = UT_READ_PIECE;
+        if (want > piece) want = piece;
         uint32_t filePos = track->offset + voice->fileBytePos;
         if (want >= total - voice->fileBytePos) {
             want = total - voice->fileBytePos;
@@ -236,17 +324,12 @@ static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
             want -= past;
         }
 
+        /* Anything that mixes from this voice meanwhile only touches bytes
+         * below bufferLen, which is not advanced until after the read. */
         uint64_t readStart = nowNanos();
-        if (fseek(ut->file, (long) filePos, SEEK_SET) != 0) break;
-        /* Read into static memory and copy: on openfpgaOS a read straight
-         * into the heap (where the voices live) is about ten times slower.
-         * The idle hook may mix from this voice while fread blocks; it only
-         * touches bytes below bufferLen, which is not advanced until after. */
-        static uint8_t scratch[UT_READAHEAD] __attribute__((aligned(512)));
-        size_t got = fread(scratch, 1, want, ut->file);
+        size_t got = readPack(ut, filePos, voice->data + voice->bufferLen, want);
         utPerfAddLoad(UT_LOAD_MUSIC, nowNanos() - readStart);
         if (got == 0) break;
-        memcpy(voice->data + voice->bufferLen, scratch, got);
         voice->bufferLen += (uint32_t) got;
         voice->fileBytePos += (uint32_t) got;
     }
