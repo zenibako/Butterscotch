@@ -362,10 +362,12 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
 }
 
 static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
-                                      int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH,
+                                      float srcOffXf, float srcOffYf, float srcWf, float srcHf,
                                       float x, float y, float xscale, float yscale, float angleDeg,
                                       float pivotX, float pivotY, uint32_t color, float alpha)
 {
+    // The interface allows fractional source rectangles; this renderer samples whole texels.
+    int32_t srcOffX = (int32_t) srcOffXf, srcOffY = (int32_t) srcOffYf, srcW = (int32_t) srcWf, srcH = (int32_t) srcHf;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dwin = renderer->dataWin;
@@ -1793,7 +1795,7 @@ static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, flo
     SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
 }
 
-static void SWRenderer_profDrawSpritePart(Renderer* renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha)
+static void SWRenderer_profDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_PART, SWRenderer_drawSpritePart(renderer, tpagIndex, srcOffX, srcOffY, srcW, srcH, x, y, xscale, yscale, angleDeg, pivotX, pivotY, color, alpha));
 }
