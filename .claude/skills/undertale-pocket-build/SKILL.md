@@ -71,7 +71,7 @@ GAME=deltarune`. `compare` adds Undertale benchmark entries and v0.9
 cores to that same tree.
 
 Until 2026-10-08 the platform folder was `undertale`. A card set up before
-then has `Assets/butterscotch/`, `Saves/undertale/` and possibly
+then has `Assets/undertale/`, `Saves/undertale/` and possibly
 `Cores/zenibako.Deltarune` with `Assets/deltarune/`; the save belongs in
 `Saves/butterscotch/common/` now.
 
