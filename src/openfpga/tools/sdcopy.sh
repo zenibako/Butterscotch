@@ -87,6 +87,12 @@ done
 for dir in "$CARD"/Cores/* "$CARD"/Assets/* "$CARD/Platforms"; do
     [ -d "$dir" ] && dot_clean -m "$dir" 2>/dev/null
 done
+# A folder created by this copy gets a sidecar beside it as well
+# (Cores/._zenibako.Butterscotch), which the loop above does not reach.
+for entry in "$TREE"/Cores/* "$TREE"/Assets/*; do
+    rel="${entry#"$TREE"/}"
+    rm -f "$CARD/$(dirname "$rel")/._$(basename "$rel")"
+done
 sync
 
 # Spot-check every app binary and OS image that was copied.
