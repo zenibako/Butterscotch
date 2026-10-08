@@ -58,6 +58,16 @@ rm -rf src/openfpga/out/.obj/undertale src/openfpga/out/.obj/undertale-v09   # d
 that prints nothing after that line succeeded; filter the noise with
 `| grep -E " error|undefined reference|Comparison|\*\*\*"`.
 
+## Deltarune
+
+`make -C src/openfpga GAME=deltarune ...` builds the Deltarune core instead
+(WAD 17, `dist-deltarune/`, data in `games/deltarune/`, tree in
+`out/build/pocket/deltarune/`, binary `deltarune_pc`). Run
+`tools/deltarune-setup.sh <game Resources folder> [chapter]` once first.
+Every target takes the switch: `GAME=deltarune copy`, `lint`, `asan`.
+`compare` has not been tried with it. The two trees are independent, so
+building one never disturbs a copy of the other.
+
 ## The cardinal rule: don't rebuild under a copy
 
 `make` and `make compare` delete and recreate `src/openfpga/out/build/pocket/undertale/`. The

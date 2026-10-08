@@ -11,7 +11,10 @@
 
 #include <stdint.h>
 
+/* The Makefile names it after the game being built. */
+#ifndef UT_SAVE_SLOT_FILE
 #define UT_SAVE_SLOT_FILE "undertale_0.sav"
+#endif
 #define UT_SAVE_MAGIC 0x31565455u /* "UTV1" */
 #define UT_SAVE_MAX_FILES 16
 #define UT_SAVE_NAME_LEN 40

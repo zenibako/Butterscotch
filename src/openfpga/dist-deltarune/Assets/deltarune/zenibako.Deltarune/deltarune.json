@@ -1,0 +1,24 @@
+{
+    "instance": {
+        "magic": "APF_VER_1",
+        "data_slots": [
+            { "id": 1, "filename": "os.bin" },
+            { "id": 2, "filename": "deltarune_os.ini" },
+            { "id": 3, "filename": "deltarune.elf" },
+            { "id": 4, "filename": "data.win" },
+            { "id": 5, "filename": "textures.bin" },
+            { "id": 6, "filename": "music.bin" },
+            { "id": 7, "filename": "bank.ofsf" },
+            { "id": 10, "filename": "deltarune_0.sav" },
+            { "id": 11, "filename": "deltarune_1.sav" },
+            { "id": 12, "filename": "deltarune_2.sav" },
+            { "id": 13, "filename": "deltarune_3.sav" },
+            { "id": 14, "filename": "deltarune_4.sav" },
+            { "id": 15, "filename": "deltarune_5.sav" },
+            { "id": 16, "filename": "deltarune_6.sav" },
+            { "id": 17, "filename": "deltarune_7.sav" },
+            { "id": 18, "filename": "deltarune_8.sav" },
+            { "id": 19, "filename": "deltarune_9.sav" }
+        ]
+    }
+}

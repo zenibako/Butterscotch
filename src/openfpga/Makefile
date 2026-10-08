@@ -18,7 +18,26 @@
 #   make clean        Remove build artifacts
 #
 
-APP       = undertale
+# GAME picks which game the core is built for. Each has its own core
+# definition, its own folder of game data and its own name on the card:
+#   undertale (default)  dist/            data beside this Makefile     WAD 16
+#   deltarune            dist-deltarune/  games/deltarune/ (see tools/deltarune-setup.sh)  WAD 17
+GAME     ?= undertale
+ifeq ($(GAME),undertale)
+G         =
+GAME_DIST = dist
+WADS     ?= 16
+else ifeq ($(GAME),deltarune)
+G         = games/deltarune/
+GAME_DIST = dist-deltarune
+WADS     ?= 17
+# Sounds of audio group 1 live in their own file, and the game reads its
+# text from lang_en.json; both go into the audio pack.
+MUSIC_EXTRAS = group:1:$(G)audiogroup1.dat file:$(G)lang_en.json
+else
+$(error GAME=$(GAME) is not known; use undertale or deltarune)
+endif
+APP       = $(GAME)
 # Platform target: pocket (APF SD tree under build/pocket/<app>/) or
 # mister (disk-image bundle under build/mister/<app>/). Overridable per
 # invocation: `make TARGET=mister`, or from the SDK root Makefile.
@@ -35,7 +54,7 @@ endif
 ROOT      = $(CURDIR)/out
 OBJ_DIR   = $(ROOT)/.obj/$(APP)
 BUILD_DIR = $(OBJ_DIR)
-DIST      = $(CURDIR)/dist
+DIST      = $(CURDIR)/$(GAME_DIST)
 OUT       = $(ROOT)/build/$(TARGET)/$(APP)
 RUNTIME   = $(SDK_ROOT)/runtime
 
@@ -76,8 +95,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-WADS ?= 16
-BS_DEFS = $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+BS_DEFS = -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
@@ -113,8 +131,8 @@ CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN)
 #
 # music/ is a directory (or symlink) holding the game's .ogg files; when
 # present they are converted into music.bin.
-GAME_PACKS = $(if $(wildcard data.win),textures.bin) $(if $(wildcard music/*.ogg),music.bin)
-MISTER_ASSETS ?= $(wildcard data.win) $(GAME_PACKS)
+GAME_PACKS = $(if $(wildcard $(G)data.win),$(G)textures.bin) $(if $(wildcard $(G)music/*.ogg),$(G)music.bin)
+MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
 
 # Declare default target before sdk.mk's rules
 .DEFAULT_GOAL := all
@@ -131,8 +149,8 @@ $(MKTEXPACK): $(MKTEXPACK_SRCS)
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -DUT_HOST_TOOL $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(MKTEXPACK_SRCS) -lm -o $@
 
-textures.bin: data.win $(MKTEXPACK)
-	$(MKTEXPACK) data.win $@
+$(G)textures.bin: $(G)data.win $(MKTEXPACK)
+	$(MKTEXPACK) $(G)data.win $@
 
 # Host tool: converts the game's .ogg music and the sounds embedded in
 # data.win to mono ADPCM so the device does not have to decode Vorbis.
@@ -143,8 +161,8 @@ $(MKMUSIC): tools/mkmusic.c platform/ut_music_pack.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -w tools/mkmusic.c $(BS_VENDOR)/stb/vorbis/stb_vorbis.c -lm -o $@
 
-music.bin: $(MKMUSIC) data.win $(wildcard music/*.ogg)
-	$(MKMUSIC) data.win music $@ $(MUSIC_RATE)
+$(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg)
+	$(MKMUSIC) $(G)data.win $(G)music $@ $(MUSIC_RATE) $(MUSIC_EXTRAS)
 
 # Host tool: packs a desktop save folder into the save slot file and back.
 #   make import-save SAVE_DIR=<desktop save folder>   -> undertale_0.sav
@@ -153,7 +171,7 @@ music.bin: $(MKMUSIC) data.win $(wildcard music/*.ogg)
 # part of the SD tree, so copying a build never replaces progress on the card.
 MKSAVE = $(ROOT)/.obj/$(APP)-tools/mksave
 SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
-SAVE_FILE ?= undertale_0.sav
+SAVE_FILE ?= $(APP)_0.sav
 
 $(MKSAVE): tools/mksave.c platform/ut_save_format.h
 	@mkdir -p $(dir $@)
@@ -236,12 +254,12 @@ $(PC_OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -c -o $@ $<
 
-PC_BIN ?= undertale_pc
+PC_BIN ?= $(APP)_pc
 
 $(PC_BIN): $(PC_OBJS)
 	$(PC_CC) $(PC_OBJS) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $@
 
-test: undertale_pc $(GAME_PACKS)
+test: $(PC_BIN) $(GAME_PACKS)
 
 # The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
 # as undertale_pc_asan. Run it through the same frame scripts as undertale_pc:

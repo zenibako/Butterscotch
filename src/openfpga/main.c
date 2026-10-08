@@ -20,6 +20,11 @@
 /* Data slots (see the instance JSON under dist/). Slot 4 holds the game's
  * data.win, slot 5 the optional texture pack built from it, slot 6 the
  * optional music pack. */
+/* The Makefile names the game being built (GAME=...). */
+#ifndef UT_GAME_NAME
+#define UT_GAME_NAME "undertale"
+#endif
+
 #define UT_SLOT_DATA_WIN 4
 #define UT_DATA_WIN_NAME "data.win"
 #define UT_SLOT_TEXTURES 5
@@ -84,7 +89,7 @@ int main(int argc, char **argv) {
     args.traceFrames = true;
 #endif
 
-    int ret = loop(args, "undertale");
+    int ret = loop(args, UT_GAME_NAME);
     freeCommandLineArgs(&args);
     return ret;
 }

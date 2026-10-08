@@ -48,6 +48,30 @@ frame pacing for timing runs. `UT_SEED=<n>` fixes the game's RNG and
 E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
 enables older bytecode versions for testing other games.
 
+## Deltarune (experimental)
+
+`GAME=deltarune` builds a second core, `zenibako.Deltarune`, from the same
+code with the newer bytecode version enabled. One chapter at a time:
+
+```bash
+tools/deltarune-setup.sh "<...>/DELTARUNE.app/Contents/Resources" 1   # links your files into games/deltarune/
+make GAME=deltarune                 # SD tree in out/build/pocket/deltarune/
+make GAME=deltarune deltarune_pc    # desktop binary
+```
+
+Everything is separate from Undertale's: core definition
+(`dist-deltarune/`), game data (`games/deltarune/`, gitignored), object
+files, SD tree, `Assets/deltarune/` and `Saves/deltarune/` on the card.
+
+Two things differ from Undertale. The music folder is shared by all
+chapters, so the setup script links only the `.ogg` files the chapter's
+data file names. And the game reads its text from `lang_en.json`, which
+has no data slot to live in, so it is stored in `music.bin` and the file
+layer reads it from there (`utAudioReadPackFile`).
+
+Chapter 1 plays on the desktop build through the opening and a Dark World
+battle. Fog (the hit flash) is not implemented in the software renderer.
+
 ## Controls
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),

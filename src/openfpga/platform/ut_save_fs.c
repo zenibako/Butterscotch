@@ -173,9 +173,12 @@ static char *fsResolvePath(FileSystem *base, const char *relativePath) {
     return safeStrdup(relativePath);
 }
 
-/* Files the game ships beside its data file (Deltarune's lang/lang_en.json, for one) are read straight from
- * storage. They are read-only: anything the game writes goes to the archive, which is looked up first. */
+/* Files the game ships beside its data file (Deltarune's lang/lang_en.json, for one) are read-only: anything
+ * the game writes goes to the archive, which is looked up first. On the device they are stored in the audio
+ * pack, since a core has no spare data slot; the desktop build reads them from the folder it runs in. */
 static bool readBundled(const char *relativePath, uint8_t **outData, uint32_t *outSize) {
+    if (utAudioReadPackFile(relativePath, outData, outSize)) return true;
+#ifdef OF_PC
     FILE *f = fopen(relativePath, "rb");
     if (f == NULL) return false;
     bool ok = false;
@@ -194,14 +197,25 @@ static bool readBundled(const char *relativePath, uint8_t **outData, uint32_t *o
     }
     fclose(f);
     return ok;
+#else
+    return false;
+#endif
+}
+
+/* Whether readBundled would find the file, without reading it. */
+static bool bundledExists(const char *relativePath) {
+#ifdef OF_PC
+    FILE *f = fopen(relativePath, "rb");
+    if (f != NULL) {
+        fclose(f);
+        return true;
+    }
+#endif
+    return utAudioHasPackFile(relativePath);
 }
 
 static bool fsFileExists(FileSystem *base, const char *relativePath) {
-    if (findFile((UtSaveFs *) base, relativePath) != NULL) return true;
-    FILE *f = fopen(relativePath, "rb");
-    if (f == NULL) return false;
-    fclose(f);
-    return true;
+    return findFile((UtSaveFs *) base, relativePath) != NULL || bundledExists(relativePath);
 }
 
 static char *fsReadFileText(FileSystem *base, const char *relativePath) {

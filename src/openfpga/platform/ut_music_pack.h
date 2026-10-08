@@ -17,7 +17,12 @@
  * first, starting from predictor 0 / step index 0. sampleCount is always
  * even, so a track is exactly sampleCount / 2 bytes and looping restarts on
  * a byte boundary.
+ *
+ * A track whose sampleRate is UT_MUSIC_RAW_FILE is not sound: it is a file
+ * the game reads by name (full name with extension, lower case), stored
+ * unchanged, sampleCount bytes long.
  */
+#define UT_MUSIC_RAW_FILE 0u
 #define UT_MUSIC_MAGIC "UTM1"
 #define UT_MUSIC_NAME_LEN 32
 
