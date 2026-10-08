@@ -16,6 +16,7 @@
 
 #include "audio_system.h"
 #include "gettime.h"
+#include "of_hooks.h"
 #include "of_perf.h"
 #include "log.h"
 #include "stb_ds.h"

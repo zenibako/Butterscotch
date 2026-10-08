@@ -14,6 +14,7 @@
 #include "gettime.h"
 #include "runner_keyboard.h"
 
+#include "of_hooks.h"
 #include "of_perf.h"
 #include "ut_bench.h"
 #include "ut_strings.h"

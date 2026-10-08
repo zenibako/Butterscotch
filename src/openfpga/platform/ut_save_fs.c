@@ -17,6 +17,8 @@
 
 #include "file_system.h"
 #include "log.h"
+#include "of_hooks.h"
+#include "ut_bench.h"
 #include "ut_save_format.h"
 #include "utils.h"
 

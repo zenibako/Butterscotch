@@ -5,6 +5,7 @@
 
 #include "log.h"
 #include "gettime.h"
+#include "of_hooks.h"
 #include "of_perf.h"
 
 #include <stdarg.h>

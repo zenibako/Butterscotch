@@ -33,6 +33,8 @@ On macOS, `source ../../../env.sh` first (GNU sed + host RISC-V toolchain).
 ```bash
 make            # RISC-V ELF + Pocket SD tree in ../../build/pocket/undertale/
 make test       # desktop binary ./undertale_pc (run it next to a data.win)
+make lint       # strict compiler warnings on this port's own files
+make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
 make copy       # copy the core to a mounted Pocket SD card
 ```
 

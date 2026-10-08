@@ -16,7 +16,7 @@ const char *utLogLine(int age);
 /* Whether log lines also go to stdout (the OS console). */
 void utLogSetConsole(bool enabled);
 /* printf to the console and the overlay buffer, without a timestamp. */
-void utLogPrint(const char *format, ...);
+void utLogPrint(const char *format, ...) __attribute__((format(printf, 1, 2)));
 /* "slowest chunks: ..." once data.win has loaded, empty before that. */
 const char *utLogLoadSummary(void);
 /* The loader's "phases: alloc ..., read ..., parse ..., free ..." totals. */

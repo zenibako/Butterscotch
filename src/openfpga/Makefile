@@ -209,13 +209,44 @@ $(PC_OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -c -o $@ $<
 
-undertale_pc: $(PC_OBJS)
-	$(PC_CC) $(PC_OBJS) $(PC_SDL_LIBS) -lm -o $@
+PC_BIN ?= undertale_pc
+
+$(PC_BIN): $(PC_OBJS)
+	$(PC_CC) $(PC_OBJS) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $@
 
 test: undertale_pc $(GAME_PACKS)
 
+# The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
+# as undertale_pc_asan. Run it through the same frame scripts as undertale_pc:
+# it stops with a report on an out-of-bounds access, a use after free or
+# undefined arithmetic, which on the device would be garbage or a hang.
+# Undefined-behaviour findings are printed once per place and the run goes on
+# (vendored code has a few); a memory error stops it.
+# On macOS, run it with DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib: under
+# the sanitizer sdl2-compat cannot find SDL3 by itself and blocks on a dialog.
+# -fno-sanitize=alignment,function: Butterscotch reads unaligned fields out of
+# data.win and calls builtins through a differently typed pointer by design.
+ASAN_FLAGS = -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined \
+             -fno-sanitize=alignment,function
+asan:
+	$(MAKE) PC_BIN=undertale_pc_asan PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-asan \
+	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" undertale_pc_asan
+
+# Strict warnings for the code this port owns (not Butterscotch or the SDK,
+# whose headers are treated as system headers so they stay quiet). Compiles
+# nothing; fails if anything is reported.
+LINT_SRCS = main.c $(wildcard platform/*.c) $(wildcard tools/*.c)
+LINT_WARN = -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion -Wdouble-promotion \
+            -Wstrict-prototypes -Wmissing-prototypes -Wundef -Wformat=2 -Werror
+LINT_INCLUDES = -Iplatform -I. $(patsubst -I%,-isystem %,$(filter-out -Iplatform,$(BS_INCLUDES))) \
+                -isystem $(SDK_DIR)/include
+lint:
+	@for f in $(LINT_SRCS); do \
+	    $(PC_CC) -fsyntax-only -DOF_PC $(BS_DEFS) $(LINT_INCLUDES) $(PC_SDL_CFLAGS) $(LINT_WARN) $$f || failed=1; \
+	done; [ -z "$$failed" ] && echo "lint: clean"
+
 clean: sdk-clean
-	rm -rf $(PC_OBJ_DIR) undertale_pc
+	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan undertale_pc undertale_pc_asan
 	rm -rf $(ROOT)/build/pocket/$(APP) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all release debug copy compare compare-copy package test clean
+.PHONY: all release debug copy compare compare-copy package test asan lint clean

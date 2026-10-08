@@ -89,6 +89,24 @@ can start a few dozen samples apart, so search for the shift that makes
 them match rather than expecting byte equality. The user's ears are the
 real test; save a WAV into `undertale-pocket/screenshots/` and send it.
 
+## Lint and sanitizers
+
+```bash
+make -C src/undertale lint    # strict warnings on the port's own files; prints "lint: clean"
+make -C src/undertale asan    # builds undertale_pc_asan (ASan + UBSan)
+```
+
+Run `lint` after touching `main.c`, `platform/` or `tools/`. Run the frame
+scripts through `undertale_pc_asan` after changing anything that indexes
+memory (renderer, caches, audio buffers): it takes the same `UT_*`
+variables and is a few times slower. On macOS it needs
+`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`, or SDL blocks on a dialog
+that only shows on the Mac's own screen; run it under a watchdog. Use
+`ASAN_OPTIONS=detect_leaks=0`. One finding is known and not ours:
+`stb_ds.h:1132`, a left shift in the vendored hash function. A function
+Butterscotch calls into the port needs its prototype in
+`platform/of_hooks.h`, or lint reports it.
+
 ## Traps that have cost time
 
 - **Saves leak between runs.** The game writes `undertale.ini` once you
