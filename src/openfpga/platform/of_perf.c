@@ -91,6 +91,11 @@ void utPerfToggleLog(void) {
     g_logEnabled = !g_logEnabled;
 }
 
+void utPerfHideOverlays(void) {
+    g_enabled = false;
+    g_logEnabled = false;
+}
+
 /* Log overlay text: Butterscotch's debug font atlas shrunk 3:1 by averaging
  * coverage, which gives a 6x12 cell that still reads at 320x240. */
 #define UT_LOG_SHRINK 3

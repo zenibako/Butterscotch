@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
             if (smooth) utPlatformSetSmoothLowres(true);
             utBenchStart();
         }
-        if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugControls(true);
+        if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugMode(true);
     }
 
 #ifdef OF_PC
@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
      * a mirrored layer has to be to be left out (4 leaves none out). For comparing frames. */
     if (getenv("UT_NO_MIRROR") != NULL) swrMirrorMerge = false;
     if (getenv("UT_MIRROR_FAINT") != NULL) swrMirrorFaintAlpha = atoi(getenv("UT_MIRROR_FAINT"));
-    if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugControls(true);
+    if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugMode(true);
     /* UT_DUMP_STATE=<frame> prints every instance and its variables at that
      * frame; UT_DISASM=<code entry name, or *> prints its bytecode at start. */
     if (getenv("UT_DUMP_STATE") != NULL) {

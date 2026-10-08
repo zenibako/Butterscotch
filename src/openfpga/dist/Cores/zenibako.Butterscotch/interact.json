@@ -187,7 +187,7 @@
                 }
             },
             {
-                "name": "Debug controls",
+                "name": "Debug mode",
                 "id": 70,
                 "type": "list",
                 "enabled": true,
@@ -201,7 +201,7 @@
                         "value": "0x0"
                     },
                     {
-                        "name": "On: hold Select",
+                        "name": "On",
                         "value": "0x1"
                     }
                 ]

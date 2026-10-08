@@ -8,6 +8,7 @@
  * copy to the display, and utPerfAddSleep with time spent pacing. */
 void utPerfToggle(void);
 void utPerfToggleLog(void);
+void utPerfHideOverlays(void);
 
 /* Recent log lines for the overlay; age 0 is the newest complete line. */
 #define UT_LOG_LINES 21
@@ -55,7 +56,7 @@ void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);
 void utPerfPhase(UtPhase phase);
 void utPerfFrame(uint16_t *fb, int width, int height);
 /* Marks, in the top right corner, the width a 640x480 room is being drawn
- * at: 640 (native) or 320 (smoothed). Built in with MODE_MARK=1. */
+ * at: 640 (native) or 320 (smoothed). Shown in debug mode. */
 void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth);
 
 #endif /* UT_OF_PERF_H */

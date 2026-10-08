@@ -19,10 +19,10 @@ Controls
   B        Cancel
   X or Y   Menu
   L        Battle smoothing on/off
-  Select   Frame-time overlay
-  R        Log overlay
 
-Debug controls (switch on in the menu)
+Debug mode (switch on in the menu)
+  Select      Frame-time overlay
+  R           Log overlay
   Hold Select and press:
   Right/Left  Next/previous room
   Start       Pause on/off

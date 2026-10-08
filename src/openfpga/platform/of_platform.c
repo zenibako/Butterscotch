@@ -65,14 +65,18 @@ static const struct {
 };
 #define UT_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
 
-/* Debug controls: Butterscotch's own debug hotkeys (see "Debug Features" in
- * its README), reached by holding Select and pressing another button, since
- * a Pocket has no keyboard. Off unless the game was started with --debug or
- * "Debug controls" is switched on in the Pocket's core menu, which the core's
- * interact.json puts at this index (the first one after the SDK's own four).
- * While they are on, Select alone still toggles the frame-time overlay, but
- * on release, and a button pressed with Select held does not also reach the
- * game. */
+/* Debug mode: everything on screen or on the buttons that is for looking
+ * into the port and not for playing. Off unless the game was started with
+ * --debug or "Debug mode" is switched on in the Pocket's core menu, which the
+ * core's interact.json puts at this index (the first one after the SDK's own
+ * four). With it on:
+ *   - Select toggles the frame-time overlay and R the log overlay;
+ *   - 640x480 rooms show the width they are being drawn at;
+ *   - Butterscotch's own debug hotkeys (see "Debug Features" in its README)
+ *     are reached by holding Select and pressing another button, since a
+ *     Pocket has no keyboard. Select then acts on release, and a button
+ *     pressed with it held does not also reach the game.
+ * With it off none of that is drawn or reacts, and what was showing is hidden. */
 #define UT_INTERACT_DEBUG 4
 static const struct {
     uint32_t button;
@@ -87,8 +91,9 @@ static const struct {
 };
 #define UT_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
 static bool g_debugRequested = false;
+static bool g_debugMode = false;
 
-void utPlatformSetDebugControls(bool enabled) {
+void utPlatformSetDebugMode(bool enabled) {
     g_debugRequested = enabled;
 }
 
@@ -289,9 +294,7 @@ void platformSwapBuffers(void) {
     }
 #endif
     utPerfFrame(g_nextFb, g_nextW, g_nextH);
-#ifdef UT_MODE_MARK
-    if (visibleWidth(g_runner) > UT_SCREEN_W) utPerfDrawMode(g_nextFb, g_nextW, g_nextH, (unsigned) g_nextW);
-#endif
+    if (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W) utPerfDrawMode(g_nextFb, g_nextW, g_nextH, (unsigned) g_nextW);
     utBenchFrame();
 #ifdef OF_PC
     dumpFrameIfRequested();
@@ -436,32 +439,30 @@ bool platformHandleEvents(void) {
     utPerfPhase(UT_PHASE_STEP);
     of_input_poll();
 
-    static bool debugControls = false;
     static bool chordUsed = false;
     static int32_t keyToRelease = 0;
     bool debugNow = g_debugRequested || (of_interact_get(UT_INTERACT_DEBUG) & 1u) != 0;
-    if (debugNow != debugControls) {
-        debugControls = debugNow;
-        logInfo("Debug controls %s\n", debugNow ? "on: hold Select, then Right/Left room, Start pause, A step, B unstick" : "off");
+    if (debugNow != g_debugMode) {
+        g_debugMode = debugNow;
+        if (!debugNow) utPerfHideOverlays();
+        logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick" : "off");
     }
     /* Frame stepping is the one hotkey the runner itself gates on this. */
-    if (g_runner != NULL) g_runner->debugMode = debugControls;
+    if (g_runner != NULL) g_runner->debugMode = g_debugMode;
     if (g_runner != NULL && keyToRelease != 0) {
         RunnerKeyboard_onKeyUp(g_runner->keyboard, keyToRelease);
         keyToRelease = 0;
     }
-    bool chording = debugControls && of_btn(OF_BTN_SELECT);
-    if (!debugControls) {
-        if (of_btn_pressed(OF_BTN_SELECT)) utPerfToggle();
-    } else {
+    bool chording = g_debugMode && of_btn(OF_BTN_SELECT);
+    if (g_debugMode) {
         if (of_btn_pressed(OF_BTN_SELECT)) chordUsed = false;
         if (of_btn_released(OF_BTN_SELECT) && !chordUsed) utPerfToggle();
+        if (of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
     }
     if (of_btn_pressed(OF_BTN_L1)) {
         g_smoothLowres = !g_smoothLowres;
         logInfo("Video: 640x480 rooms drawn at %s\n", g_smoothLowres ? "320x240, smoothed" : "640x480");
     }
-    if (of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
     runInputScript();
     if (g_runner == NULL) return false;
 

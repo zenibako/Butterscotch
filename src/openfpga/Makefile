@@ -110,13 +110,6 @@ TEXTURE_RESERVE_MB ?= 4
 BS_DEFS += -DTEXTURE_CACHE_BYTES='($(TEXTURE_CACHE_MB)u*1024u*1024u)' \
            -DTEXTURE_CACHE_RESERVE_BYTES='($(TEXTURE_RESERVE_MB)u*1024u*1024u)'
 
-# MODE_MARK=1 (the default for now) shows 640 or 320 in the top right corner
-# of battle and menu rooms: the width they are being drawn at (L toggles it).
-MODE_MARK ?= 1
-ifeq ($(MODE_MARK),1)
-BS_DEFS += -DUT_MODE_MARK
-endif
-
 ifeq ($(TRACE),1)
 BS_DEFS += -DUT_TRACE_FRAMES
 endif

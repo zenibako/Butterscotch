@@ -24,8 +24,8 @@ void utPlatformSetHiresAllowed(bool allowed);
 void utPlatformSetSmoothLowres(bool enabled);
 void utSaveFsSetVolatile(bool enabled);
 void utPlatformSetInputScript(const char *script);
-/* Turns the Select-chord debug hotkeys on from start-up; see of_platform.c. */
-void utPlatformSetDebugControls(bool enabled);
+/* Turns debug mode (overlays and Select-chord hotkeys) on from start-up; see of_platform.c. */
+void utPlatformSetDebugMode(bool enabled);
 void utPlatformSetUncapped(bool uncapped);
 
 #endif /* UT_BENCH_H */

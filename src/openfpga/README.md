@@ -81,22 +81,31 @@ battle. Fog (the hit flash) is not implemented in the software renderer.
 ## Controls
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
-Start = Enter. Select toggles a frame-time overlay: three numbers in
-milliseconds over the last 30 frames (average work, worst work, worst frame
-period; 33 means full speed). R shows the last log lines over the game.
-In battle and menu rooms the top right corner shows 640 or 320, the width
-the room is being drawn at; build with `MODE_MARK=0` to leave it out.
+Start = Enter. L switches 640x480 rooms between native resolution and
+smoothed 320x240.
 
-Debug controls are Butterscotch's own debug hotkeys, reached with Select
-held, since the Pocket has no keyboard. Switch them on with "Debug controls"
+### Debug mode
+
+Everything for looking into the port sits behind one switch, "Debug mode"
 in the Pocket's core menu (or `--debug` in the OS config's `ARGS=`, or
-`UT_DEBUG=1` on desktop). Then Select + Right/Left goes to the next/previous
-room, Select + Start pauses, Select + A steps one frame while paused, and
-Select + B sets `global.interact` to 0 when a cutscene has left the player
-stuck. With them on, Select alone still toggles the frame-time overlay, on
-release. The state dumps (F11, F12) are not mapped: they print far more than
-the device can show.
-L switches 640x480 rooms between native resolution and smoothed 320x240.
+`UT_DEBUG=1` on desktop). It is off by default and off again at the next
+launch. With it on:
+
+- Select toggles the frame-time overlay: three numbers in milliseconds over
+  the last 30 frames (average work, worst work, worst frame period; 33 means
+  full speed).
+- R shows the last log lines over the game. The log is kept whether or not
+  debug mode is on, so it can be switched on after a hitch to read it.
+- Battle and menu rooms show 640 or 320 in the top right corner, the width
+  the room is being drawn at.
+- Butterscotch's own debug hotkeys are reached with Select held, since the
+  Pocket has no keyboard: Select + Right/Left goes to the next/previous
+  room, Select + Start pauses, Select + A steps one frame while paused, and
+  Select + B sets `global.interact` to 0 when a cutscene has left the player
+  stuck. Select alone acts on release. The state dumps (F11, F12) are not
+  mapped: they print far more than the device can show.
+
+With it off, none of those buttons do anything and nothing extra is drawn.
 
 ## Resolution
 
