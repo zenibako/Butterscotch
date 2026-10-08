@@ -52,6 +52,16 @@ typedef struct {
     uintpixel_t color;
 } SWVertex;
 
+// The arguments of one swrDrawSpriteInternal call, kept so it can be issued later.
+#define SW_MIRROR_MAX_LAYERS 12
+typedef struct {
+    int dx, dy, dw, dh;
+    SWTexture* texture;
+    int sx, sy, sw, sh;
+    uintpixel_t tintColor;
+    int alpha;
+} SWSpriteCall;
+
 typedef struct
 {
     Renderer base;
@@ -95,6 +105,18 @@ typedef struct
     int overlayFirstAlpha;
     float overlayKeep;              // share of the destination that still shows through
     float overlayRed, overlayGreen, overlayBlue; // accumulated colour, 5-bit channel * 256
+    
+    // Translucent layers drawn as four mirrored quarters, held back so that one
+    // quarter can be blended and copied to the other three (see swrMirrorFlush).
+    bool mirrorReplaying;       // held draws are being issued; hold nothing
+    int mirrorLayers;           // complete layers held
+    int mirrorStage;            // quarters of the next layer seen so far, 0..3
+    uintpixel_t* mirrorFb;
+    int mirrorPitch;
+    int mirrorPort[6];          // portX, portY, portW, portH, maxX, maxY when the first quarter was held
+    int mirrorCx, mirrorCy, mirrorW, mirrorH; // the unflipped quarter's clipped rectangle
+    int mirrorSx, mirrorSy, mirrorXstep, mirrorYstep; // sampling of the layer in progress
+    SWSpriteCall mirrorCalls[SW_MIRROR_MAX_LAYERS + 1][4];
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;

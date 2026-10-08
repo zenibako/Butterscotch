@@ -13,6 +13,11 @@
 #include "platform/ut_bench.h"
 #include "stb_ds.h"
 
+#ifdef OF_PC
+extern bool swrMirrorMerge;      /* butterscotch/src/sw/sw_drawing.c */
+extern int swrMirrorFaintAlpha;
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +76,10 @@ int main(int argc, char **argv) {
     if (getenv("UT_SCRIPT") != NULL) utPlatformSetInputScript(getenv("UT_SCRIPT"));
     if (getenv("UT_UNCAPPED") != NULL) utPlatformSetUncapped(true);
     if (getenv("UT_SMOOTH") != NULL) utPlatformSetSmoothLowres(true);
+    /* UT_NO_MIRROR=1 draws mirrored layers the ordinary way; UT_MIRROR_FAINT=<alpha of 256> sets how faint
+     * a mirrored layer has to be to be left out (4 leaves none out). For comparing frames. */
+    if (getenv("UT_NO_MIRROR") != NULL) swrMirrorMerge = false;
+    if (getenv("UT_MIRROR_FAINT") != NULL) swrMirrorFaintAlpha = atoi(getenv("UT_MIRROR_FAINT"));
     /* UT_DUMP_STATE=<frame> prints every instance and its variables at that
      * frame; UT_DISASM=<code entry name, or *> prints its bytecode at start. */
     if (getenv("UT_DUMP_STATE") != NULL) {

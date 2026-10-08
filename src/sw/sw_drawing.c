@@ -21,6 +21,11 @@ FORCE_INLINE void swrPlotPixel_(Renderer* renderer, int x, int y, uintpixel_t co
 // platform turns it on when it renders a room below its native resolution.
 bool swrSmoothMinify = false;
 
+// Mirrored layers (see swrMirrorFlush). Layers fainter than swrMirrorFaintAlpha
+// (of 256) are left out: at 16-bit colour they move a channel by one step at most.
+bool swrMirrorMerge = true;
+int swrMirrorFaintAlpha = 8;
+
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -283,7 +288,7 @@ FORCE_INLINE void swrCalculateAlphaBlending(
 // draw is held back, and draws of the same area that follow it directly are
 // folded into it. A draw nothing follows comes out exactly as it did before;
 // a folded stack is rounded once instead of once per layer.
-void swrOverlayFlush(SWRenderer* swr)
+static void swrOverlayFlushHeld(SWRenderer* swr)
 {
 #ifdef SW_HAS_PREMUL_BLEND
     int count = swr->overlayCount;
@@ -388,9 +393,185 @@ static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
     uintpixel_t tintColor, int alpha
+);
+
+#ifdef SW_HAS_PREMUL_BLEND
+#define SW_MIRROR_MIN_PIXELS 4096
+
+static void swrMirrorReplay(SWRenderer* swr, const SWSpriteCall* call)
+{
+    swrDrawSpriteInternal((Renderer*) swr, call->dx, call->dy, call->dw, call->dh, call->texture,
+                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha);
+}
+
+// Mirrored layers. Deltarune's character creation screens draw a small image
+// stretched over each quarter of the screen, flipped so that the four meet in
+// the middle, at low opacity, six layers deep: six screens of blending per
+// frame. Where the picture underneath is itself the same in all four quarters
+// (there, a cleared screen), each layer's quarters come out as mirror images of
+// one another, so one quarter is blended and the other three are copies of it.
+// The layers are held back until something else is drawn; if the picture
+// underneath turns out not to be symmetric they are drawn the ordinary way.
+static void swrMirrorFlush(SWRenderer* swr)
+{
+    int layers = swr->mirrorLayers, stage = swr->mirrorStage;
+    if (layers == 0 && stage == 0) return;
+    swr->mirrorLayers = 0;
+    swr->mirrorStage = 0;
+    swr->mirrorReplaying = true;
+    
+    // The held draws belong to the target and port they were made for.
+    uintpixel_t* fb = swr->fb;
+    uint16_t pitch = swr->fbPitch;
+    int port[6] = { swr->portX, swr->portY, swr->portW, swr->portH, swr->maxX, swr->maxY };
+    int blendMode = swr->blendMode;
+    swr->fb = swr->mirrorFb;
+    swr->fbPitch = (uint16_t) swr->mirrorPitch;
+    swr->portX = swr->mirrorPort[0]; swr->portY = swr->mirrorPort[1];
+    swr->portW = swr->mirrorPort[2]; swr->portH = swr->mirrorPort[3];
+    swr->maxX = swr->mirrorPort[4]; swr->maxY = swr->mirrorPort[5];
+    swr->blendMode = bm_normal;
+    
+    if (layers > 0)
+    {
+        swrOverlayFlushHeld(swr); // anything held before the layers lies under them
+        
+        int cx = swr->mirrorCx, cy = swr->mirrorCy, w = swr->mirrorW, h = swr->mirrorH;
+        bool symmetric = true;
+        for (int y = 0; y < h && symmetric; y++)
+        {
+            const uintpixel_t* below = &swr->fb[(cy + y) * swr->fbPitch + cx];
+            const uintpixel_t* above = &swr->fb[(cy - 1 - y) * swr->fbPitch + cx];
+            for (int x = 0; x < w; x++)
+            {
+                uintpixel_t pixel = below[x];
+                if (below[-1 - x] != pixel || above[x] != pixel || above[-1 - x] != pixel) { symmetric = false; break; }
+            }
+        }
+        
+        for (int layer = 0; layer < layers; layer++)
+        {
+            const SWSpriteCall* calls = swr->mirrorCalls[layer];
+            if (calls[0].alpha < swrMirrorFaintAlpha) continue;
+            int quarters = symmetric ? 1 : 4;
+            for (int quarter = 0; quarter < quarters; quarter++)
+                swrMirrorReplay(swr, &calls[quarter]);
+        }
+        swrOverlayFlushHeld(swr);
+        
+        if (symmetric)
+        {
+            for (int y = 0; y < h; y++)
+            {
+                const uintpixel_t* below = &swr->fb[(cy + y) * swr->fbPitch + cx];
+                uintpixel_t* above = &swr->fb[(cy - 1 - y) * swr->fbPitch + cx];
+                uintpixel_t* belowLeft = (uintpixel_t*) below;
+                for (int x = 0; x < w; x++)
+                {
+                    uintpixel_t pixel = below[x];
+                    belowLeft[-1 - x] = pixel;
+                    above[x] = pixel;
+                    above[-1 - x] = pixel;
+                }
+            }
+        }
+    }
+    
+    // Quarters of a layer that was never completed are ordinary draws.
+    for (int quarter = 0; quarter < stage; quarter++)
+        swrMirrorReplay(swr, &swr->mirrorCalls[layers][quarter]);
+    swrOverlayFlushHeld(swr);
+    
+    swr->fb = fb;
+    swr->fbPitch = pitch;
+    swr->portX = port[0]; swr->portY = port[1]; swr->portW = port[2]; swr->portH = port[3];
+    swr->maxX = port[4]; swr->maxY = port[5];
+    swr->blendMode = blendMode;
+    swr->mirrorReplaying = false;
+}
+
+// Holds the draw back if it can be a quarter of a mirrored layer. Takes the
+// draw as it was asked for (call) and as it came out of clipping. Returns
+// false if the caller has to draw it; nothing is held then.
+static bool swrMirrorHold(SWRenderer* swr, const SWSpriteCall* call, int dx, int dy, int dw, int dh,
+                          bool flipX, bool flipY, int sx, int sy, int xstep, int ystep, int unit)
+{
+    bool eligible = swrMirrorMerge && swr->blendMode == bm_normal && swrIsPartialAlpha(call->alpha) &&
+                    dw * dh >= SW_MIRROR_MIN_PIXELS && xstep <= unit && ystep <= unit;
+    if (!eligible) {
+        swrMirrorFlush(swr);
+        return false;
+    }
+    
+    int stage = swr->mirrorStage;
+    if (stage > 0)
+    {
+        // The quarters follow the unflipped one anticlockwise: left, above left, above.
+        const SWSpriteCall* first = &swr->mirrorCalls[swr->mirrorLayers][0];
+        int wantX = (stage == 3) ? swr->mirrorCx : swr->mirrorCx - swr->mirrorW;
+        int wantY = (stage == 1) ? swr->mirrorCy : swr->mirrorCy - swr->mirrorH;
+        bool match = swr->fb == swr->mirrorFb && swr->fbPitch == swr->mirrorPitch &&
+                     flipX == (stage != 3) && flipY == (stage != 1) &&
+                     dx == wantX && dy == wantY && dw == swr->mirrorW && dh == swr->mirrorH &&
+                     call->texture == first->texture && call->alpha == first->alpha &&
+                     call->tintColor == first->tintColor &&
+                     sx == swr->mirrorSx && sy == swr->mirrorSy &&
+                     xstep == swr->mirrorXstep && ystep == swr->mirrorYstep;
+        if (match) {
+            swr->mirrorCalls[swr->mirrorLayers][stage] = *call;
+            if (stage == 3) {
+                swr->mirrorLayers++;
+                swr->mirrorStage = 0;
+            } else
+                swr->mirrorStage = stage + 1;
+            return true;
+        }
+        swrMirrorFlush(swr); // not a mirrored layer after all; this draw may start one
+    }
+    
+    if (flipX || flipY) {
+        swrMirrorFlush(swr);
+        return false;
+    }
+    
+    bool sameQuad = swr->mirrorLayers > 0 && swr->fb == swr->mirrorFb && swr->fbPitch == swr->mirrorPitch &&
+                    dx == swr->mirrorCx && dy == swr->mirrorCy && dw == swr->mirrorW && dh == swr->mirrorH;
+    if (!sameQuad || swr->mirrorLayers >= SW_MIRROR_MAX_LAYERS)
+        swrMirrorFlush(swr);
+    if (swr->mirrorLayers == 0) {
+        swr->mirrorFb = swr->fb;
+        swr->mirrorPitch = swr->fbPitch;
+        swr->mirrorPort[0] = swr->portX; swr->mirrorPort[1] = swr->portY;
+        swr->mirrorPort[2] = swr->portW; swr->mirrorPort[3] = swr->portH;
+        swr->mirrorPort[4] = swr->maxX; swr->mirrorPort[5] = swr->maxY;
+        swr->mirrorCx = dx; swr->mirrorCy = dy; swr->mirrorW = dw; swr->mirrorH = dh;
+    }
+    swr->mirrorSx = sx; swr->mirrorSy = sy;
+    swr->mirrorXstep = xstep; swr->mirrorYstep = ystep;
+    swr->mirrorCalls[swr->mirrorLayers][0] = *call;
+    swr->mirrorStage = 1;
+    return true;
+}
+#endif
+
+void swrOverlayFlush(SWRenderer* swr)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    if (!swr->mirrorReplaying) swrMirrorFlush(swr);
+#endif
+    swrOverlayFlushHeld(swr);
+}
+
+static void swrDrawSpriteInternal(
+    Renderer* renderer, int dx, int dy, int dw, int dh,
+    SWTexture* texture, int sx, int sy, int sw, int sh,
+    uintpixel_t tintColor, int alpha
 )
 {
     SWRenderer *swr = (SWRenderer*) renderer;
+#ifdef SW_HAS_PREMUL_BLEND
+    const SWSpriteCall asked = { dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha };
+#endif
     
     bool flipX = false, flipY = false;
     if (dw < 0) { dx += dw; dw = -dw; flipX = true; }
@@ -456,6 +637,13 @@ static void swrDrawSpriteInternal(
     fixedp_t iys2 = iys * ystep;
     
     int blendmode = swr->blendMode;
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    // A quarter of a mirrored layer is held back; anything else lets held layers out first.
+    if (!swr->mirrorReplaying &&
+        swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
+        return;
+#endif
     
 #ifdef SW_HAS_PREMUL_BLEND
     // Solid overlays drawn at full size or enlarged may be held back and merged.

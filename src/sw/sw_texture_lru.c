@@ -29,6 +29,7 @@ static size_t cachedBytes(const SWRenderer* swr)
 
 void swrEvictTextureFromCache(SWRenderer* swr, int textureIndex)
 {
+    swrOverlayFlush(swr); // held draws may still point at it
     SWTexture* texture = swr->textures[textureIndex];
     swr->textures[textureIndex] = NULL;
     
@@ -37,6 +38,7 @@ void swrEvictTextureFromCache(SWRenderer* swr, int textureIndex)
 
 static void evictItem(SWRenderer* swr, size_t index)
 {
+    swrOverlayFlush(swr); // held draws may still point at it
     SWTexture* texture = swr->itemTextures[index];
     swr->itemTextures[index] = NULL;
     swr->itemBytes -= pageBytes(texture);
