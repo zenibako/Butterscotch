@@ -314,8 +314,17 @@ void swrOverlayFlush(SWRenderer* swr)
             swrFillPixels(dstline, (size_t) swr->overlayW, fill);
             continue;
         }
-        for (int x = 0; x < swr->overlayW; x++)
-            dstline[x] = swrBlendPremultiplied(dstline[x], srcRedBlue, srcGreen, dstalpha);
+        // Flat-coloured art has long runs of one colour: blend each run once.
+        uintpixel_t lastDst = dstline[0];
+        uintpixel_t lastOut = swrBlendPremultiplied(lastDst, srcRedBlue, srcGreen, dstalpha);
+        for (int x = 0; x < swr->overlayW; x++) {
+            uintpixel_t dst = dstline[x];
+            if (dst != lastDst) {
+                lastDst = dst;
+                lastOut = swrBlendPremultiplied(dst, srcRedBlue, srcGreen, dstalpha);
+            }
+            dstline[x] = lastOut;
+        }
     }
 #else
     (void) swr;
