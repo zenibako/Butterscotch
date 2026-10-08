@@ -9,7 +9,7 @@
                     { "id": 1,  "name": "Cancel",  "key": "pad_btn_b" },
                     { "id": 2,  "name": "Menu (In-game)",  "key": "pad_btn_x" },
                     { "id": 3,  "name": "Menu (In-game)",  "key": "pad_btn_y" },
-                    { "id": 10, "name": "Smoothing",  "key": "pad_trig_l" },
+                    { "id": 10, "name": "Toggle speed/accuracy",  "key": "pad_trig_l" },
                     { "id": 11, "name": "Debug: log",  "key": "pad_trig_r" },
                     { "id": 20, "name": "Confirm",  "key": "pad_btn_start" },
                     { "id": 21, "name": "Hold 2s: debug mode",  "key": "pad_btn_select" }

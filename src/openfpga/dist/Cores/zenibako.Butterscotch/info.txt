@@ -18,8 +18,7 @@ Controls
   A/Start  Confirm
   B        Cancel
   X or Y   Menu (In-game)
-  L        Smoothing
-  Analogue Quit
+  L        Toggle speed/accuracy
 
 Debug mode (hold Select 2 s: on/off)
   Select      Frame-time overlay
