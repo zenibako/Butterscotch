@@ -109,6 +109,11 @@ screen names the hold on Select instead. With it on:
   stuck. Select alone acts on release. The state dumps (F11, F12) are not
   mapped: they print far more than the device can show.
 
+Anything that would otherwise leave the screen unchanged says what it did
+in the top right corner for two seconds: "Debug mode on" and "off", "Next
+room", "Previous room", "interact = 0" and "Resumed". A paused game shows
+"Paused, frame N" for as long as it is paused, and each step advances N.
+
 With it off, none of those buttons do anything and nothing extra is drawn.
 
 ## Resolution

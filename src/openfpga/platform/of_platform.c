@@ -79,22 +79,41 @@ static const struct {
  *     are reached by holding Select and pressing another button, since a
  *     Pocket has no keyboard. Select then acts on release, and a button
  *     pressed with it held does not also reach the game.
+ * Each action that would otherwise leave the screen as it was says so in
+ * the top right corner: switching debug mode itself, changing room, clearing
+ * global.interact, pausing ("Paused, frame N", which a step advances) and
+ * resuming.
  * With it off none of that is drawn or reacts, and what was showing is hidden. */
 #define UT_DEBUG_HOLD_NANOS 2000000000ull
+/* `notice` is what the top right corner says for two seconds when the hotkey
+ * is used. Pause and step have none: a paused game says "Paused, frame N"
+ * there for as long as it is paused, and a step changes N. */
 static const struct {
     uint32_t button;
     int32_t key;
     const char *what;
+    const char *notice;
 } g_debugChords[] = {
-    { OF_BTN_RIGHT, VK_PAGEUP,   "next room" },
-    { OF_BTN_LEFT,  VK_PAGEDOWN, "previous room" },
-    { OF_BTN_START, VK_F8,       "pause on/off" },
-    { OF_BTN_A,     'O',         "step one frame (while paused)" },
-    { OF_BTN_B,     VK_F10,      "clear global.interact" },
+    { OF_BTN_RIGHT, VK_PAGEUP,   "next room",                     "Next room" },
+    { OF_BTN_LEFT,  VK_PAGEDOWN, "previous room",                 "Previous room" },
+    { OF_BTN_START, VK_F8,       "pause on/off",                  NULL },
+    { OF_BTN_A,     'O',         "step one frame (while paused)", NULL },
+    { OF_BTN_B,     VK_F10,      "clear global.interact",         "interact = 0" },
 };
 #define UT_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
 static bool g_debugRequested = false;
 static bool g_debugMode = false;
+
+/* A few words in the top right corner for two seconds: what a button that
+ * changes nothing else on screen just did. */
+#define UT_NOTICE_NANOS 2000000000ull
+static char g_notice[32];
+static uint64_t g_noticeUntil = 0;
+
+static void showNotice(const char *text) {
+    snprintf(g_notice, sizeof(g_notice), "%s", text);
+    g_noticeUntil = nowNanos() + UT_NOTICE_NANOS;
+}
 
 void utPlatformSetDebugMode(bool enabled) {
     g_debugRequested = enabled;
@@ -300,8 +319,23 @@ void platformSwapBuffers(void) {
     /* L's setting, by the name the instruction screen gives the toggle:
      * for a moment after L is pressed, and in debug mode for as long as a
      * 640x480 room (the only kind it changes) is showing. */
-    if (nowNanos() < g_modeShownUntil || (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W))
+    static bool wasPaused = false;
+    bool paused = g_runner != NULL && g_runner->paused;
+    if (wasPaused && !paused) showNotice("Resumed");
+    wasPaused = paused;
+    if (paused) {
+        /* A paused game presents this frame and then no more until it is
+         * stepped or resumed, so the words stay up with it. That is also
+         * why this comes before a notice: one caught here would stay up
+         * for as long as the pause. */
+        char text[32];
+        snprintf(text, sizeof(text), "Paused, frame %d", g_runner->frameCount);
+        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, text);
+    } else if (nowNanos() < g_noticeUntil) {
+        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_notice);
+    } else if (nowNanos() < g_modeShownUntil || (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W)) {
         utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_smoothLowres ? "Speed" : "Accuracy");
+    }
     utBenchFrame();
 #ifdef OF_PC
     dumpFrameIfRequested();
@@ -469,6 +503,7 @@ bool platformHandleEvents(void) {
         utPerfHideOverlays();
         /* The frame times coming up are the sign that the hold took. */
         if (debugNow && byHold) utPerfToggle();
+        showNotice(debugNow ? "Debug mode on" : "Debug mode off");
         logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick" : "off");
     }
     /* Frame stepping is the one hotkey the runner itself gates on this. */
@@ -497,6 +532,8 @@ bool platformHandleEvents(void) {
             RunnerKeyboard_onKeyDown(g_runner->keyboard, g_debugChords[i].key);
             keyToRelease = g_debugChords[i].key;
             chordUsed = true;
+            if (g_debugChords[i].notice != NULL) showNotice(g_debugChords[i].notice);
+            if (g_debugChords[i].key == 'O' && !g_runner->paused) showNotice("Pause first: Select + Start");
             logInfo("Debug: %s\n", g_debugChords[i].what);
         }
     }
