@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <errno.h>
 #include "sw_renderer_private.h"
 #include "sw_texture_pack.h"
 #include "image/image_decoder.h"
@@ -273,8 +274,9 @@ void swrFreeItemTextures(SWRenderer* swr)
 // Loads the item's rectangle, grown by a pixel on each side where the page
 // allows: scaled draws may sample one texel past the item, and should find
 // what is on the page there, as they would with the whole page loaded.
-static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_t pageId, int pageW, int pageH)
+static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_t pageId, int pageW, int pageH, bool* outOfMemory)
 {
+    *outOfMemory = false;
     int left = tpag->sourceX > 0 ? tpag->sourceX - 1 : 0;
     int top = tpag->sourceY > 0 ? tpag->sourceY - 1 : 0;
     int right = tpag->sourceX + tpag->sourceWidth + 1;
@@ -289,7 +291,8 @@ static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_
     
     SWTexture* texture = (SWTexture*) allocOrEvict(swr, sizeof(SWTexture));
     uintpixel_t* buffer = (uintpixel_t*) allocOrEvict(swr, bytes);
-    if (!texture || !buffer || !swrTexturePackDecodeRect(pageId, left, top, w, h, buffer)) {
+    *outOfMemory = !texture || !buffer;
+    if (*outOfMemory || !swrTexturePackDecodeRect(pageId, left, top, w, h, buffer)) {
         free(buffer);
         free(texture);
         return NULL;
@@ -341,11 +344,25 @@ SWTexture* swrTextureForItem(SWRenderer* swr, int32_t tpagIndex)
         }
         
         uint64_t loadStart = nowNanos();
-        item = loadItem(swr, tpag, (uint32_t) pageId, pageW, pageH);
+        bool outOfMemory;
+        item = loadItem(swr, tpag, (uint32_t) pageId, pageW, pageH, &outOfMemory);
         if (item == NULL) {
-            logError("SWR: Could not load TPAG item %d (%dx%d) of page %d; cache %u KB\n", (int) tpagIndex,
-                     (int) tpag->sourceWidth, (int) tpag->sourceHeight, (int) pageId, (unsigned) (cachedBytes(swr) / 1024));
-            if ((uint32_t) pageId < TEXTURE_RETRY_PAGES) retryAtFrame[pageId] = swr->frameCounter + TEXTURE_RETRY_FRAMES;
+            // Out of memory is worth backing off from: making room has cost
+            // other textures. A read that failed is tried again on the next
+            // draw; that passes (the storage was busy) and holding the page
+            // back left a whole attack's bullets undrawn.
+            int readError = errno;
+            static uint32_t lastLoggedFrame = 0;
+            if (outOfMemory || swr->frameCounter - lastLoggedFrame >= 30) {
+                lastLoggedFrame = swr->frameCounter;
+                if (outOfMemory)
+                    logError("SWR: No memory for TPAG item %d (%dx%d) of page %d; cache %u KB\n", (int) tpagIndex,
+                             (int) tpag->sourceWidth, (int) tpag->sourceHeight, (int) pageId, (unsigned) (cachedBytes(swr) / 1024));
+                else
+                    logError("SWR: TPAG item %d of page %d: %s error %d\n", (int) tpagIndex, (int) pageId,
+                             swrTexturePackLastError(), readError);
+            }
+            if (outOfMemory && (uint32_t) pageId < TEXTURE_RETRY_PAGES) retryAtFrame[pageId] = swr->frameCounter + TEXTURE_RETRY_FRAMES;
             return NULL;
         }
         

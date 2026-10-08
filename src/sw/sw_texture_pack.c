@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include "sw_texture_pack.h"
 
 #if PIXEL_SIZE == 16 && !defined IS_BIG_ENDIAN
@@ -88,9 +89,17 @@ bool swrTexturePackGetSize(uint32_t pageId, int* outW, int* outH)
 void platformBusyTick(void);
 #endif
 
+static const char* packLastError = "";
+
+const char* swrTexturePackLastError(void)
+{
+    return packLastError;
+}
+
 // Decodes one tile of tw x th pixels into `out`, row after row with no gaps.
 static bool decodeTile(const PackTile* tile, int tw, int th, uint16_t* out)
 {
+    packLastError = "data";
     size_t pixels = (size_t) tw * th;
     if (tile->size == 0) {
         memset(out, 0, pixels * sizeof(uint16_t));
@@ -100,8 +109,12 @@ static bool decodeTile(const PackTile* tile, int tw, int th, uint16_t* out)
     static uint16_t words[TILE_MAX_WORDS];
     size_t count = tile->size / sizeof(uint16_t);
     if (count > TILE_MAX_WORDS) return false;
-    if (fseek(packFile, (long) tile->offset, SEEK_SET) != 0) return false;
-    if (fread(words, sizeof(uint16_t), count, packFile) != count) return false;
+    errno = 0;
+    if (fseek(packFile, (long) tile->offset, SEEK_SET) != 0 || fread(words, sizeof(uint16_t), count, packFile) != count) {
+        packLastError = "read";
+        clearerr(packFile);
+        return false;
+    }
 #ifdef PLATFORM_BUSY_TICK
     platformBusyTick();
 #endif
@@ -125,7 +138,9 @@ static bool decodeTile(const PackTile* tile, int tw, int th, uint16_t* out)
             i += literals;
         }
     }
-    return out == end;
+    if (out != end) return false;
+    packLastError = "";
+    return true;
 }
 
 bool swrTexturePackDecodeRect(uint32_t pageId, int x, int y, int w, int h, uintpixel_t* buffer)
@@ -157,6 +172,7 @@ bool swrTexturePackDecodeRect(uint32_t pageId, int x, int y, int w, int h, uintp
             size_t rowBytes = (size_t) (right - left) * sizeof(uintpixel_t);
             
             if (packTiles[index].size == 0) {
+                packLastError = "";
                 for (int row = top; row < bottom; row++)
                     memset(&buffer[(size_t) (row - y) * w + (left - x)], 0, rowBytes);
                 continue;
@@ -181,5 +197,6 @@ bool swrTexturePackDecode(uint32_t pageId, uintpixel_t* buffer)
 bool swrTexturePackGetSize(UNUSED uint32_t pageId, UNUSED int* outW, UNUSED int* outH) { return false; }
 bool swrTexturePackDecode(UNUSED uint32_t pageId, UNUSED uintpixel_t* buffer) { return false; }
 bool swrTexturePackDecodeRect(UNUSED uint32_t pageId, UNUSED int x, UNUSED int y, UNUSED int w, UNUSED int h, UNUSED uintpixel_t* buffer) { return false; }
+const char* swrTexturePackLastError(void) { return ""; }
 
 #endif
