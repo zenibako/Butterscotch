@@ -1,0 +1,11 @@
+# Everything the build writes.
+/out/
+# Desktop test binary and user-supplied game data.
+/undertale_pc
+/undertale_pc_asan
+/data.win
+/textures.bin
+/music.bin
+/music
+*.ppm
+*.sav
