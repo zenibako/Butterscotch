@@ -137,3 +137,42 @@ git add -A src .claude && git ... commit      # branch pocket
   upstream on the user's behalf.
 - Commits use the GitHub noreply address set in each repo's local config;
   leave it as it is.
+
+## Syncing with upstream
+
+Upstream (`origin/main`) moves quickly. Bring it in locally, with a merge,
+and check the result before it is pushed. Do not use GitHub's "Sync fork"
+button on `pocket`: it merges without your signature and without any of
+the checks below, and when the branch is both ahead and behind it also
+offers to discard the branch's own commits.
+
+1. **Capture reference frames first**, with the `undertale_pc` built from
+   the tree as it is (see the undertale-pocket-verify skill): a new game,
+   the user's save in an overworld room, and a battle. They are the only
+   way to tell afterwards whether the merge changed what is drawn.
+2. **Merge:** `git fetch origin && git merge --no-ff origin/main`. If the
+   clone is shallow, `git fetch --unshallow origin` first, or the merge
+   finds no common history.
+3. **Make it build.** The port's Makefile lists Butterscotch's sources
+   itself and does not read `CMakeLists.txt`, so read that file's diff for
+   new source directories, vendored libraries and options, and mirror them
+   in `src/openfpga/Makefile`. The first sync (83 commits, 2026-10-08)
+   needed `vendor/miniz` added and the physics stubs
+   (`src/physics/physics.c` and `src/physics/disabled/physics_disabled.c`,
+   since `ENABLE_PHYSICS` stays off).
+4. **Expect the renderer interface to have moved.** The software renderer
+   comes from draft PR #429, which upstream does not build, so a change to
+   `src/renderer.h` reaches `src/sw/` as a compile error for us to fix.
+   That first sync changed `drawSpritePart` to take a fractional source
+   rectangle. When #429 itself merges upstream, `src/sw/` will conflict
+   with this branch's changes to it throughout; treat that as its own job.
+5. **Check:** `make -C src/openfpga undertale_pc`, then compare against
+   the reference frames. Identical is the expected result; a difference is
+   either an upstream behaviour change (find the commit and say so) or a
+   bad merge. Then `make -C src/openfpga lint`, and run the frame scripts
+   through `make asan` if anything in `src/sw/` or the loaders changed.
+6. **Build for the device and have it run once** before pushing: the
+   desktop cannot show memory, timing or card behaviour, and upstream code
+   has not been through the Pocket before.
+7. **Push `pocket`** only when asked. Leave the fork's `main` as an
+   untouched mirror of upstream.
