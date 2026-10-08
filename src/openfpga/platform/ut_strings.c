@@ -20,7 +20,10 @@ typedef struct {
 } UtStringPatch;
 
 static const UtStringPatch g_patches[] = {
-    /* Title screen and the instruction screen. */
+    /* Title screen and the instruction screen. The instruction screen and
+     * the Pocket's own controls screen (dist/.../input.json) describe the
+     * same buttons: keep their wording the same. Debug mode's buttons are
+     * named on the Pocket's screen only. */
     { "[PRESS Z OR ENTER]", "[PRESS A OR START]" },
     { "[Z or ENTER]", "[A or START]" },
     { "[X or SHIFT]", "[B]" },

@@ -17,8 +17,9 @@ Controls
   D-pad    Move
   A/Start  Confirm
   B        Cancel
-  X or Y   Menu
-  L        Battle smoothing on/off
+  X or Y   Menu (In-game)
+  L        Smoothing
+  Analogue Quit
 
 Debug mode (hold Select 2 s: on/off)
   Select      Frame-time overlay
