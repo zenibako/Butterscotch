@@ -35,6 +35,17 @@ Check that a test measures what you think it does. If two readings that
   for 4 KB, 64 KB and 1 MB requests. Repeat reads of the same region come
   back at about 13 MB/s from a cache below the app. Nothing about how a
   read is issued changes the cold speed; only reading fewer bytes helps.
+- **Where the 1.1 MB/s comes from** (benchmark, 2026-10-08, same on v0.7
+  and v0.9; OS source read at openfpgaOS 8318f25): `fread` is served from
+  the OS's 4 MB cache in 32 KB blocks, one host command per block, with
+  two copies on the way. A single non-blocking read (`of_file_read_async`)
+  takes 6 / 13 / 23 / 42 ms for 4 / 16 / 32 / 64 KB: about 3.5 ms fixed
+  plus 0.6 ms per KB, so the host delivers about 1.7 MB/s and that is the
+  ceiling. A megabyte in 64 KB commands runs at 1.5 MB/s into the OS's
+  staging memory and 1.3 MB/s into ordinary memory. The per-command round
+  trip is NOT the bottleneck (a guess that the benchmark refuted). The
+  OS's file idle hook is deliberately not called during an app's reads on
+  the Pocket; feed audio from the app.
 - **Memory fill/copy:** tens of MB/s. A 640x480 16-bit frame is 614 KB, so
   every extra full-screen clear or copy costs on the order of 15 ms.
 - **Heap:** about 51 MB for everything (game data, texture cache, audio).
