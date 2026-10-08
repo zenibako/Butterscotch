@@ -77,6 +77,19 @@ for platform in "$TREE"/Assets/*/; do
     done
 done
 
+# The Pocket caches the platform list (System/platforms_cache.bin) and was
+# seen not to rebuild it when a platform was renamed: same number of files in
+# Platforms/, so the new platform stayed unknown and its core was missing
+# from the menu. A platform that is new to the card sets the cache aside so
+# that it is rebuilt at the next start.
+for platform in "$TREE"/Platforms/*.json; do
+    [ -f "$platform" ] && [ ! -f "$CARD/Platforms/$(basename "$platform")" ] || continue
+    if [ -f "$CARD/System/platforms_cache.bin" ]; then
+        echo "sdcopy: new platform $(basename "$platform" .json); setting the Pocket's platform cache aside"
+        mv -f "$CARD/System/platforms_cache.bin" "$CARD/System/platforms_cache.bin.old"
+    fi
+done
+
 echo "sdcopy: copying to $CARD"
 for dir in Cores Assets Platforms; do
     [ -d "$TREE/$dir" ] || continue
