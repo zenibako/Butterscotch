@@ -1,8 +1,8 @@
 # Butterscotch Pocket: Undertale on openfpgaOS (Analogue Pocket / MiSTer)
 
-[Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), an
-open-source GameMaker: Studio runner, built as an openfpgaOS app. It uses
-Butterscotch's software renderer (draft PR #429) drawing RGB555 straight
+Butterscotch built as an openfpgaOS app: this directory is the platform
+layer and the Undertale core around it. It uses Butterscotch's software
+renderer (draft PR #429, carried on this branch) drawing RGB555 straight
 into the openfpgaOS framebuffer, at 320x240 or 640x480 depending on the room.
 
 You must supply your own `data.win` from Undertale v1.08.
@@ -13,25 +13,23 @@ You must supply your own `data.win` from Undertale v1.08.
 |------|------|
 | `main.c` | Entry point: registers `data.win` on data slot 4 and starts the runner |
 | `platform/of_platform.c` | Butterscotch platform hooks on the `of_*` API (video, pad, timing) |
-| `butterscotch/` | Butterscotch checkout, `openfpga` branch of the fork below (not tracked here) |
-| `../../dist/undertale/` | Pocket core definition (core, data slots, instance JSON) |
+| `../` | Butterscotch itself; `../sw/` is the software renderer |
+| `dist/` | Pocket core definition (core, data slots, instance JSON) |
+| `out/` | Everything the build writes; not tracked |
 | `tools/mkart.py` | Draws the menu banner and core icon into `dist/` (run by hand after changing the art; needs Pillow). `docs/banner.png` is its preview of the banner, used in the root README |
 
-Getting `butterscotch/`:
-
-```bash
-git clone -b openfpga https://github.com/zenibako/Butterscotch.git butterscotch
-```
-
-That branch is upstream's `sw-renderer` (draft PR #429) plus this port's
-renderer, loader and platform-hook changes.
+The openfpgaOS SDK is a dependency, not part of this repository. Clone
+https://github.com/openfpgaOS/openfpgaSDK next to this repository, or pass
+`SDK_ROOT=<its path>` to `make`. The build only reads it.
 
 ## Build
 
-On macOS, `source ../../../env.sh` first (GNU sed + host RISC-V toolchain).
+On macOS, put Homebrew's GNU sed first on `PATH` and set
+`USE_SDK_CONTAINER=0` first (the SDK's scripts need GNU sed, and this builds
+with the host's `riscv64-elf-gcc` instead of the SDK's Docker image).
 
 ```bash
-make            # RISC-V ELF + Pocket SD tree in ../../build/pocket/undertale/
+make            # RISC-V ELF + Pocket SD tree in out/build/pocket/undertale/
 make test       # desktop binary ./undertale_pc (run it next to a data.win)
 make lint       # strict compiler warnings on this port's own files
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
