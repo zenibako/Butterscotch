@@ -173,13 +173,44 @@ static char *fsResolvePath(FileSystem *base, const char *relativePath) {
     return safeStrdup(relativePath);
 }
 
+/* Files the game ships beside its data file (Deltarune's lang/lang_en.json, for one) are read straight from
+ * storage. They are read-only: anything the game writes goes to the archive, which is looked up first. */
+static bool readBundled(const char *relativePath, uint8_t **outData, uint32_t *outSize) {
+    FILE *f = fopen(relativePath, "rb");
+    if (f == NULL) return false;
+    bool ok = false;
+    if (fseek(f, 0, SEEK_END) == 0) {
+        long size = ftell(f);
+        if (size >= 0 && fseek(f, 0, SEEK_SET) == 0) {
+            uint8_t *data = safeMalloc((size_t) size + 1);
+            if (fread(data, 1, (size_t) size, f) == (size_t) size) {
+                data[size] = '\0';
+                *outData = data;
+                *outSize = (uint32_t) size;
+                ok = true;
+            } else
+                free(data);
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 static bool fsFileExists(FileSystem *base, const char *relativePath) {
-    return findFile((UtSaveFs *) base, relativePath) != NULL;
+    if (findFile((UtSaveFs *) base, relativePath) != NULL) return true;
+    FILE *f = fopen(relativePath, "rb");
+    if (f == NULL) return false;
+    fclose(f);
+    return true;
 }
 
 static char *fsReadFileText(FileSystem *base, const char *relativePath) {
     UtSaveFile *file = findFile((UtSaveFs *) base, relativePath);
-    if (file == NULL) return NULL;
+    if (file == NULL) {
+        uint8_t *data = NULL;
+        uint32_t size = 0;
+        return readBundled(relativePath, &data, &size) ? (char *) data : NULL;
+    }
     char *text = safeMalloc(file->size + 1);
     memcpy(text, file->data, file->size);
     text[file->size] = '\0';
@@ -203,7 +234,12 @@ static bool fsDeleteFile(FileSystem *base, const char *relativePath) {
 
 static bool fsReadFileBinary(FileSystem *base, const char *relativePath, uint8_t **outData, int32_t *outSize) {
     UtSaveFile *file = findFile((UtSaveFs *) base, relativePath);
-    if (file == NULL) return false;
+    if (file == NULL) {
+        uint32_t size = 0;
+        if (!readBundled(relativePath, outData, &size)) return false;
+        *outSize = (int32_t) size;
+        return true;
+    }
     *outData = safeMalloc(file->size + 1);
     memcpy(*outData, file->data, file->size);
     *outSize = (int32_t) file->size;
