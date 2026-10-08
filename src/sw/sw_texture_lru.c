@@ -66,15 +66,44 @@ static void makeRoomFor(SWRenderer* swr, size_t bytes)
     }
 }
 
-// Allocates, giving up cached pages (even ones in use this frame) rather than failing.
+// Allocates, giving up cached pages (even ones in use this frame) and then
+// the renderer's other rebuildable pictures rather than failing.
 static void* allocOrEvict(SWRenderer* swr, size_t bytes)
 {
     for (;;) {
         void* ptr = malloc(bytes);
         if (ptr) return ptr;
-        if (!evictLeastRecentlyUsed(swr, true)) return NULL;
+        if (evictLeastRecentlyUsed(swr, true)) continue;
+        if (!swrTileRunsFree()) return NULL;
+        logInfo("SWR: Dropped the tile pictures (out of memory)\n");
     }
 }
+
+// The largest block malloc will hand out right now, to within 64 KB. Only
+// called when a page failed to load, to say how far short the heap is.
+static size_t largestFreeBlock(size_t limit)
+{
+    size_t low = 0, high = limit;
+    while (high - low > 64 * 1024) {
+        size_t middle = low + (high - low) / 2;
+        void* probe = malloc(middle);
+        if (probe) {
+            free(probe);
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+// A page that could not be loaded is not tried again for this many frames.
+// Trying on every draw call empties the cache each time (every other page is
+// given up to make room, then reloaded for the next sprite) and the scene
+// runs at a crawl; skipping the page's sprites for a few seconds does not.
+#define TEXTURE_RETRY_FRAMES 150
+#define TEXTURE_RETRY_PAGES 256
+static uint32_t retryAtFrame[TEXTURE_RETRY_PAGES];
 
 static SWTexture* loadFromPack(SWRenderer* swr, uint32_t pageId)
 {
@@ -168,15 +197,29 @@ bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
     
     // Only real texture pages can be loaded on demand.
     if (pageId >= swr->textureCount) return false;
+    if (pageId < TEXTURE_RETRY_PAGES && retryAtFrame[pageId] != 0) {
+        if (swr->frameCounter < retryAtFrame[pageId]) return false;
+        retryAtFrame[pageId] = 0;
+    }
     
     uint64_t loadStart = nowNanos();
     const char* source = "pack";
+    int packW = 0, packH = 0;
+    bool inPack = swrTexturePackGetSize(pageId, &packW, &packH);
     texture = loadFromPack(swr, pageId);
-    if (!texture) {
+    // A page the pack holds can only have failed for want of memory, and
+    // decoding its PNG needs several times more.
+    if (!texture && !inPack) {
         source = "PNG";
         texture = loadFromDataWin(swr, pageId);
     }
-    if (!texture) return false;
+    if (!texture) {
+        size_t needed = (size_t) packW * packH * sizeof(uintpixel_t);
+        logError("SWR: TXTR page %u needs %u KB; largest free block %u KB, cache %u KB\n", pageId, (unsigned) (needed / 1024),
+                 (unsigned) (largestFreeBlock(needed ? needed : 16u * 1024u * 1024u) / 1024), (unsigned) (cachedBytes(swr) / 1024));
+        if (pageId < TEXTURE_RETRY_PAGES) retryAtFrame[pageId] = swr->frameCounter + TEXTURE_RETRY_FRAMES;
+        return false;
+    }
     
     texture->lastUsedFrame = swr->frameCounter;
     swr->textures[pageId] = texture;

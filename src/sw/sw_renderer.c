@@ -1650,6 +1650,18 @@ typedef struct {
 
 static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 
+bool swrTileRunsFree(void)
+{
+    bool freed = false;
+    for (int e = 0; e < SWR_TILE_RUN_ENTRIES; e++) {
+        if (swrTileRuns[e].pixels == NULL) continue;
+        free(swrTileRuns[e].pixels);
+        swrTileRuns[e].pixels = NULL;
+        freed = true;
+    }
+    return freed;
+}
+
 static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
 {
     const uint8_t* at = (const uint8_t*) data;

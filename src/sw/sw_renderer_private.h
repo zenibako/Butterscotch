@@ -5,6 +5,10 @@
 #include "sw_defines.h"
 #include "sw_pixel_convert.h"
 
+// Frees the composed tile-run pictures (sw_renderer.c); they are rebuilt on
+// the next draw. Returns false if there were none.
+bool swrTileRunsFree(void);
+
 // Unimplemented Functions
 #define UNIMP() do { logWarn("NYI %s\n", __func__); } while (0)
 //#define UNIMP() do { } while (0)
