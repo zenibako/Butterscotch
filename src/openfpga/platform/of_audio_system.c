@@ -58,14 +58,15 @@
  * topped up in pieces this small instead: about 6 ms each, measured, where
  * a 16 KB piece through fread costs about 28 ms and shows as a stutter. */
 #define UT_READ_STEADY 4096
-/* A direct read that has not finished after this long is given up and the
- * piece is read with fread instead. In practice this is the Pocket saving a
+/* A direct read that has not finished after this long is given up, and
+ * direct reads are not used again. In practice this is the Pocket saving a
  * screenshot: a direct read issued while the host is busy with that never
- * completes, however long it is given (measured: still nothing after 10 s),
- * while fread simply waits the 2-4 s out. So the limit is short, and only
- * several failures in a row turn direct reads off. */
-#define UT_DIRECT_TIMEOUT_NANOS 1500000000ull
-#define UT_DIRECT_MAX_FAILURES 3
+ * completes (nothing after 10 s, measured). The limit has to be longer than
+ * the 2 s after which the OS itself drops a stalled read: until the OS has
+ * dropped it, every ordinary read fails with "busy", and a build that gave up
+ * after 1.5 s and carried on crashed within seconds of a screenshot. */
+#define UT_DIRECT_TIMEOUT_NANOS 3000000000ull
+#define UT_DIRECT_SETTLE_NANOS 3000000000ull
 
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
@@ -138,7 +139,6 @@ typedef struct {
     /* Direct reads of the pack; directStage is NULL when they are not in use. */
     uint8_t *directStage;
     uint32_t directSlot;
-    int directFailures; /* timeouts in a row */
 } UtAudioSystem;
 
 /* The file idle hook has no user pointer, so the one instance is global. */
@@ -262,16 +262,16 @@ static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
     /* The poll is the OS's fallback for a lost interrupt. */
     while (!g_directDone && of_file_async_poll() != 1) {
         if (nowNanos() - start > UT_DIRECT_TIMEOUT_NANOS) {
-            if (++ut->directFailures >= UT_DIRECT_MAX_FAILURES) {
-                logWarn("Audio: direct reads keep timing out; using fread from here on.\n");
-                ut->directStage = NULL;
-            }
+            /* Do not go back to ordinary reads while the OS still counts
+             * this one as in flight. */
+            uint64_t gaveUp = nowNanos();
+            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < UT_DIRECT_SETTLE_NANOS) of_file_async_poll();
+            logWarn("Audio: a direct read timed out; using fread from here on.\n");
+            ut->directStage = NULL;
             return false;
         }
     }
-    if (g_directResult < 0) return false;
-    ut->directFailures = 0;
-    return true;
+    return g_directResult >= 0;
 }
 
 static void openDirect(UtAudioSystem *ut) {
