@@ -61,10 +61,14 @@ void utBenchStart(void) {
 #define UT_IO_FILE "music.bin"
 
 static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
-    static uint8_t buffer[UT_IO_BYTES] __attribute__((aligned(512)));
+    uint8_t *buffer = malloc(UT_IO_BYTES);
+    if (buffer == NULL) return 0;
 
     FILE *file = fopen(UT_IO_FILE, "rb");
-    if (file == NULL) return 0;
+    if (file == NULL) {
+        free(buffer);
+        return 0;
+    }
     setvbuf(file, NULL, _IONBF, 0);
     fseek(file, (long) megabyteOffset * 1024 * 1024, SEEK_SET);
 
@@ -77,6 +81,7 @@ static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
     }
     uint64_t micros = (nowNanos() - start) / 1000u;
     fclose(file);
+    free(buffer);
 
     return micros > 0 ? (unsigned) ((uint64_t) done * 1000000u / 1024u / micros) : 0;
 }
@@ -128,7 +133,6 @@ static uint32_t asyncTime(uint32_t slot, uint32_t offset, uint8_t *dest, bool ad
 }
 
 static void asyncReport(void) {
-    static uint8_t heapBuffer[UT_IO_BYTES] __attribute__((aligned(512)));
     static const uint32_t sizes[] = { 4096, 16384, 32768, 65536 };
     char line[64];
     int at;
@@ -154,7 +158,9 @@ static void asyncReport(void) {
 
     uint32_t total = UT_IO_BYTES - UT_IO_BYTES % maxRead;
     uint32_t staged = asyncTime(slot, 118u * 1024u * 1024u, stage, false, maxRead, total);
-    uint32_t copied = asyncTime(slot, 120u * 1024u * 1024u, heapBuffer, true, maxRead, total);
+    uint8_t *heapBuffer = malloc(UT_IO_BYTES);
+    uint32_t copied = heapBuffer != NULL ? asyncTime(slot, 120u * 1024u * 1024u, heapBuffer, true, maxRead, total) : 0;
+    free(heapBuffer);
     utLogPrint("async 1M KB/s: staged %u, copied %u\n",
                staged > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / staged) : 0,
                copied > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / copied) : 0);

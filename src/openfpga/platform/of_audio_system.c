@@ -58,9 +58,10 @@
  * topped up in pieces this small instead: about 6 ms each, measured, where
  * a 16 KB piece through fread costs about 28 ms and shows as a stutter. */
 #define UT_READ_STEADY 4096
-/* A direct read that has not finished after this long has failed; the OS
- * gives up on one itself after 2 s. */
-#define UT_DIRECT_TIMEOUT_NANOS 2500000000ull
+/* A direct read that has not finished after this long has failed. It has to
+ * outlast the Pocket saving a screenshot, which holds the host for 2-4 s; a
+ * shorter limit gave up on a read that was still in flight. */
+#define UT_DIRECT_TIMEOUT_NANOS 10000000000ull
 
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
