@@ -203,9 +203,8 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 #ifdef OF_PC
 /* Desktop-only verification aid: UT_DUMP_FRAME=<n> writes frame n of the
  * RGB555 output to UT_DUMP_PATH (default frame.ppm) and exits. */
-static void writeFrameDump(void) {
-    const char *path = getenv("UT_DUMP_PATH");
-    FILE *f = fopen(path != NULL ? path : "frame.ppm", "wb");
+static void writeFrameTo(const char *path, bool thenExit) {
+    FILE *f = fopen(path, "wb");
     if (f == NULL) exit(1);
     fprintf(f, "P6\n%d %d\n255\n", g_nextW, g_nextH);
     for (int i = 0; i < g_nextW * g_nextH; i++) {
@@ -218,15 +217,31 @@ static void writeFrameDump(void) {
         fwrite(rgb, 1, 3, f);
     }
     fclose(f);
-    exit(0);
+    if (thenExit) exit(0);
 }
 
+static void writeFrameDump(void) {
+    const char *path = getenv("UT_DUMP_PATH");
+    writeFrameTo(path != NULL ? path : "frame.ppm", true);
+}
+
+/* UT_DUMP_EVERY=<n> also writes every nth frame on the way there, to
+ * <UT_DUMP_DIR>/f<frame>.ppm, to follow a long scripted run. */
 static void dumpFrameIfRequested(void) {
     static int frame = 0;
     static int target = -2;
+    static int every = 0;
     if (target == -2) {
         const char *env = getenv("UT_DUMP_FRAME");
         target = env != NULL ? atoi(env) : -1;
+        env = getenv("UT_DUMP_EVERY");
+        every = env != NULL ? atoi(env) : 0;
+    }
+    if (every > 0 && frame > 0 && frame % every == 0) {
+        const char *dir = getenv("UT_DUMP_DIR");
+        char path[512];
+        snprintf(path, sizeof(path), "%s/f%06d.ppm", dir != NULL ? dir : ".", frame);
+        writeFrameTo(path, false);
     }
     if (target < 0 || frame++ != target) return;
     writeFrameDump();
@@ -274,6 +289,13 @@ void platformSwapBuffers(void) {
             memcpy(dst + (size_t) y * g_modeStride, g_nextFb + (size_t) y * g_nextW, rowBytes);
     }
     uint64_t flipStart = nowNanos();
+#ifdef OF_PC
+    /* UT_NOFLIP=1 never presents: the desktop window waits for vsync on every flip, which caps a long scripted
+     * run at the display's refresh rate. */
+    static int noFlip = -1;
+    if (noFlip < 0) noFlip = getenv("UT_NOFLIP") != NULL;
+    if (!noFlip)
+#endif
     of_video_flip();
     utBenchAddFlipTime(nowNanos() - flipStart);
 #ifndef OF_PC
@@ -324,6 +346,40 @@ static void runInputScript(void) {
     static int frame = 0;
     const char *script = g_inputScript;
     frame++;
+#ifdef OF_PC
+    /* UT_GOTO="<frame>:<room index>" jumps to a room, to reach a scene without playing up to it. The game's own
+     * state is whatever it was, so this only suits rooms that set themselves up. */
+    const char *jump = getenv("UT_GOTO");
+    if (jump != NULL && g_runner != NULL && frame == atoi(jump) && strchr(jump, ':') != NULL)
+        g_runner->pendingRoom = atoi(strchr(jump, ':') + 1);
+    /* UT_SET="<frame>:name=1,other[2]=3" sets numeric globals (or elements of existing global arrays). */
+    const char *set = getenv("UT_SET");
+    if (set != NULL && g_runner != NULL && frame == atoi(set) && strchr(set, ':') != NULL) {
+        VMContext *vm = g_runner->vmContext;
+        for (const char *p = strchr(set, ':') + 1; *p != '\0';) {
+            char name[64];
+            size_t n = strcspn(p, "=[");
+            if (n == 0 || n >= sizeof(name)) break;
+            memcpy(name, p, n);
+            name[n] = '\0';
+            int index = p[n] == '[' ? atoi(p + n + 1) : -1;
+            const char *eq = strchr(p, '=');
+            if (eq == NULL) break;
+            RValue value = RValue_makeReal((GMLReal) atof(eq + 1));
+            int32_t id = VM_getOrAllocateVarID(vm, name);
+            if (index < 0) {
+                Instance_setSelfVar(vm->globalScopeInstance, id, value);
+            } else {
+                RValue array = Instance_getSelfVar(vm->globalScopeInstance, id);
+                if (array.type == RVALUE_ARRAY) GMLArray_set(array.array, index, value);
+                else logWarn("UT_SET: global.%s is not an array\n", name);
+            }
+            const char *comma = strchr(eq, ',');
+            if (comma == NULL) break;
+            p = comma + 1;
+        }
+    }
+#endif
     if (script == NULL || g_runner == NULL) return;
 
     for (const char *p = script; *p != '\0';) {
