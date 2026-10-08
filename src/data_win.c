@@ -2612,8 +2612,7 @@ static void parseSTRG(BinaryReader* reader, DataWin* dw) {
     free(ptrs);
 }
 
-static void resolveExternalTextures(BinaryReader* reader, DataWin* dw) {
-    if (!dw->tginOffset || !dw->txtr.textures) return;
+static void readTextureGroupInfo(BinaryReader* reader, DataWin* dw) {
     BinaryReader_seek(reader, dw->tginOffset);
     uint32_t version = BinaryReader_readUint32(reader);
     if (version != 1) return;
@@ -2639,6 +2638,26 @@ static void resolveExternalTextures(BinaryReader* reader, DataWin* dw) {
         }
     }
     free(groups);
+}
+
+static void resolveExternalTextures(BinaryReader* reader, DataWin* dw) {
+    if (!dw->tginOffset || !dw->txtr.textures) return;
+
+    // TGIN is an earlier chunk. When the reader is serving TXTR from a per-chunk buffer it is out of range, so
+    // read it from the file instead and put the buffer back afterwards.
+    bool outsideBuffer = reader->buffer != nullptr &&
+                         (dw->tginOffset < reader->bufferBase || dw->tginOffset >= reader->bufferBase + reader->bufferSize);
+    if (!outsideBuffer) {
+        readTextureGroupInfo(reader, dw);
+        return;
+    }
+
+    BinaryReader saved = *reader;
+    long savedFilePos = ftell(reader->file);
+    BinaryReader_clearBuffer(reader);
+    readTextureGroupInfo(reader, dw);
+    fseek(reader->file, savedFilePos, SEEK_SET);
+    *reader = saved;
 }
 
 static void parseTXTR(BinaryReader* reader, DataWin* dw, size_t chunkEnd, bool loadTextureDataLazily) {
