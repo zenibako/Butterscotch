@@ -1628,6 +1628,141 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
     
     UNIMP();
 }
+// ===[ Tile run cache ]===
+// A room's tiles are hundreds of small draws that come out the same every
+// frame. A run of them that nothing else is drawn between is composed once
+// into a picture the size of the run's bounding box, in room coordinates, and
+// that picture is drawn in their place for as long as the run stays the same.
+// The key is a hash of everything that decides what the tiles look like, so a
+// game that moves, adds, hides or recolours tiles just gets a new picture.
+#define SWR_TILE_RUN_ENTRIES 4
+#define SWR_TILE_RUN_MIN_TILES 16
+#define SWR_TILE_RUN_MAX_PIXELS (1024 * 1024)
+#define SWR_TILE_RUN_MAX_SIDE 4096
+#define SWR_TILE_RUN_IDLE_FRAMES 300
+
+typedef struct {
+    uint64_t key;
+    uintpixel_t* pixels;    // NULL when the entry is free
+    int x, y, width, height;
+    uint32_t lastUsedFrame;
+} SWTileRun;
+
+static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
+
+static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
+{
+    const uint8_t* at = (const uint8_t*) data;
+    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * 1099511628211ull;
+    return hash;
+}
+
+static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    swrOverlayFlush(swr);
+    
+#if PIXEL_SIZE != 16
+    (void) tiles; (void) offsets; (void) count;
+    return false;
+#else
+    // The picture is in room pixels and holds no partial coverage, so it can
+    // only stand in for tiles drawn unscaled, opaque and with normal blending.
+    if (count < SWR_TILE_RUN_MIN_TILES) return false;
+    if (swr->drawingToSurface || swr->blendMode != bm_normal) return false;
+    if (swr->scaleX != 1.0f || swr->scaleY != 1.0f) return false;
+    
+    uint64_t key = 14695981039346656037ull;
+    int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
+    for (int32_t t = 0; t < count; t++)
+    {
+        const RoomTile* tile = tiles[t];
+        if (tile->scaleX != 1.0f || tile->scaleY != 1.0f || tile->alpha < 1.0f) return false;
+        
+        int tileLeft = swrFloor((float) tile->x + offsets[t * 2]);
+        int tileTop = swrFloor((float) tile->y + offsets[t * 2 + 1]);
+        if (tileLeft < left) left = tileLeft;
+        if (tileTop < top) top = tileTop;
+        if (tileLeft + (int) tile->width > right) right = tileLeft + (int) tile->width;
+        if (tileTop + (int) tile->height > bottom) bottom = tileTop + (int) tile->height;
+        
+        int32_t ints[7] = { tile->x, tile->y, tile->useSpriteDefinition, tile->backgroundDefinition, tile->sourceX, tile->sourceY, (int32_t) tile->color };
+        uint32_t size[2] = { tile->width, tile->height };
+        key = swrTileRunHash(key, ints, sizeof(ints));
+        key = swrTileRunHash(key, size, sizeof(size));
+        key = swrTileRunHash(key, &offsets[t * 2], 2 * sizeof(float));
+    }
+    
+    int width = right - left, height = bottom - top;
+    if (width <= 0 || height <= 0 || width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE) return false;
+    if (width * height > SWR_TILE_RUN_MAX_PIXELS) return false;
+    
+    // Find the picture, or the entry to build it in: a free one, else the one unused for longest.
+    SWTileRun* run = NULL;
+    SWTileRun* spare = &swrTileRuns[0];
+    for (int e = 0; e < SWR_TILE_RUN_ENTRIES; e++)
+    {
+        SWTileRun* entry = &swrTileRuns[e];
+        if (entry->pixels != NULL && swr->frameCounter - entry->lastUsedFrame > SWR_TILE_RUN_IDLE_FRAMES) {
+            free(entry->pixels);
+            entry->pixels = NULL;
+        }
+        if (entry->pixels != NULL && entry->key == key) { run = entry; break; }
+        if (entry->pixels == NULL) {
+            if (spare->pixels != NULL) spare = entry;
+        } else if (spare->pixels != NULL && entry->lastUsedFrame < spare->lastUsedFrame) {
+            spare = entry;
+        }
+    }
+    
+    if (run == NULL)
+    {
+        // An entry used this frame belongs to another run of the room being drawn; leave it be.
+        if (spare->pixels != NULL && spare->lastUsedFrame == swr->frameCounter) return false;
+        free(spare->pixels);
+        spare->pixels = NULL;
+        
+        uintpixel_t* pixels = (uintpixel_t*) calloc((size_t) width * height, sizeof(uintpixel_t));
+        if (pixels == NULL) return false;
+        
+        // Point the renderer at the picture, with a view that maps the run's
+        // bounding box onto it, and draw the tiles the ordinary way.
+        SWRenderer saved = *swr;
+        swr->fb = pixels;
+        swr->fbPitch = (uint16_t) width;
+        swr->viewX = left; swr->viewY = top;
+        swr->portX = 0; swr->portY = 0;
+        swr->portW = width; swr->portH = height;
+        swr->maxX = width; swr->maxY = height;
+        for (int32_t t = 0; t < count; t++)
+            Renderer_drawTile(renderer, tiles[t], offsets[t * 2], offsets[t * 2 + 1]);
+        swrOverlayFlush(swr);
+        swr->fb = saved.fb;
+        swr->fbPitch = saved.fbPitch;
+        swr->viewX = saved.viewX; swr->viewY = saved.viewY;
+        swr->portX = saved.portX; swr->portY = saved.portY;
+        swr->portW = saved.portW; swr->portH = saved.portH;
+        swr->maxX = saved.maxX; swr->maxY = saved.maxY;
+        
+        run = spare;
+        run->key = key;
+        run->pixels = pixels;
+        run->x = left; run->y = top;
+        run->width = width; run->height = height;
+    }
+    run->lastUsedFrame = swr->frameCounter;
+    
+    SWTexture picture;
+    picture.buffer = run->pixels;
+    picture.width = (uint16_t) run->width;
+    picture.height = (uint16_t) run->height;
+    picture.lastUsedFrame = swr->frameCounter;
+    swrDrawSprite(renderer, (float) run->x, (float) run->y, (float) run->width, (float) run->height,
+                  &picture, 0, 0, run->width, run->height, 0xFFFFFF, 1.0f);
+    return true;
+#endif
+}
+
 #ifdef SW_DRAW_PROFILE
 // Times each kind of draw call and hands the totals to the platform, which
 // can then say what a slow frame was spent drawing.
@@ -1658,6 +1793,13 @@ static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, f
 static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
+}
+
+static bool SWRenderer_profDrawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+{
+    bool drawn;
+    SWR_PROFILED(SWR_PROF_PART, drawn = SWRenderer_drawTileRun(renderer, tiles, offsets, count));
+    return drawn;
 }
 
 static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
@@ -1748,6 +1890,10 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawTextColor            = SWRenderer_profDrawTextColor;
     swrVtable.drawSpriteTiled          = SWRenderer_profDrawSpriteTiled;
     swrVtable.drawRectangle            = SWRenderer_profDrawRectangle;
+#endif
+    swrVtable.drawTileRun              = SWRenderer_drawTileRun;
+#ifdef SW_DRAW_PROFILE
+    swrVtable.drawTileRun              = SWRenderer_profDrawTileRun;
 #endif
     
     swrVtable.drawTile                 = NULL;

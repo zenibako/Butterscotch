@@ -929,10 +929,15 @@ void Runner_draw(Runner* runner) {
     // Draw interleaved tiles and instances
     int32_t i = 0;
     DrawKey lastProcessedDrawKey;
+    // Tiles before this index belong to a run the renderer declined to draw as one (see drawTileRun).
+    int32_t tileRunDeclinedUntil = 0;
+    static RoomTile** tileRunTiles = nullptr;
+    static float* tileRunOffsets = nullptr;
 
     while (true) {
         if (runner->drawableListSortDirty || runner->drawableListStructureDirty) {
             rebuildDrawableCacheIfDirty(runner);
+            tileRunDeclinedUntil = 0;
 
             if (i != 0) {
                 // Something created things during draw events! Figure out the new cursor position...
@@ -977,6 +982,36 @@ void Runner_draw(Runner* runner) {
         lastProcessedDrawKey = drawableKey(d);
 
         if (d->type == DRAWABLE_TILE) {
+            // Hand a run of consecutive tiles to the renderer in one go if it can take them. Drawing a tile runs no game code, so the list cannot change under the run.
+            bool tracingTiles = false;
+#ifdef ENABLE_VM_TRACING
+            tracingTiles = shlen(runner->vmContext->tilesToBeTraced) > 0;
+#endif
+            if (runner->renderer != nullptr && runner->renderer->vtable->drawTileRun != nullptr && i > tileRunDeclinedUntil && !tracingTiles) {
+                int32_t runEnd = i - 1;
+                arrsetlen(tileRunTiles, 0);
+                arrsetlen(tileRunOffsets, 0);
+                while (drawableCount > runEnd && runner->cachedDrawables[runEnd].type == DRAWABLE_TILE) {
+                    RoomTile* runTile = &room->tiles[runner->cachedDrawables[runEnd++].tileIndex];
+                    ptrdiff_t runLayerIdx = hmgeti(runner->tileLayerMap, runTile->tileDepth);
+                    float runOffsetX = 0.0f, runOffsetY = 0.0f;
+                    if (runLayerIdx >= 0) {
+                        if (!runner->tileLayerMap[runLayerIdx].value.visible) continue;
+                        runOffsetX = runner->tileLayerMap[runLayerIdx].value.offsetX;
+                        runOffsetY = runner->tileLayerMap[runLayerIdx].value.offsetY;
+                    }
+                    arrput(tileRunTiles, runTile);
+                    arrput(tileRunOffsets, runOffsetX);
+                    arrput(tileRunOffsets, runOffsetY);
+                }
+                if (runner->renderer->vtable->drawTileRun(runner->renderer, tileRunTiles, tileRunOffsets, (int32_t) arrlen(tileRunTiles))) {
+                    i = runEnd;
+                    lastProcessedDrawKey = drawableKey(&runner->cachedDrawables[runEnd - 1]);
+                    continue;
+                }
+                tileRunDeclinedUntil = runEnd;
+            }
+
             if (runner->renderer != nullptr) {
                 RoomTile* tile = &room->tiles[d->tileIndex];
                 // Skip tiles whose layer was hidden via tile_layer_hide(). Filtered here (not in the cache) so toggling layer visibility doesn't invalidate.

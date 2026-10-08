@@ -602,7 +602,17 @@ static void swrDrawSpriteInternal(
                 srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
             
             fixedp_t xs2 = ixs2;
-            if (untinted)
+            if (untinted && !flipX && xstep == (1 << fp_prec))
+            {
+                // Unscaled: no stepping through the source needed.
+                for (int x = 0; x < dw; x++)
+                {
+                    uintpixel_t pixel = srcline[x];
+                    if (swrIsOpaque(pixel))
+                        dstline[x] = pixel;
+                }
+            }
+            else if (untinted)
             {
                 for (int x = 0; x < dw; x++, xs2 += oxs2)
                 {
