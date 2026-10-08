@@ -50,7 +50,7 @@ static bool swrResolveFontState(SWRenderer* swr, DataWin* dw, Font* font, SwrFon
         state->fontTpag = &dw->tpag.items[state->fontTpagIndex];
         int16_t pageId = state->fontTpag->texturePageId;
         if (0 > pageId || (uint32_t) pageId >= swr->totalTextureCount) return false;
-        if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) return false;
+        if (!swrTextureForItem(swr, state->fontTpagIndex)) return false;
         
         state->fontPageId = pageId;
     }
@@ -76,7 +76,7 @@ static bool swrResolveGlyph(
         TexturePageItem* glyphTpag = &dw->tpag.items[tpagIdx];
         int16_t pid = glyphTpag->texturePageId;
         if (0 > pid || (uint32_t) pid >= swr->totalTextureCount) return false;
-        if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pid)) return false;
+        if (!swrTextureForItem(swr, tpagIdx)) return false;
 
         *tpagIndex = tpagIdx;
         *pageId = glyphTpag->texturePageId;
@@ -231,24 +231,30 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                         dx = roundf(dx * 2) / 2;
                         dy = roundf(dy * 2) / 2;
                         
-                        SWTexture* texture = swr->textures[pageId];
-                        
-                        if (UNLIKELY(mustRotate))
+                        // Resolving the glyph has already loaded this; it is the cached texture.
+                        SWTexture* texture = swrTextureForItem(swr, fontTpagIndex);
+                        if (texture != NULL)
                         {
-                            dx -= x;
-                            dy -= y;
-                            float ndx = cosA * dx - sinA * dy;
-                            float ndy = sinA * dx + cosA * dy;
-                            ndx += x;
-                            ndy += y;
-                            swrDrawSpriteRotated(renderer, ndx, ndy, dw, dh, texture, sx, sy, sw, sh, color, alpha, angleDeg, 0.0f, 0.0f);
-                        }
-                        else
-                        {
-                            swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
-                        }
+                            sx -= texture->originX;
+                            sy -= texture->originY;
                         
-                        drewSuccessfully = true;
+                            if (UNLIKELY(mustRotate))
+                            {
+                                dx -= x;
+                                dy -= y;
+                                float ndx = cosA * dx - sinA * dy;
+                                float ndy = sinA * dx + cosA * dy;
+                                ndx += x;
+                                ndy += y;
+                                swrDrawSpriteRotated(renderer, ndx, ndy, dw, dh, texture, sx, sy, sw, sh, color, alpha, angleDeg, 0.0f, 0.0f);
+                            }
+                            else
+                            {
+                                swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
+                            }
+                        
+                            drewSuccessfully = true;
+                        }
                     }
                 }
 

@@ -24,6 +24,10 @@ typedef struct
 {
     uintpixel_t* buffer;
     uint16_t width, height;
+    // Where buffer[0] is on its texture page. Zero for a whole page; a texture
+    // that holds only one TPAG item's part of a page (see swrTextureForItem)
+    // starts at that part's corner, so page coordinates minus this index it.
+    uint16_t originX, originY;
     uint32_t lastUsedFrame; // SWRenderer.frameCounter when last drawn, for cache eviction
 }
 SWTexture;
@@ -70,6 +74,10 @@ typedef struct
     float lastScaleX, lastScaleY;
     
     SWTexture** textures;
+    // Per-TPAG-item textures for pages that are not loaded whole; see swrTextureForItem.
+    SWTexture** itemTextures;
+    size_t itemCount;
+    size_t itemBytes;
     SWSurface** surfaces;
     uint32_t frameCounter;
     bool pendingClear;      // clearFrameBuffer was requested but not done yet (see swrFlushPendingClear)

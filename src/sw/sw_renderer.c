@@ -100,6 +100,7 @@ static void SWRenderer_destroy(Renderer* renderer)
         swrFreeTexture(swr->textures[i]);
     }
     }
+    swrFreeItemTextures(swr);
     free(swr->textures);
     swr->textureCount = 0;
     swr->totalTextureCount = 0;
@@ -318,13 +319,14 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
         logError("%s: tpagIndex of %d is invalid, as pageId of %d is invalid\n", __func__, tpagIndex, pageId);
         return;
     }
-    if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) {
+    SWTexture* texture = swrTextureForItem(swr, tpagIndex);
+    if (!texture) {
         logError("%s: could not ensure texture is loaded, tpagIndex: %d, pageId: %d\n", __func__, tpagIndex, pageId);
         return;
     }
     
-    int sx = tpag->sourceX;
-    int sy = tpag->sourceY;
+    int sx = tpag->sourceX - texture->originX;
+    int sy = tpag->sourceY - texture->originY;
     int sw = tpag->sourceWidth;
     int sh = tpag->sourceHeight;
     
@@ -336,8 +338,6 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
     dy *= yscale;
     dx += x;
     dy += y;
-
-    SWTexture* texture = swr->textures[pageId];
     
     if (UNLIKELY(swrMustRotate(angleDeg)))
     {
@@ -375,7 +375,16 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
     TexturePageItem* tpag = &dwin->tpag.items[tpagIndex];
     int16_t pageId = tpag->texturePageId;
     if (0 > pageId || swr->totalTextureCount <= (uint32_t) pageId) return;
-    if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) return;
+    
+    // An item stored at another size than it is drawn has its page position
+    // rescaled below, which only means something on the whole page.
+    bool rescaled = tpag->sourceWidth != tpag->targetWidth || tpag->sourceHeight != tpag->targetHeight;
+    SWTexture* texture = NULL;
+    if (!rescaled)
+        texture = swrTextureForItem(swr, tpagIndex);
+    else if (swrEnsureTextureIsLoaded(swr, (uint32_t) pageId))
+        texture = swr->textures[pageId];
+    if (!texture) return;
     
     int sx = tpag->sourceX + srcOffX;
     int sy = tpag->sourceY + srcOffY;
@@ -395,8 +404,8 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
         sy = sy * tpag->sourceHeight / tpag->targetHeight;
         sh = sh * tpag->sourceHeight / tpag->targetHeight;
     }
-    
-    SWTexture* texture = swr->textures[pageId];
+    sx -= texture->originX;
+    sy -= texture->originY;
     
     if (UNLIKELY(swrMustRotate(angleDeg)))
     {
@@ -432,11 +441,6 @@ static void SWRenderer_drawSpritePos(Renderer* renderer, int32_t tpagIndex,
         logError("%s: tpagIndex of %d is invalid, as pageId of %d is invalid\n", __func__, tpagIndex, pageId);
         return;
     }
-    if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) {
-        logError("%s: could not ensure texture is loaded, tpagIndex: %d, pageId: %d\n", __func__, tpagIndex, pageId);
-        return;
-    }
-    
     int tw = tpag->targetWidth;
     int th = tpag->targetHeight;
 
@@ -578,7 +582,8 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
     TexturePageItem* tpag = &dwin->tpag.items[tpagIndex];
     int16_t pageId = tpag->texturePageId;
     if (0 > pageId || swr->totalTextureCount <= (uint32_t) pageId) return;
-    if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) return;
+    SWTexture* texture = swrTextureForItem(swr, tpagIndex);
+    if (!texture) return;
 
     float axScale = fabsf(xscale);
     float ayScale = fabsf(yscale);
@@ -604,8 +609,8 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
         endY = startY + tileH;
     }
     
-    int sx = tpag->sourceX;
-    int sy = tpag->sourceY;
+    int sx = tpag->sourceX - texture->originX;
+    int sy = tpag->sourceY - texture->originY;
     int sw = tpag->sourceWidth;
     int sh = tpag->sourceHeight;
 
@@ -630,7 +635,7 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
             int vx1 = cx + sx1;
             int dw = vx1 - vx0;
 
-            swrDrawSprite(renderer, vx0, vy0, dw, dh, swr->textures[pageId], sx, sy, sw, sh, color, alpha);
+            swrDrawSprite(renderer, vx0, vy0, dw, dh, texture, sx, sy, sw, sh, color, alpha);
         }
     }
 }
@@ -1768,6 +1773,7 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
     picture.buffer = run->pixels;
     picture.width = (uint16_t) run->width;
     picture.height = (uint16_t) run->height;
+    picture.originX = picture.originY = 0;
     picture.lastUsedFrame = swr->frameCounter;
     swrDrawSprite(renderer, (float) run->x, (float) run->y, (float) run->width, (float) run->height,
                   &picture, 0, 0, run->width, run->height, 0xFFFFFF, 1.0f);

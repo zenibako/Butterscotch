@@ -19,7 +19,7 @@ static size_t pageBytes(const SWTexture* texture)
 
 static size_t cachedBytes(const SWRenderer* swr)
 {
-    size_t total = 0;
+    size_t total = swr->itemBytes;
     for (size_t i = 0; i < swr->textureCount; i++) {
         if (swr->textures[i]) total += pageBytes(swr->textures[i]);
     }
@@ -34,10 +34,19 @@ void swrEvictTextureFromCache(SWRenderer* swr, int textureIndex)
     swrFreeTexture(texture);
 }
 
-// Evicts the least recently used page. Returns false if nothing qualified.
+static void evictItem(SWRenderer* swr, size_t index)
+{
+    SWTexture* texture = swr->itemTextures[index];
+    swr->itemTextures[index] = NULL;
+    swr->itemBytes -= pageBytes(texture);
+    swrFreeTexture(texture);
+}
+
+// Evicts the least recently used page or item texture. Returns false if nothing qualified.
 static bool evictLeastRecentlyUsed(SWRenderer* swr, bool includeCurrentFrame)
 {
     int victim = -1;
+    bool victimIsItem = false;
     uint32_t oldest = 0;
     
     for (size_t i = 0; i < swr->textureCount; i++) {
@@ -51,9 +60,25 @@ static bool evictLeastRecentlyUsed(SWRenderer* swr, bool includeCurrentFrame)
             oldest = age;
         }
     }
+    for (size_t i = 0; i < swr->itemCount && swr->itemBytes > 0; i++) {
+        const SWTexture* texture = swr->itemTextures[i];
+        if (!texture) continue;
+        if (!includeCurrentFrame && texture->lastUsedFrame == swr->frameCounter) continue;
+        
+        uint32_t age = swr->frameCounter - texture->lastUsedFrame;
+        if (victim == -1 || age > oldest) {
+            victim = (int) i;
+            victimIsItem = true;
+            oldest = age;
+        }
+    }
     
     if (victim == -1) return false;
     
+    if (victimIsItem) {
+        evictItem(swr, (size_t) victim);
+        return true;
+    }
     logInfo("SWR: Unloaded TXTR page %d%s\n", victim, includeCurrentFrame ? " (in use, out of memory)" : "");
     swrEvictTextureFromCache(swr, victim);
     return true;
@@ -125,6 +150,7 @@ static SWTexture* loadFromPack(SWRenderer* swr, uint32_t pageId)
     texture->buffer = buffer;
     texture->width = (uint16_t) w;
     texture->height = (uint16_t) h;
+    texture->originX = texture->originY = 0;
     return texture;
 }
 
@@ -230,4 +256,114 @@ bool swrEnsureTextureIsLoaded(SWRenderer* swr, uint32_t pageId)
     logInfo("SWR: Loaded TXTR page %u (%dx%d, %s) took %u ms, cache %u KB\n", pageId, texture->width, texture->height,
             source, (unsigned)((nowNanos() - loadStart) / 1000000u), (unsigned)(cachedBytes(swr) / 1024));
     return true;
+}
+
+// ===[ Per-item textures ]===
+
+void swrFreeItemTextures(SWRenderer* swr)
+{
+    for (size_t i = 0; i < swr->itemCount; i++) {
+        if (swr->itemTextures[i]) evictItem(swr, i);
+    }
+    free(swr->itemTextures);
+    swr->itemTextures = NULL;
+    swr->itemCount = 0;
+}
+
+// Loads the item's rectangle, grown by a pixel on each side where the page
+// allows: scaled draws may sample one texel past the item, and should find
+// what is on the page there, as they would with the whole page loaded.
+static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_t pageId, int pageW, int pageH)
+{
+    int left = tpag->sourceX > 0 ? tpag->sourceX - 1 : 0;
+    int top = tpag->sourceY > 0 ? tpag->sourceY - 1 : 0;
+    int right = tpag->sourceX + tpag->sourceWidth + 1;
+    int bottom = tpag->sourceY + tpag->sourceHeight + 1;
+    if (right > pageW) right = pageW;
+    if (bottom > pageH) bottom = pageH;
+    if (left >= right || top >= bottom) return NULL;
+    
+    int w = right - left, h = bottom - top;
+    size_t bytes = (size_t) w * h * sizeof(uintpixel_t);
+    makeRoomFor(swr, bytes);
+    
+    SWTexture* texture = (SWTexture*) allocOrEvict(swr, sizeof(SWTexture));
+    uintpixel_t* buffer = (uintpixel_t*) allocOrEvict(swr, bytes);
+    if (!texture || !buffer || !swrTexturePackDecodeRect(pageId, left, top, w, h, buffer)) {
+        free(buffer);
+        free(texture);
+        return NULL;
+    }
+    
+    texture->buffer = buffer;
+    texture->width = (uint16_t) w;
+    texture->height = (uint16_t) h;
+    texture->originX = (uint16_t) left;
+    texture->originY = (uint16_t) top;
+    return texture;
+}
+
+SWTexture* swrTextureForItem(SWRenderer* swr, int32_t tpagIndex)
+{
+    DataWin* dw = swr->base.dataWin;
+    if (tpagIndex < 0 || (uint32_t) tpagIndex >= dw->tpag.count) return NULL;
+    
+    const TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+    int16_t pageId = tpag->texturePageId;
+    if (0 > pageId || swr->totalTextureCount <= (uint32_t) pageId) return NULL;
+    
+    // The whole page, if something has loaded it.
+    SWTexture* page = swr->textures[pageId];
+    if (page != NULL) {
+        page->lastUsedFrame = swr->frameCounter;
+        return page;
+    }
+    
+    // Items the game was shipped with, on pages the pack holds, are loaded on their own.
+    int pageW, pageH;
+    if ((size_t) tpagIndex < swr->originalTPagCount && (uint32_t) pageId < swr->textureCount &&
+        tpag->sourceWidth > 0 && tpag->sourceHeight > 0 && swrTexturePackGetSize((uint32_t) pageId, &pageW, &pageH))
+    {
+        if (swr->itemTextures == NULL) {
+            swr->itemTextures = (SWTexture**) safeCalloc(swr->originalTPagCount, sizeof(SWTexture*));
+            swr->itemCount = swr->originalTPagCount;
+        }
+        
+        SWTexture* item = swr->itemTextures[tpagIndex];
+        if (LIKELY(item != NULL)) {
+            item->lastUsedFrame = swr->frameCounter;
+            return item;
+        }
+        
+        if ((uint32_t) pageId < TEXTURE_RETRY_PAGES && retryAtFrame[pageId] != 0) {
+            if (swr->frameCounter < retryAtFrame[pageId]) return NULL;
+            retryAtFrame[pageId] = 0;
+        }
+        
+        uint64_t loadStart = nowNanos();
+        item = loadItem(swr, tpag, (uint32_t) pageId, pageW, pageH);
+        if (item == NULL) {
+            logError("SWR: Could not load TPAG item %d (%dx%d) of page %d; cache %u KB\n", (int) tpagIndex,
+                     (int) tpag->sourceWidth, (int) tpag->sourceHeight, (int) pageId, (unsigned) (cachedBytes(swr) / 1024));
+            if ((uint32_t) pageId < TEXTURE_RETRY_PAGES) retryAtFrame[pageId] = swr->frameCounter + TEXTURE_RETRY_FRAMES;
+            return NULL;
+        }
+        
+        item->lastUsedFrame = swr->frameCounter;
+        swr->itemTextures[tpagIndex] = item;
+        swr->itemBytes += pageBytes(item);
+#ifdef TEXTURE_CACHE_RESERVE_BYTES
+        keepHeapReserve(swr);
+#endif
+        // Only the slow ones are worth a line; the platform reads the time off it.
+        uint32_t tookMs = (uint32_t) ((nowNanos() - loadStart) / 1000000u);
+        if (tookMs >= 20) {
+            logInfo("SWR: Loaded TXTR item %d of page %d (%dx%d, pack) took %u ms, cache %u KB\n", (int) tpagIndex, (int) pageId,
+                    (int) item->width, (int) item->height, (unsigned) tookMs, (unsigned) (cachedBytes(swr) / 1024));
+        }
+        return swr->itemTextures[tpagIndex];
+    }
+    
+    if (!swrEnsureTextureIsLoaded(swr, (uint32_t) pageId)) return NULL;
+    return swr->textures[pageId];
 }
