@@ -83,6 +83,7 @@ static void trackFrameLoads(const char *format, const char *text, uint64_t now) 
     static uint64_t roomStart = 0;
     if (strncmp(format, "Room changed:", 13) == 0) {
         roomStart = now;
+        utAudioRoomChange();
     } else if (strncmp(format, "Runner: Room loaded:", 20) == 0) {
         if (roomStart != 0) utPerfAddLoad(UT_LOAD_ROOM, now - roomStart);
         roomStart = 0;

@@ -65,6 +65,7 @@
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
 #define UT_QUEUE_TARGET_PAIRS (OF_AUDIO_RATE / 10)
+#define UT_QUEUE_ROOM_CHANGE_PAIRS (OF_AUDIO_RATE / 4)
 #define UT_MIX_CHUNK_PAIRS 256
 #define UT_GAIN_ONE 4096
 
@@ -439,9 +440,8 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
 
 /* Keeps the output queue topped up to the target. Does no file I/O, so it is
  * safe to call from the file idle hook. */
-static void pumpOutput(UtAudioSystem *ut) {
+static void pumpOutputTo(UtAudioSystem *ut, int target) {
     /* Some targets have a ring smaller than the target; never aim past 3/4 of it. */
-    int target = UT_QUEUE_TARGET_PAIRS;
     if (target > ut->queueCapacity * 3 / 4) target = ut->queueCapacity * 3 / 4;
 
     int queued = ut->queueCapacity - of_audio_free();
@@ -449,13 +449,25 @@ static void pumpOutput(UtAudioSystem *ut) {
     if (want > 0) mixAndWrite(ut, want);
 }
 
-/* The OS's file idle hook does not exist on every OS version, and nothing
- * covers long stretches of drawing, so the loaders and the draw profiler
- * also call this between pieces of work. Without it a frame longer than the
+static void pumpOutput(UtAudioSystem *ut) {
+    pumpOutputTo(ut, UT_QUEUE_TARGET_PAIRS);
+}
+
+/* On the Pocket the OS does not call the file idle hook during an app's own
+ * reads, and nothing covers long stretches of drawing, so the loaders and
+ * the draw profiler also call this between pieces of work. Without it a frame longer than the
  * queue is deep (100 ms) leaves a gap in the sound. */
 void platformBusyTick(void) {
     /* A dump follows game time instead of the queue; see updateAudio. */
     if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL) pumpOutput(g_audio);
+}
+
+/* A room change is the one long stretch of work with nowhere to feed the
+ * queue from: tens of ms of setting the room up, then its first draw. The
+ * log hook calls this when the change starts, to queue enough to cover it.
+ * Sounds that start in the next quarter second are heard that much late. */
+void utAudioRoomChange(void) {
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
 }
 
 #ifndef OF_PC
