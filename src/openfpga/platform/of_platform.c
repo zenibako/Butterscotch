@@ -65,6 +65,33 @@ static const struct {
 };
 #define UT_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
 
+/* Debug controls: Butterscotch's own debug hotkeys (see "Debug Features" in
+ * its README), reached by holding Select and pressing another button, since
+ * a Pocket has no keyboard. Off unless the game was started with --debug or
+ * "Debug controls" is switched on in the Pocket's core menu, which the core's
+ * interact.json puts at this index (the first one after the SDK's own four).
+ * While they are on, Select alone still toggles the frame-time overlay, but
+ * on release, and a button pressed with Select held does not also reach the
+ * game. */
+#define UT_INTERACT_DEBUG 4
+static const struct {
+    uint32_t button;
+    int32_t key;
+    const char *what;
+} g_debugChords[] = {
+    { OF_BTN_RIGHT, VK_PAGEUP,   "next room" },
+    { OF_BTN_LEFT,  VK_PAGEDOWN, "previous room" },
+    { OF_BTN_START, VK_F8,       "pause on/off" },
+    { OF_BTN_A,     'O',         "step one frame (while paused)" },
+    { OF_BTN_B,     VK_F10,      "clear global.interact" },
+};
+#define UT_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
+static bool g_debugRequested = false;
+
+void utPlatformSetDebugControls(bool enabled) {
+    g_debugRequested = enabled;
+}
+
 void utPlatformSetInputScript(const char *script) {
     g_inputScript = script;
 }
@@ -408,7 +435,28 @@ static void runInputScript(void) {
 bool platformHandleEvents(void) {
     utPerfPhase(UT_PHASE_STEP);
     of_input_poll();
-    if (of_btn_pressed(OF_BTN_SELECT)) utPerfToggle();
+
+    static bool debugControls = false;
+    static bool chordUsed = false;
+    static int32_t keyToRelease = 0;
+    bool debugNow = g_debugRequested || (of_interact_get(UT_INTERACT_DEBUG) & 1u) != 0;
+    if (debugNow != debugControls) {
+        debugControls = debugNow;
+        logInfo("Debug controls %s\n", debugNow ? "on: hold Select, then Right/Left room, Start pause, A step, B unstick" : "off");
+    }
+    /* Frame stepping is the one hotkey the runner itself gates on this. */
+    if (g_runner != NULL) g_runner->debugMode = debugControls;
+    if (g_runner != NULL && keyToRelease != 0) {
+        RunnerKeyboard_onKeyUp(g_runner->keyboard, keyToRelease);
+        keyToRelease = 0;
+    }
+    bool chording = debugControls && of_btn(OF_BTN_SELECT);
+    if (!debugControls) {
+        if (of_btn_pressed(OF_BTN_SELECT)) utPerfToggle();
+    } else {
+        if (of_btn_pressed(OF_BTN_SELECT)) chordUsed = false;
+        if (of_btn_released(OF_BTN_SELECT) && !chordUsed) utPerfToggle();
+    }
     if (of_btn_pressed(OF_BTN_L1)) {
         g_smoothLowres = !g_smoothLowres;
         logInfo("Video: 640x480 rooms drawn at %s\n", g_smoothLowres ? "320x240, smoothed" : "640x480");
@@ -417,8 +465,19 @@ bool platformHandleEvents(void) {
     runInputScript();
     if (g_runner == NULL) return false;
 
+    if (chording) {
+        /* One hotkey per frame; it is released on the next. */
+        for (size_t i = 0; i < UT_DEBUG_CHORD_COUNT && keyToRelease == 0; i++) {
+            if (!of_btn_pressed(g_debugChords[i].button)) continue;
+            RunnerKeyboard_onKeyDown(g_runner->keyboard, g_debugChords[i].key);
+            keyToRelease = g_debugChords[i].key;
+            chordUsed = true;
+            logInfo("Debug: %s\n", g_debugChords[i].what);
+        }
+    }
+
     for (size_t i = 0; i < UT_KEYMAP_COUNT; i++) {
-        if (of_btn_pressed(g_keymap[i].button))
+        if (!chording && of_btn_pressed(g_keymap[i].button))
             RunnerKeyboard_onKeyDown(g_runner->keyboard, g_keymap[i].key);
         if (of_btn_released(g_keymap[i].button))
             RunnerKeyboard_onKeyUp(g_runner->keyboard, g_keymap[i].key);
