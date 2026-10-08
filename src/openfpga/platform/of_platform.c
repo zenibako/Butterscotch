@@ -40,6 +40,8 @@ static bool g_hiresAvailable = true;
 /* Alternative to 640x480: keep every room at 320x240 and let the renderer
  * average 2x2 texels when it shrinks. Faster, slightly soft small text. */
 static bool g_smoothLowres = false;
+#define UT_MODE_SHOWN_NANOS 2000000000ull
+static uint64_t g_modeShownUntil = 0;
 extern bool swrSmoothMinify; /* butterscotch/src/sw/sw_drawing.c */
 static int g_modeW = 0; /* 0 until the first frame sets a mode */
 static int g_modeH = 0;
@@ -72,7 +74,7 @@ static const struct {
  * menu variables of its own. interact.json entries can only write the
  * Analogizer registers and the app id that an instance file sets.) With it on:
  *   - Select toggles the frame-time overlay and R the log overlay;
- *   - 640x480 rooms show the width they are being drawn at;
+ *   - 640x480 rooms keep showing which way L's speed/accuracy toggle is set;
  *   - Butterscotch's own debug hotkeys (see "Debug Features" in its README)
  *     are reached by holding Select and pressing another button, since a
  *     Pocket has no keyboard. Select then acts on release, and a button
@@ -295,7 +297,11 @@ void platformSwapBuffers(void) {
     }
 #endif
     utPerfFrame(g_nextFb, g_nextW, g_nextH);
-    if (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W) utPerfDrawMode(g_nextFb, g_nextW, g_nextH, (unsigned) g_nextW);
+    /* L's setting, by the name the instruction screen gives the toggle:
+     * for a moment after L is pressed, and in debug mode for as long as a
+     * 640x480 room (the only kind it changes) is showing. */
+    if (nowNanos() < g_modeShownUntil || (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W))
+        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_smoothLowres ? "Speed" : "Accuracy");
     utBenchFrame();
 #ifdef OF_PC
     dumpFrameIfRequested();
@@ -478,7 +484,8 @@ bool platformHandleEvents(void) {
     }
     if (of_btn_pressed(OF_BTN_L1)) {
         g_smoothLowres = !g_smoothLowres;
-        logInfo("Video: 640x480 rooms drawn at %s\n", g_smoothLowres ? "320x240, smoothed" : "640x480");
+        g_modeShownUntil = nowNanos() + UT_MODE_SHOWN_NANOS;
+        logInfo("Video: 640x480 rooms drawn at %s\n", g_smoothLowres ? "320x240, smoothed (speed)" : "640x480 (accuracy)");
     }
     runInputScript();
     if (g_runner == NULL) return false;

@@ -45,7 +45,7 @@ device):
 | `UT_UNCAPPED=1` | no frame pacing (runs as fast as the display flip allows) |
 | `UT_SMOOTH=1` | render 640x480 rooms at 320x240 with 2x2 averaging |
 | `UT_OVERLAY=1` | turn on the frame-time and log overlays |
-| `UT_DEBUG=1` | debug mode, as holding Select for two seconds sets it on the device: the 640/320 mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
+| `UT_DEBUG=1` | debug mode, as holding Select for two seconds sets it on the device: the Accuracy/Speed mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
 | `UT_AUDIO_DUMP=f.raw` | write the mixed output, 48 kHz stereo s16le |
 | `UT_AUDIO_LOG=1` | log every sound effect as it starts |
 | `UT_DUMP_STATE=n` | print every instance and its variables at frame n |

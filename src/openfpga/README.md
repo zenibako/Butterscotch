@@ -81,8 +81,9 @@ battle. Fog (the hit flash) is not implemented in the software renderer.
 ## Controls
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
-Start = Enter. L switches 640x480 rooms between native resolution and
-smoothed 320x240.
+Start = Enter. L is "Toggle speed/accuracy": it switches 640x480 rooms
+between native resolution (accuracy) and smoothed 320x240 (speed), and shows
+the new setting in the top right corner for two seconds.
 
 ### Debug mode
 
@@ -99,8 +100,8 @@ screen names the hold on Select instead. With it on:
   full speed).
 - R shows the last log lines over the game. The log is kept whether or not
   debug mode is on, so it can be switched on after a hitch to read it.
-- Battle and menu rooms show 640 or 320 in the top right corner, the width
-  the room is being drawn at.
+- Battle and menu rooms keep "Accuracy" or "Speed" in the top right corner,
+  the way L's toggle is set (native 640x480, or smoothed 320x240).
 - Butterscotch's own debug hotkeys are reached with Select held, since the
   Pocket has no keyboard: Select + Right/Left goes to the next/previous
   room, Select + Start pauses, Select + A steps one frame while paused, and

@@ -1,5 +1,6 @@
 /*
- * Frame-time overlay (Select or L) and log overlay (R).
+ * Frame-time overlay (Select) and log overlay (R), both in debug mode, and
+ * the word that shows which way L's speed/accuracy toggle is set.
  *
  * Shows three numbers in the top-left corner, in milliseconds, over the last
  * 30 frames:
@@ -13,6 +14,8 @@
 #include "debug_font.h"
 #include "gettime.h"
 #include "log.h"
+
+#include <string.h>
 
 #define UT_PERF_WINDOW 30
 #define UT_PERF_SCALE  2
@@ -181,10 +184,15 @@ static int drawNumber(uint16_t *fb, int width, int x, int y, unsigned value) {
     return x;
 }
 
-void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth) {
-    int markWidth = 3 * 4 * UT_PERF_SCALE;
-    if (width < markWidth + 4 || height < 16) return;
-    drawNumber(fb, width, width - markWidth - 2, 2, drawnWidth);
+void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label) {
+    int textWidth = (int) strlen(label) * UT_LOG_CELL_W;
+    int left = width - textWidth - 4;
+    if (left < 0 || height < UT_LOG_CELL_H + 2) return;
+
+    /* A black box behind the word so it reads over any scene. */
+    for (int y = 0; y < UT_LOG_CELL_H + 2; y++)
+        for (int x = left; x < width; x++) fb[y * width + x] = 0;
+    for (int i = 0; label[i] != '\0'; i++) drawLogChar(fb, width, left + 2 + i * UT_LOG_CELL_W, 1, label[i]);
 }
 
 void utPerfFrame(uint16_t *fb, int width, int height) {

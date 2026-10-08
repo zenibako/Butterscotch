@@ -55,8 +55,8 @@ void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);
  * phase that was running. */
 void utPerfPhase(UtPhase phase);
 void utPerfFrame(uint16_t *fb, int width, int height);
-/* Marks, in the top right corner, the width a 640x480 room is being drawn
- * at: 640 (native) or 320 (smoothed). Shown in debug mode. */
-void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth);
+/* Writes a word in the top right corner: which way L's speed/accuracy
+ * toggle is set. */
+void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label);
 
 #endif /* UT_OF_PERF_H */
