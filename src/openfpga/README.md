@@ -77,11 +77,18 @@ of the pixels.
 
 `make` runs `tools/mktexpack` on your `data.win` to produce `textures.bin`
 (data slot 5): every texture page already converted to the renderer's
-16-bit format and run-length encoded. The device then loads pages without
-decoding PNGs or allocating an RGBA intermediate. Without the pack the
-renderer falls back to the PNGs inside `data.win`. Decoded pages are kept
-in a least-recently-used cache that shrinks whenever less than
+16-bit format, cut into 128x128 tiles and run-length encoded tile by tile.
+The renderer then reads only the part of a page each sprite, tileset or
+font occupies, and keeps one small texture per item: the walk from the
+title screen into a first battle holds about 2 MB of textures, where whole
+pages came to 34 MB and the largest (2048x2048, 8 MB) would not fit in the
+Pocket's memory beside the others. Without the pack the renderer falls
+back to the PNGs inside `data.win`, a whole page at a time. Textures are
+kept in a least-recently-used cache that shrinks whenever less than
 `TEXTURE_RESERVE_MB` (default 4) of heap would be left for the game.
+
+The pack format changed when tiles were introduced (`UTX2`); a build
+ignores an older `textures.bin`, so copy the new one with the core.
 
 ## Sound
 

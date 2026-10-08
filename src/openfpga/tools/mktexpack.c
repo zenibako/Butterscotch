@@ -5,12 +5,14 @@
  *
  * Decodes every TXTR page with Butterscotch's own image decoder, converts it
  * with the software renderer's own 16-bit pixel conversion (so the result is
- * exactly what the renderer would have produced on the device), run-length
- * encodes it and writes the pack format described in sw_texture_pack.h.
+ * exactly what the renderer would have produced on the device), cuts it
+ * into tiles, run-length encodes each tile and writes the pack format
+ * described in sw_texture_pack.h.
  *
  * Host tool only; assumes a little-endian machine.
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,8 +23,14 @@
 
 typedef struct {
     uint16_t width, height;
+    uint32_t firstTile;
+} PackPage;
+
+typedef struct {
     uint32_t offset, size;
-} PackEntry;
+} PackTile;
+
+#define TILE SW_TEXTURE_PACK_TILE
 
 static uint32_t readU32(const uint8_t *p) {
     return (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
@@ -59,7 +67,7 @@ static const uint8_t *findChunk(const uint8_t *data, size_t size, const char *na
 }
 
 /* Run-length encodes `count` pixels into `out` (worst case count + count/32768 + 1 words). */
-static size_t encodePage(const uint16_t *pixels, size_t count, uint16_t *out) {
+static size_t encodeTile(const uint16_t *pixels, size_t count, uint16_t *out) {
     size_t n = 0;
     size_t i = 0;
     while (i < count) {
@@ -115,14 +123,10 @@ int main(int argc, char **argv) {
         blobOffsets[i] = readU32(data + entry + 4);
     }
 
-    FILE *out = fopen(argv[2], "wb");
-    if (!out) { perror(argv[2]); return 1; }
-
-    PackEntry *entries = calloc(count, sizeof(PackEntry));
-    uint32_t dataStart = 8 + count * (uint32_t) sizeof(PackEntry);
-    fseek(out, (long) dataStart, SEEK_SET);
-
-    uint32_t offset = dataStart;
+    /* First pass: decode and convert every page, and count the tiles. */
+    PackPage *pages = calloc(count, sizeof(PackPage));
+    uint16_t **pagePixels = calloc(count, sizeof(uint16_t *));
+    uint32_t tileCount = 0;
     size_t rawTotal = 0;
     for (uint32_t i = 0; i < count; i++) {
         if (blobOffsets[i] == 0) continue;
@@ -150,30 +154,65 @@ int main(int argc, char **argv) {
         uint16_t *pixels = malloc(pixelCount * sizeof(uint16_t));
         const uint32_t *src = (const uint32_t *) rgba;
         for (size_t p = 0; p < pixelCount; p++) pixels[p] = swrConvertPixelTexture(src[p]);
-
-        uint16_t *encoded = malloc((pixelCount + pixelCount / SW_TEXTURE_PACK_MAX_COUNT + 2) * sizeof(uint16_t));
-        size_t words = encodePage(pixels, pixelCount, encoded);
-        fwrite(encoded, sizeof(uint16_t), words, out);
-
-        entries[i].width = (uint16_t) w;
-        entries[i].height = (uint16_t) h;
-        entries[i].offset = offset;
-        entries[i].size = (uint32_t) (words * sizeof(uint16_t));
-        offset += entries[i].size;
-        rawTotal += pixelCount * sizeof(uint16_t);
-
-        free(encoded);
-        free(pixels);
         free(rgba);
+
+        pages[i].width = (uint16_t) w;
+        pages[i].height = (uint16_t) h;
+        pages[i].firstTile = tileCount;
+        pagePixels[i] = pixels;
+        tileCount += (uint32_t) (((w + TILE - 1) / TILE) * ((h + TILE - 1) / TILE));
+        rawTotal += pixelCount * sizeof(uint16_t);
     }
 
+    FILE *out = fopen(argv[2], "wb");
+    if (!out) { perror(argv[2]); return 1; }
+
+    /* Second pass: write the tiles after the space the two tables will take. */
+    PackTile *tiles = calloc(tileCount, sizeof(PackTile));
+    uint32_t dataStart = 16 + count * (uint32_t) sizeof(PackPage) + tileCount * (uint32_t) sizeof(PackTile);
+    fseek(out, (long) dataStart, SEEK_SET);
+
+    uint32_t offset = dataStart;
+    uint32_t emptyTiles = 0;
+    static uint16_t tilePixels[TILE * TILE];
+    static uint16_t encoded[TILE * TILE + 16];
+    for (uint32_t i = 0; i < count; i++) {
+        if (pagePixels[i] == NULL) continue;
+        int w = pages[i].width, h = pages[i].height;
+        uint32_t tile = pages[i].firstTile;
+        for (int tileY = 0; tileY < h; tileY += TILE) {
+            for (int tileX = 0; tileX < w; tileX += TILE, tile++) {
+                int tw = w - tileX < TILE ? w - tileX : TILE;
+                int th = h - tileY < TILE ? h - tileY : TILE;
+                bool empty = true;
+                for (int row = 0; row < th; row++) {
+                    const uint16_t *line = &pagePixels[i][(size_t) (tileY + row) * (size_t) w + (size_t) tileX];
+                    memcpy(&tilePixels[row * tw], line, (size_t) tw * sizeof(uint16_t));
+                    for (int col = 0; col < tw && empty; col++) empty = line[col] == 0;
+                }
+                if (empty) {
+                    emptyTiles++;
+                    continue;
+                }
+                size_t words = encodeTile(tilePixels, (size_t) tw * (size_t) th, encoded);
+                fwrite(encoded, sizeof(uint16_t), words, out);
+                tiles[tile].offset = offset;
+                tiles[tile].size = (uint32_t) (words * sizeof(uint16_t));
+                offset += tiles[tile].size;
+            }
+        }
+        free(pagePixels[i]);
+    }
+
+    uint32_t header[3] = { count, TILE, tileCount };
     fseek(out, 0, SEEK_SET);
     fwrite(SW_TEXTURE_PACK_MAGIC, 1, 4, out);
-    fwrite(&count, sizeof(count), 1, out);
-    fwrite(entries, sizeof(PackEntry), count, out);
+    fwrite(header, sizeof(uint32_t), 3, out);
+    fwrite(pages, sizeof(PackPage), count, out);
+    fwrite(tiles, sizeof(PackTile), tileCount, out);
     fclose(out);
 
-    printf("%s: %u pages, %.1f MB raw -> %.1f MB\n", argv[2], (unsigned) count,
-           (double) rawTotal / 1048576.0, (double) offset / 1048576.0);
+    printf("%s: %u pages in %u tiles (%u empty), %.1f MB raw -> %.1f MB\n", argv[2], (unsigned) count,
+           (unsigned) tileCount, (unsigned) emptyTiles, (double) rawTotal / 1048576.0, (double) offset / 1048576.0);
     return 0;
 }

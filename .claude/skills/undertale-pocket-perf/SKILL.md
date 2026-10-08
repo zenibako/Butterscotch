@@ -100,6 +100,17 @@ when a dialogue box or new room first appears.
   tile picture are drawn outside or under different counters than before:
   an overlay's blend lands in whichever call flushes it, often none of the
   five kinds, so the kinds can add up to less than the draw phase.
+- **Texture memory (2026-10-08).** The Pocket could not allocate the 8 MB
+  that page 23 (2048x2048, the monsters) needs: battles showed no enemies,
+  and each failed attempt threw out every other page, 1.3-2 s per frame.
+  With pages loaded whole there was room for roughly 20-25 MB of them, so
+  entering and leaving a battle re-read about 8 s of pages. The pack is now
+  tiled and the renderer keeps one texture per TPAG item
+  (`swrTextureForItem`); on desktop the same walk into a battle holds 2 MB.
+  A page that fails to load is not retried for 150 frames.
+- **Screenshots stall file access for 2-4 s.** fread waits it out. A
+  direct read issued during one never completes, so those time out after
+  1.5 s and fall back to fread for that piece.
 - **Still open.** One frame of 150-250 ms on each room change (room load
   19-75 ms plus the first draw), and one unexplained 699 ms music read
   seen before reads were cut to 16 KB pieces.
