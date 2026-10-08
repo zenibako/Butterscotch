@@ -20,7 +20,7 @@ Controls
   X or Y   Menu
   L        Battle smoothing on/off
 
-Debug mode (switch on in the menu)
+Debug mode (hold Select 2 s: on/off)
   Select      Frame-time overlay
   R           Log overlay
   Hold Select and press:

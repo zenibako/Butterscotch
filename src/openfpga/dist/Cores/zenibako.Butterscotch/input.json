@@ -12,7 +12,7 @@
                     { "id": 10, "name": "Smoothing",  "key": "pad_trig_l" },
                     { "id": 11, "name": "Debug: log",  "key": "pad_trig_r" },
                     { "id": 20, "name": "Confirm",  "key": "pad_btn_start" },
-                    { "id": 21, "name": "Debug: times, hold",  "key": "pad_btn_select" }
+                    { "id": 21, "name": "Hold 2s: debug mode",  "key": "pad_btn_select" }
                 ]
             }
         ]

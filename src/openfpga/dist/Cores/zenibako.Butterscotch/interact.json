@@ -185,26 +185,6 @@
                     "adjust_small": 1,
                     "adjust_large": 4
                 }
-            },
-            {
-                "name": "Debug mode",
-                "id": 70,
-                "type": "list",
-                "enabled": true,
-                "persist": false,
-                "address": "0xF7000010",
-                "defaultval": 0,
-                "mask": "0xFFFFFFFE",
-                "options": [
-                    {
-                        "name": "Off",
-                        "value": "0x0"
-                    },
-                    {
-                        "name": "On",
-                        "value": "0x1"
-                    }
-                ]
             }
         ],
         "messages": []

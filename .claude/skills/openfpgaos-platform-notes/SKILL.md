@@ -108,6 +108,20 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
 - The hardware mixer (`of_mixer_*`) is stubbed in the desktop shim, so
   code using it cannot be tested off the device.
 
+## The Pocket's core menu (interact.json)
+
+- A core cannot add menu options of its own that reach the app. The SDK's
+  README says app options start at index 4 of `of_interact_get`, but that
+  call reads a memory page nothing writes: in the hardware source
+  (`core_top.v`, same at the v0.7 tag) menu writes land only in the
+  Analogizer registers at 0xF7000000-0xF700000C and in 0xF7000010, which
+  is the app id that an instance file's `memory_writes` sets at launch.
+  An entry pointed at 0xF7000010 showed in the menu and could not be
+  changed (tried 2026-10-08).
+- What does reach the app from the Pocket's own screens: an instance
+  file's OS config (`ARGS=`), read at launch, and nothing live. Live
+  switches have to be buttons.
+
 ## Input
 
 - D-pad, A, B, X, Y, Start, Select, L1 and R1 all reach the app on the

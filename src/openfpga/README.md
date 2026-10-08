@@ -86,10 +86,13 @@ smoothed 320x240.
 
 ### Debug mode
 
-Everything for looking into the port sits behind one switch, "Debug mode"
-in the Pocket's core menu (or `--debug` in the OS config's `ARGS=`, or
-`UT_DEBUG=1` on desktop). It is off by default and off again at the next
-launch. With it on:
+Everything for looking into the port sits behind one switch, debug mode:
+hold Select for two seconds to turn it on or off (or start with `--debug`
+in the OS config's `ARGS=`, or `UT_DEBUG=1` on desktop). The frame-time
+overlay appearing is the sign that it is on. It is off by default and off
+again at the next launch. It is not in the Pocket's core menu because the
+hardware gives a core no menu variables of its own; the Pocket's controls
+screen names the hold on Select instead. With it on:
 
 - Select toggles the frame-time overlay: three numbers in milliseconds over
   the last 30 frames (average work, worst work, worst frame period; 33 means

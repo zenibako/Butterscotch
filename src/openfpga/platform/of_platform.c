@@ -66,10 +66,11 @@ static const struct {
 #define UT_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
 
 /* Debug mode: everything on screen or on the buttons that is for looking
- * into the port and not for playing. Off unless the game was started with
- * --debug or "Debug mode" is switched on in the Pocket's core menu, which the
- * core's interact.json puts at this index (the first one after the SDK's own
- * four). With it on:
+ * into the port and not for playing. Off at start-up unless the game was
+ * started with --debug; holding Select for two seconds switches it on or
+ * off. (The Pocket's core menu cannot do it: the hardware gives a core no
+ * menu variables of its own. interact.json entries can only write the
+ * Analogizer registers and the app id that an instance file sets.) With it on:
  *   - Select toggles the frame-time overlay and R the log overlay;
  *   - 640x480 rooms show the width they are being drawn at;
  *   - Butterscotch's own debug hotkeys (see "Debug Features" in its README)
@@ -77,7 +78,7 @@ static const struct {
  *     Pocket has no keyboard. Select then acts on release, and a button
  *     pressed with it held does not also reach the game.
  * With it off none of that is drawn or reacts, and what was showing is hidden. */
-#define UT_INTERACT_DEBUG 4
+#define UT_DEBUG_HOLD_NANOS 2000000000ull
 static const struct {
     uint32_t button;
     int32_t key;
@@ -441,10 +442,27 @@ bool platformHandleEvents(void) {
 
     static bool chordUsed = false;
     static int32_t keyToRelease = 0;
-    bool debugNow = g_debugRequested || (of_interact_get(UT_INTERACT_DEBUG) & 1u) != 0;
+    static uint64_t selectDownAt = 0;
+    bool debugNow = g_debugMode;
+    bool byHold = false;
+    if (g_debugRequested) {
+        debugNow = true;
+        g_debugRequested = false;
+    }
+    if (of_btn_pressed(OF_BTN_SELECT)) {
+        selectDownAt = nowNanos();
+        chordUsed = false;
+    }
+    if (of_btn(OF_BTN_SELECT) && !chordUsed && selectDownAt != 0 && nowNanos() - selectDownAt >= UT_DEBUG_HOLD_NANOS) {
+        debugNow = !g_debugMode;
+        byHold = true;
+        chordUsed = true; /* this hold is spent: its release does nothing more */
+    }
     if (debugNow != g_debugMode) {
         g_debugMode = debugNow;
-        if (!debugNow) utPerfHideOverlays();
+        utPerfHideOverlays();
+        /* The frame times coming up are the sign that the hold took. */
+        if (debugNow && byHold) utPerfToggle();
         logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick" : "off");
     }
     /* Frame stepping is the one hotkey the runner itself gates on this. */
@@ -455,7 +473,6 @@ bool platformHandleEvents(void) {
     }
     bool chording = g_debugMode && of_btn(OF_BTN_SELECT);
     if (g_debugMode) {
-        if (of_btn_pressed(OF_BTN_SELECT)) chordUsed = false;
         if (of_btn_released(OF_BTN_SELECT) && !chordUsed) utPerfToggle();
         if (of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
     }

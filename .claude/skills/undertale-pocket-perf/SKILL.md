@@ -167,7 +167,7 @@ Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
-**Overlays** (only with "Debug mode" on in the Pocket's core menu; ask the
+**Overlays** (only in debug mode: hold Select for two seconds; ask the
 user to switch it on first): Select shows three numbers (average
 work, worst work, worst frame period over 30 frames, in ms). R shows the
 last log lines over the game. L toggles crisp/smoothed 640x480 rooms. The
