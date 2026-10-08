@@ -58,10 +58,14 @@
  * topped up in pieces this small instead: about 6 ms each, measured, where
  * a 16 KB piece through fread costs about 28 ms and shows as a stutter. */
 #define UT_READ_STEADY 4096
-/* A direct read that has not finished after this long has failed. It has to
- * outlast the Pocket saving a screenshot, which holds the host for 2-4 s; a
- * shorter limit gave up on a read that was still in flight. */
-#define UT_DIRECT_TIMEOUT_NANOS 10000000000ull
+/* A direct read that has not finished after this long is given up and the
+ * piece is read with fread instead. In practice this is the Pocket saving a
+ * screenshot: a direct read issued while the host is busy with that never
+ * completes, however long it is given (measured: still nothing after 10 s),
+ * while fread simply waits the 2-4 s out. So the limit is short, and only
+ * several failures in a row turn direct reads off. */
+#define UT_DIRECT_TIMEOUT_NANOS 1500000000ull
+#define UT_DIRECT_MAX_FAILURES 3
 
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
@@ -134,6 +138,7 @@ typedef struct {
     /* Direct reads of the pack; directStage is NULL when they are not in use. */
     uint8_t *directStage;
     uint32_t directSlot;
+    int directFailures; /* timeouts in a row */
 } UtAudioSystem;
 
 /* The file idle hook has no user pointer, so the one instance is global. */
@@ -257,12 +262,16 @@ static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
     /* The poll is the OS's fallback for a lost interrupt. */
     while (!g_directDone && of_file_async_poll() != 1) {
         if (nowNanos() - start > UT_DIRECT_TIMEOUT_NANOS) {
-            logWarn("Audio: a direct read timed out; using fread from here on.\n");
-            ut->directStage = NULL;
+            if (++ut->directFailures >= UT_DIRECT_MAX_FAILURES) {
+                logWarn("Audio: direct reads keep timing out; using fread from here on.\n");
+                ut->directStage = NULL;
+            }
             return false;
         }
     }
-    return g_directResult >= 0;
+    if (g_directResult < 0) return false;
+    ut->directFailures = 0;
+    return true;
 }
 
 static void openDirect(UtAudioSystem *ut) {
