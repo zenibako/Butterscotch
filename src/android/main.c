@@ -37,6 +37,7 @@ static float gNormalizedCursorX = 0.0f;
 static float gNormalizedCursorY = 0.0f;
 // We don't need to worry about game changes because the profiler will be automatically disabled then
 static int32_t gProfilerStartedAtFrame = 0;
+static FILE* gLog = nullptr;
 
 // Android has no platformGetWindowSize like the desktop, so we cache the EGL surface size the host
 // passes into stepAndDraw and expose it through the getWindowSize hook below.
@@ -57,7 +58,6 @@ static JavaVM* gJvm = nullptr;
 static jclass gNativeClass = nullptr;
 static jmethodID gOnTitleChangedMethod = nullptr;
 static jmethodID gOnGameSizeChangedMethod = nullptr;
-static jmethodID gOnButterscotchLogMethod = nullptr;
 
 static JNIEnv* getEnvNoAttach(void) {
     if (gJvm == nullptr) return nullptr;
@@ -85,14 +85,10 @@ void platformLog(const logType type, const char *format, va_list va) {
 
     __android_log_vprint(prio, LOG_TAG, format, va);
 
-    char string[1024];
-    vsnprintf(string, sizeof(string), format, va);
-
-    JNIEnv* env = getEnvNoAttach();
-    if (env == nullptr || gNativeClass == nullptr) return;
-    jstring jString = (*env)->NewStringUTF(env, string);
-    (*env)->CallStaticVoidMethod(env, gNativeClass, gOnButterscotchLogMethod, jString);
-    (*env)->DeleteLocalRef(env, jString);
+    if (gLog != nullptr) {
+        vfprintf(gLog, format, va);
+        fflush(gLog);
+    }
 }
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, MAYBE_UNUSED void* reserved) {
@@ -110,8 +106,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, MAYBE_UNUSED void* reserved) {
 
     gOnTitleChangedMethod = (*env)->GetStaticMethodID(env, gNativeClass, "onTitleChanged", "(Ljava/lang/String;)V");
     gOnGameSizeChangedMethod = (*env)->GetStaticMethodID(env, gNativeClass, "onGameSizeChanged", "(II)V");
-    gOnButterscotchLogMethod = (*env)->GetStaticMethodID(env, gNativeClass, "onButterscotchLog", "(Ljava/lang/String;)V");
-    if (gOnTitleChangedMethod == nullptr || gOnGameSizeChangedMethod == nullptr || gOnButterscotchLogMethod == nullptr) {
+    if (gOnTitleChangedMethod == nullptr || gOnGameSizeChangedMethod == nullptr) {
         logError("JNI_OnLoad: GetStaticMethodID failed");
         return JNI_ERR;
     }
@@ -132,10 +127,14 @@ static void setWindowTitle(const char* title) {
 
 #define JNI_FN(name) Java_net_perfectdreams_butterscotch_android_ButterscotchNative_##name
 
+static void throwJavaException(JNIEnv* env, const char* exceptionClazz, const char* reason) {
+    jclass exClass = (*env)->FindClass(env, exceptionClazz);
+    if (exClass != nullptr) {
+        (*env)->ThrowNew(env, exClass, reason);
+    }
+}
+
 JNIEXPORT void JNICALL JNI_FN(init)(MAYBE_UNUSED JNIEnv* env, MAYBE_UNUSED jclass cls) {
-    // Set stdout and stderr to not be buffered
-    setvbuf(stdout, nullptr, _IOLBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "Butterscotch native init");
 }
 
@@ -226,12 +225,7 @@ JNIEXPORT jlong JNICALL JNI_FN(dataWinParseLight)(JNIEnv* env, MAYBE_UNUSED jcla
 
 static DataWin* requireDataWin(JNIEnv* env, jlong handle) {
     DataWin* dataWin = (DataWin*) (uintptr_t) handle;
-    if (dataWin == nullptr) {
-        jclass exClass = (*env)->FindClass(env, "java/lang/IllegalStateException");
-        if (exClass != nullptr) {
-            (*env)->ThrowNew(env, exClass, "DataWin handle is null (use-after-free or never parsed)");
-        }
-    }
+    if (dataWin == nullptr) throwJavaException(env, "java/lang/IllegalStateException", "DataWin handle is null (use-after-free or never parsed)");
     return dataWin;
 }
 
@@ -827,4 +821,23 @@ JNIEXPORT void JNICALL JNI_FN(stopRunner)(MAYBE_UNUSED JNIEnv* env, MAYBE_UNUSED
     gCurrentDataWinPath = nullptr;
     free(gSavesPath);
     gSavesPath = nullptr;
+}
+
+JNIEXPORT void JNICALL JNI_FN(setActiveLogFile)(JNIEnv* env, MAYBE_UNUSED jclass cls, jstring jLogPath) {
+    if (jLogPath != nullptr) {
+        const char* logPath = (*env)->GetStringUTFChars(env, jLogPath, nullptr);
+        if (gLog != nullptr) {
+            throwJavaException(env, "java/lang/IllegalStateException", "Trying to set a log file when there's already a log file active!");
+            (*env)->ReleaseStringUTFChars(env, jLogPath, logPath);
+            return;
+        }
+
+        gLog = fopen(logPath, "w");
+        setbuf(gLog, nullptr);
+        (*env)->ReleaseStringUTFChars(env, jLogPath, logPath);
+        return;
+    } else {
+        fclose(gLog);
+        gLog = nullptr;
+    }
 }

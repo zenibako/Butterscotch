@@ -33,7 +33,6 @@ object ButterscotchNative {
     const val BUTTERSCOTCH_DROID_CONTINUE = 0
     const val BUTTERSCOTCH_DROID_SHOULD_EXIT = 1
     const val BUTTERSCOTCH_DROID_CONTINUE_NO_SWAP = 2
-    val stdioListener = mutableListOf<(String) -> (Unit)>()
 
     init {
         System.loadLibrary("butterscotch")
@@ -42,20 +41,7 @@ object ButterscotchNative {
 
     external fun init()
 
-    /**
-     * Registers a stdio listener
-     */
-    fun registerStdioListener(callback: (String) -> (Unit)): (String) -> Unit {
-        stdioListener.add(callback)
-        return callback
-    }
-
-    /**
-     * Unregister a stdio listener
-     */
-    fun unregisterStdioListener(callback: (String) -> (Unit)) {
-        stdioListener.remove(callback)
-    }
+    external fun setActiveLogFile(path: String?)
 
     // ===[ DataWin handle API — safe to call from any thread, no EGL needed ]===
     //
@@ -205,29 +191,5 @@ object ButterscotchNative {
     @JvmStatic
     fun onGameSizeChanged(width: Int, height: Int) {
         currentGameSize = IntSize(width, height)
-    }
-
-    @JvmStatic
-    fun onButterscotchLog(text: String) {
-        for (listener in stdioListener) {
-            listener.invoke(text)
-        }
-    }
-
-    /**
-     * Flips true when the runner has exited (either the game requested quit, or [ButterscotchDroidRunner] tore
-     * it down on user request). The Activity observes this and calls finish().
-     */
-    var hasExited: Boolean by mutableStateOf(false)
-        private set
-
-    internal fun markExited() {
-        hasExited = true
-    }
-
-    /** Clear the exit latch — process-singleton state, so a previous session would otherwise
-     *  immediately finish a freshly-launched GameActivity. */
-    fun resetExitLatch() {
-        hasExited = false
     }
 }

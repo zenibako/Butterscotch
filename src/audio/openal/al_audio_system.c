@@ -17,6 +17,8 @@
 
 // ===[ Helpers ]===
 
+static float maGetStreamLength(AlAudioSystem* ma, int32_t streamIndex);
+
 static bool isValidSoundInstanceId(int32_t instanceId) {
     return AUDIO_STREAM_INDEX_BASE > instanceId && instanceId >= SOUND_INSTANCE_ID_BASE;
 }
@@ -229,12 +231,15 @@ static void maInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem)
 
     memset(ma->instances, 0, sizeof(ma->instances));
     ma->nextInstanceCounter = 0;
+    alDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
 
     logInfo("Audio: OpenAL engine initialized\n");
 }
 
 static void maDestroy(AudioSystem* audio) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
+
+    free(audio->groupGains);
 
     // Uninit all active sound instances
     repeat(MAX_SOUND_INSTANCES, i) {
@@ -264,13 +269,15 @@ static void maDestroy(AudioSystem* audio) {
 
 static void maUpdate(AudioSystem* audio, float deltaTime) {
     AlAudioSystem* ma = (AlAudioSystem*) audio;
+    bool groupChanged = AudioSystem_updateGroupGains(audio, deltaTime);
 
     repeat(MAX_SOUND_INSTANCES, i) {
         SoundInstance* inst = &ma->instances[i];
         if (!inst->active) continue;
 
         // Handle gain fading (for cases where we do manual fading)
-        if (inst->fadeTimeRemaining > 0.0f) {
+        bool soundFading = inst->fadeTimeRemaining > 0.0f;
+        if (soundFading) {
             inst->fadeTimeRemaining -= deltaTime;
             if (0.0f >= inst->fadeTimeRemaining) {
                 inst->fadeTimeRemaining = 0.0f;
@@ -279,8 +286,9 @@ static void maUpdate(AudioSystem* audio, float deltaTime) {
                 float t = 1.0f - (inst->fadeTimeRemaining / inst->fadeTotalTime);
                 inst->currentGain = inst->startGain + (inst->targetGain - inst->startGain) * t;
             }
-            alSourcef(inst->alSource, AL_GAIN, inst->currentGain);
         }
+        if (soundFading || groupChanged)
+            alSourcef(inst->alSource, AL_GAIN, inst->currentGain * AudioSystem_soundGroupGain(audio, inst->soundIndex));
 
         if (inst->streaming) {
             // Recycle any buffers AL has finished with: count their samples toward the play position, then refill from the decoder and re-queue at the tail.
@@ -467,6 +475,7 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     slot->decodeScratch = nullptr;
     slot->streamEnded = false;
     slot->playedSamples = 0;
+    slot->streamLengthSamples = 0;
 
     if (isStream) {
         // Streaming path: open the decoder, queue a few small buffers, and let maUpdate() top them up.
@@ -498,17 +507,19 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
             slot->streamChannels = wavChannels;
             slot->streamSampleRate = wavSampleRate;
             slot->streamFormat = (wavChannels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16;
-            slot->streamLengthSeconds =
-                (float)wavDataBytes / (float)(wavChannels * (int32_t)sizeof(int16_t)) / (float)wavSampleRate;
+            slot->streamLengthSamples = wavDataBytes / (wavChannels * (int32_t) sizeof(int16_t));
         } else {
             stb_vorbis_info info = stb_vorbis_get_info(v);
             slot->vorbis = v;
             slot->streamChannels = info.channels;
             slot->streamSampleRate = (int) info.sample_rate;
             slot->streamFormat = (info.channels == 2) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16;
-            slot->streamLengthSeconds = stb_vorbis_stream_length_in_seconds(v);
+            slot->streamLengthSamples = stb_vorbis_stream_length_in_samples(v);
         }
-        ma->streams[soundIndex - AUDIO_STREAM_INDEX_BASE].lengthSeconds = slot->streamLengthSeconds;
+        slot->streamLengthSeconds = slot->streamSampleRate > 0
+            ? (float) slot->streamLengthSamples / (float) slot->streamSampleRate : 0.0f;
+        if (slot->streamLengthSeconds > 0.0f)
+            ma->streams[soundIndex - AUDIO_STREAM_INDEX_BASE].lengthSeconds = slot->streamLengthSeconds;
         slot->decodeScratch = (int16_t*)safeMalloc(AL_STREAM_BUFFER_SAMPLES * slot->streamChannels * sizeof(int16_t));
 
         alGenSources(1, &slot->alSource);
@@ -667,7 +678,8 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     // Apply properties
     float volume = isStream ? streamGain : sound->volume;
     float pitch = isStream ? streamPitch : sound->pitch;
-    alSourcef(slot->alSource, AL_GAIN, volume);
+    alSourcei(slot->alSource, AL_SOURCE_RELATIVE, AL_TRUE);
+    alSourcef(slot->alSource, AL_GAIN, volume * AudioSystem_soundGroupGain(audio, soundIndex));
 
     if (pitch != 1.0f) {
         alSourcef(slot->alSource, AL_PITCH, pitch != 0.0f ? pitch : 1.0f);
@@ -697,6 +709,20 @@ static int32_t maPlaySound(AudioSystem* audio, int32_t soundIndex, int32_t prior
     }
 
     return slot->instanceId;
+}
+
+static void maSetSoundSpatial(AudioSystem* audio, int32_t instanceId, float x, float y, float z, float ref, float max, float factor) {
+    SoundInstance* inst = findInstanceById((AlAudioSystem*)audio, instanceId);
+    if (inst == nullptr) return;
+    alSourcei(inst->alSource, AL_SOURCE_RELATIVE, AL_FALSE);
+    alSource3f(inst->alSource, AL_POSITION, x, y, z);
+    alSourcef(inst->alSource, AL_REFERENCE_DISTANCE, ref > 0 ? ref : 0.0001f);
+    alSourcef(inst->alSource, AL_MAX_DISTANCE, max > 0 ? max : 0.0001f);
+    alSourcef(inst->alSource, AL_ROLLOFF_FACTOR, factor);
+}
+
+static void maSetListenerPosition(AudioSystem* audio, float x, float y, float z) {
+    if (((AlAudioSystem*)audio)->alContext != nullptr) alListener3f(AL_POSITION, x, y, z);
 }
 
 static void maStopSound(AudioSystem* audio, int32_t soundOrInstance) {
@@ -853,7 +879,7 @@ static void maSetSoundGain(AudioSystem* audio, int32_t soundOrInstance, float ga
                 inst->currentGain = gain;
                 inst->targetGain = gain;
                 inst->fadeTimeRemaining = 0.0f;
-                alSourcef(inst->alSource, AL_GAIN, gain);
+                alSourcef(inst->alSource, AL_GAIN, gain * AudioSystem_soundGroupGain(audio, inst->soundIndex));
             } else {
                 inst->startGain = inst->currentGain;
                 inst->targetGain = gain;
@@ -870,7 +896,7 @@ static void maSetSoundGain(AudioSystem* audio, int32_t soundOrInstance, float ga
                         inst->currentGain = gain;
                         inst->targetGain = gain;
                         inst->fadeTimeRemaining = 0.0f;
-                        alSourcef(inst->alSource, AL_GAIN, gain);
+                        alSourcef(inst->alSource, AL_GAIN, gain * AudioSystem_soundGroupGain(audio, inst->soundIndex));
                     } else {
                         inst->startGain = inst->currentGain;
                         inst->targetGain = gain;
@@ -946,14 +972,22 @@ static float maGetSoundPitch(AudioSystem* audio, int32_t soundOrInstance) {
     return pitch;
 }
 
-// For streaming instances AL_SEC_OFFSET resets per buffer in the queue, so we combine the dequeued-sample tally with the offset into the currently-playing buffer to report a position over the whole track.
-static float streamCursorSeconds(SoundInstance* inst) {
+static float streamCursorSeconds(AlAudioSystem* ma, SoundInstance* inst) {
     if (0 >= inst->streamSampleRate)
         return 0.0f;
 
     ALint sampleOffset = 0;
     alGetSourcei(inst->alSource, AL_SAMPLE_OFFSET, &sampleOffset);
-    uint64_t total = inst->playedSamples + (uint64_t) sampleOffset;
+    uint64_t total = inst->playedSamples + (uint64_t) (sampleOffset > 0 ? sampleOffset : 0);
+    if (inst->loop) {
+        if (inst->streamLengthSamples > 0)
+            return (float) (total % inst->streamLengthSamples) / (float) inst->streamSampleRate;
+        if (inst->soundIndex >= AUDIO_STREAM_INDEX_BASE) {
+            uint64_t totalFrames = (uint64_t) (maGetStreamLength(ma, inst->soundIndex) * inst->streamSampleRate);
+            if (totalFrames > 0)
+                return (float) (total % totalFrames) / (float) inst->streamSampleRate;
+        }
+    }
     return (float) total / (float) inst->streamSampleRate;
 }
 
@@ -963,7 +997,7 @@ static float maGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
     if (isValidSoundInstanceId(soundOrInstance)) {
         SoundInstance* inst = findInstanceById(ma, soundOrInstance);
         if (inst != nullptr) {
-            if (inst->streaming) return streamCursorSeconds(inst);
+            if (inst->streaming) return streamCursorSeconds(ma, inst);
             float cursor;
             alGetSourcef(inst->alSource, AL_SEC_OFFSET, &cursor);
             return cursor;
@@ -972,7 +1006,7 @@ static float maGetTrackPosition(AudioSystem* audio, int32_t soundOrInstance) {
         repeat(MAX_SOUND_INSTANCES, i) {
             SoundInstance* inst = &ma->instances[i];
             if (inst->active && inst->soundIndex == soundOrInstance) {
-                if (inst->streaming) return streamCursorSeconds(inst);
+                if (inst->streaming) return streamCursorSeconds(ma, inst);
                 float cursor;
                 alGetSourcef(inst->alSource, AL_SEC_OFFSET, &cursor);
                 return cursor;
@@ -1109,6 +1143,16 @@ static void maSetChannelCount(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int3
     // miniaudio handles channel management internally, this is a no-op
 }
 
+static void maSetGroupGain(AudioSystem* audio, int32_t groupIndex, float gain, uint32_t timeMs) {
+    AlAudioSystem* ma = (AlAudioSystem*) audio;
+    AudioSystem_setGroupGain(audio, groupIndex, gain, timeMs);
+    repeat(MAX_SOUND_INSTANCES, i) {
+        SoundInstance* inst = &ma->instances[i];
+        if (inst->active && AudioSystem_soundGroup(audio, inst->soundIndex) == groupIndex)
+            alSourcef(inst->alSource, AL_GAIN, inst->currentGain * AudioSystem_soundGroupGain(audio, inst->soundIndex));
+    }
+}
+
 static void maGroupLoad(AudioSystem* audio, int32_t groupIndex) {
     if (groupIndex > 0) {
         int sz = snprintf(nullptr, 0, "audiogroup%d.dat", groupIndex);
@@ -1214,6 +1258,8 @@ AlAudioSystem* AlAudioSystem_create(void) {
     AlAudioSystemVtable.destroy = maDestroy;
     AlAudioSystemVtable.update = maUpdate;
     AlAudioSystemVtable.playSound = maPlaySound;
+    AlAudioSystemVtable.setSoundSpatial = maSetSoundSpatial;
+    AlAudioSystemVtable.setListenerPosition = maSetListenerPosition;
     AlAudioSystemVtable.stopSound = maStopSound;
     AlAudioSystemVtable.stopAll = maStopAll;
     AlAudioSystemVtable.isPlaying = maIsPlaying;
@@ -1233,6 +1279,7 @@ AlAudioSystem* AlAudioSystem_create(void) {
     AlAudioSystemVtable.setMasterGain = maSetMasterGain;
     AlAudioSystemVtable.setMasterGainForListener = maSetMasterGainForListener;
     AlAudioSystemVtable.setChannelCount = maSetChannelCount;
+    AlAudioSystemVtable.setGroupGain = maSetGroupGain;
     AlAudioSystemVtable.groupLoad = maGroupLoad;
     AlAudioSystemVtable.groupIsLoaded = maGroupIsLoaded;
     AlAudioSystemVtable.createStream = maCreateStream;
