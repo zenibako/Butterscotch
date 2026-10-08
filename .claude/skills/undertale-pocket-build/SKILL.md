@@ -20,7 +20,7 @@ undertale-pocket/                 not a git repo; holds the pieces below
 │       ├── data.win, music/      the user's own game data (gitignored)
 │       ├── textures.bin, music.bin   generated packs (gitignored)
 │       └── out/                  everything the build writes (gitignored):
-│           └── build/pocket/undertale/   assembled SD card tree
+│           └── build/pocket/butterscotch/   assembled SD card tree
 ├── openfpgaSDK/                  the openfpgaOS SDK, read only; SDK_ROOT points here by default
 ├── Diablo/                       reference port; also the source of the v0.9 SDK + runtime
 └── screenshots/                  captures sent to the user
@@ -58,19 +58,26 @@ rm -rf src/openfpga/out/.obj/undertale src/openfpga/out/.obj/undertale-v09   # d
 that prints nothing after that line succeeded; filter the noise with
 `| grep -E " error|undefined reference|Comparison|\*\*\*"`.
 
-## Deltarune
+## Two games, one core
 
-`make -C src/openfpga GAME=deltarune ...` builds the Deltarune core instead
-(WAD 17, `dist-deltarune/`, data in `games/deltarune/`, tree in
-`out/build/pocket/deltarune/`, binary `deltarune_pc`). Run
+The core is `zenibako.Butterscotch`, platform `butterscotch`, with one
+entry per game on the Pocket. `GAME=deltarune` on any make target builds
+Deltarune's program instead of Undertale's (WAD 17, data in
+`games/deltarune/`, binary `deltarune_pc`); run
 `tools/deltarune-setup.sh <game Resources folder> [chapter]` once first.
-Every target takes the switch: `GAME=deltarune copy`, `lint`, `asan`.
-`compare` has not been tried with it. The two trees are independent, so
-building one never disturbs a copy of the other.
+Every device build ends by reassembling the one SD tree from all games
+built so far (`tools/mkcard.sh`), so a full card is `make && make
+GAME=deltarune`. `compare` adds Undertale benchmark entries and v0.9
+cores to that same tree.
+
+Until 2026-10-08 the platform folder was `undertale`. A card set up before
+then has `Assets/butterscotch/`, `Saves/undertale/` and possibly
+`Cores/zenibako.Deltarune` with `Assets/deltarune/`; the save belongs in
+`Saves/butterscotch/common/` now.
 
 ## The cardinal rule: don't rebuild under a copy
 
-`make` and `make compare` delete and recreate `src/openfpga/out/build/pocket/undertale/`. The
+`make` and `make compare` delete and recreate `src/openfpga/out/build/pocket/butterscotch/`. The
 user often copies that tree to the SD card from another machine with rsync,
 which takes a minute or more. Rebuilding mid-copy hands them a mixed tree.
 
@@ -95,11 +102,11 @@ Three routes, in order of preference:
    a Terminal on that Mac:
 
    ```bash
-   rsync -rc --exclude '._*' --exclude '.DS_Store' <user>@<build-mac>:<path to>/butterscotch-pocket/src/openfpga/out/build/pocket/undertale/ /Volumes/Pocket/
-   dot_clean -m /Volumes/Pocket/Assets/undertale /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
+   rsync -rc --exclude '._*' --exclude '.DS_Store' <user>@<build-mac>:<path to>/butterscotch-pocket/src/openfpga/out/build/pocket/butterscotch/ /Volumes/Pocket/
+   dot_clean -m /Volumes/Pocket/Assets/butterscotch /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
    diskutil eject /Volumes/Pocket
    ```
-3. **Manual:** `cp -R src/openfpga/out/build/pocket/undertale/{Cores,Assets,Platforms} /Volumes/Pocket/`
+3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} /Volumes/Pocket/`
 
 Plain `copy` after a `compare-copy` leaves stale v0.9 cores on the card; use
 `compare-copy` again if those cores should stay current.
@@ -110,15 +117,16 @@ wake it; if no disk appears at all, the card needs reseating.
 
 ## What is on the card
 
-| File (Assets/undertale/common) | Slot | Source |
+| File (Assets/butterscotch/common) | Slot | Source |
 |---|---|---|
 | `os.bin`, `undertale_os.ini`, `undertale.elf` | 1, 2, 3 | SDK runtime, dist, build |
 | `data.win` | 4 | the user's copy (`game.ios` on macOS, renamed) |
+| `deltarune.elf`, `deltarune_os.ini`, `deltarune.win`, `dr_textures.bin`, `dr_music.bin` | 3, 2, 4, 5, 6 | the same for the Deltarune entry |
 | `textures.bin` | 5 | `tools/mktexpack` from data.win |
 | `music.bin` | 6 | `tools/mkmusic` from data.win + `music/*.ogg` |
 | `undertale_0.sav` | 10 | written by the game (save archive) |
 
-`undertale_0.sav` lives under `Saves/undertale/common/` on the card and is
+`undertale_0.sav` lives under `Saves/butterscotch/common/` on the card and is
 never part of the build tree. `make import-save SAVE_DIR=<desktop save
 folder>` builds one from a desktop save (`tools/mksave`); copying it to the
 card replaces the Pocket's own progress, so only do that when asked.

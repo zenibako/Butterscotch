@@ -2,9 +2,9 @@
     "core": {
         "magic": "APF_VER_1",
         "metadata": {
-            "platform_ids": ["undertale"],
+            "platform_ids": ["butterscotch"],
             "shortname": "Butterscotch",
-            "description": "GameMaker runner. Runs Undertale v1.08 (own data needed)",
+            "description": "GameMaker runner. Runs Undertale and Deltarune ch. 1 (own data needed)",
             "author": "zenibako",
             "url": "https://github.com/zenibako/butterscotch-pocket",
             "version": "0.1.0",

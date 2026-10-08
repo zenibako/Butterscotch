@@ -7,7 +7,7 @@
 # the SDK's RGB555 framebuffer. You supply your own Undertale data.win.
 #
 # Everything the build writes goes under out/ here; the SDK checkout is only
-# read. The SD card tree ends up in out/build/pocket/undertale/.
+# read. The SD card tree ends up in out/build/pocket/butterscotch/.
 #
 # Targets:
 #   make              Build the custom core
@@ -18,18 +18,19 @@
 #   make clean        Remove build artifacts
 #
 
-# GAME picks which game the core is built for. Each has its own core
-# definition, its own folder of game data and its own name on the card:
-#   undertale (default)  dist/            data beside this Makefile     WAD 16
-#   deltarune            dist-deltarune/  games/deltarune/ (see tools/deltarune-setup.sh)  WAD 17
+# GAME picks which game's program is built. The core is one, with an entry
+# per game on the Pocket; each game has its own program, folder of game
+# data and save file:
+#   undertale (default)  data beside this Makefile                           WAD 16
+#   deltarune            games/deltarune/ (see tools/deltarune-setup.sh)     WAD 17
+# The SD tree is assembled from every game built so far (tools/mkcard.sh),
+# so `make && make GAME=deltarune` gives a card with both.
 GAME     ?= undertale
 ifeq ($(GAME),undertale)
 G         =
-GAME_DIST = dist
 WADS     ?= 16
 else ifeq ($(GAME),deltarune)
 G         = games/deltarune/
-GAME_DIST = dist-deltarune
 WADS     ?= 17
 # Sounds of audio group 1 live in their own file, and the game reads its
 # text from lang_en.json; both go into the audio pack.
@@ -54,8 +55,9 @@ endif
 ROOT      = $(CURDIR)/out
 OBJ_DIR   = $(ROOT)/.obj/$(APP)
 BUILD_DIR = $(OBJ_DIR)
-DIST      = $(CURDIR)/$(GAME_DIST)
-OUT       = $(ROOT)/build/$(TARGET)/$(APP)
+DIST      = $(CURDIR)/dist
+CARD      = butterscotch
+OUT       = $(ROOT)/build/$(TARGET)/$(CARD)
 RUNTIME   = $(SDK_ROOT)/runtime
 
 # ── Butterscotch sources ─────────────────────────────────────────────
@@ -167,7 +169,7 @@ $(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg)
 # Host tool: packs a desktop save folder into the save slot file and back.
 #   make import-save SAVE_DIR=<desktop save folder>   -> undertale_0.sav
 #   make export-save EXPORT_DIR=<folder to write>     <- undertale_0.sav
-# The slot file belongs at Saves/undertale/common/ on the SD card. It is not
+# The slot file belongs at Saves/butterscotch/common/ on the SD card. It is not
 # part of the SD tree, so copying a build never replaces progress on the card.
 MKSAVE = $(ROOT)/.obj/$(APP)-tools/mksave
 SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
@@ -196,8 +198,13 @@ $(ROOT)/runtime:
 	@mkdir -p $(ROOT)
 	ln -sfn $(SDK_ROOT)/runtime $@
 
+ifeq ($(TARGET),pocket)
+release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
+	@tools/mkcard.sh "$(SDK_DIR)/platforms/pocket/image.sh" "$(ROOT)" "$(DIST)" "$(CURDIR)"
+else
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
 	@$(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(OBJ_DIR)/app.elf" "$(ROOT)" "$(DIST)" $(MISTER_ASSETS)
+endif
 
 debug: all
 	@$(SDK_ROOT)/scripts/debug.sh $$(ls -d $(OUT)/Assets/*/common 2>/dev/null)/$(APP).elf
@@ -292,6 +299,6 @@ lint:
 
 clean: sdk-clean
 	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan undertale_pc undertale_pc_asan
-	rm -rf $(ROOT)/build/pocket/$(APP) $(ROOT)/build/mister/$(APP)
+	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
 .PHONY: all release debug copy compare compare-copy package test asan lint clean

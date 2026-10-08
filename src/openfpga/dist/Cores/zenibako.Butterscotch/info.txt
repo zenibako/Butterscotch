@@ -2,13 +2,16 @@ Butterscotch Pocket (unofficial)
 
 Butterscotch, an open-source GameMaker
 runner by MrPowerGamerBR, on openfpgaOS.
-It currently runs Undertale v1.08. You
+It runs Undertale v1.08 and, as an
+experiment, Deltarune Chapter 1. You
 need to provide your own game files.
 
-Put in Assets/undertale/common:
+Put in Assets/butterscotch/common:
   data.win      from your game
   textures.bin  built from data.win
   music.bin     built from data.win
+Deltarune: deltarune.win,
+  dr_textures.bin, dr_music.bin
 
 Controls
   D-pad    Move

@@ -29,7 +29,7 @@ On macOS, put Homebrew's GNU sed first on `PATH` and set
 with the host's `riscv64-elf-gcc` instead of the SDK's Docker image).
 
 ```bash
-make            # RISC-V ELF + Pocket SD tree in out/build/pocket/undertale/
+make            # RISC-V ELF + Pocket SD tree in out/build/pocket/butterscotch/
 make test       # desktop binary ./undertale_pc (run it next to a data.win)
 make lint       # strict compiler warnings on this port's own files
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
@@ -39,7 +39,7 @@ make copy       # copy the core to a mounted Pocket SD card
 Put your `data.win` in this directory (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
 game's `.ogg` files as `music/`. The build copies it to
-`Assets/undertale/common/` in the SD tree.
+`Assets/butterscotch/common/` in the SD tree.
 
 Desktop extras: `UT_DUMP_FRAME=<n> UT_DUMP_PATH=out.ppm ./undertale_pc`
 writes frame `n` of the 320x240 output and exits. `UT_UNCAPPED=1` disables
@@ -50,18 +50,24 @@ enables older bytecode versions for testing other games.
 
 ## Deltarune (experimental)
 
-`GAME=deltarune` builds a second core, `zenibako.Deltarune`, from the same
-code with the newer bytecode version enabled. One chapter at a time:
+The core lists two games on the Pocket, Undertale and Deltarune. They are
+the same code built twice (`GAME=deltarune` enables the newer bytecode
+version), and the SD tree is assembled from every game built so far:
 
 ```bash
 tools/deltarune-setup.sh "<...>/DELTARUNE.app/Contents/Resources" 1   # links your files into games/deltarune/
-make GAME=deltarune                 # SD tree in out/build/pocket/deltarune/
+make && make GAME=deltarune         # both programs; out/build/pocket/butterscotch/ holds both games
 make GAME=deltarune deltarune_pc    # desktop binary
 ```
 
-Everything is separate from Undertale's: core definition
-(`dist-deltarune/`), game data (`games/deltarune/`, gitignored), object
-files, SD tree, `Assets/deltarune/` and `Saves/deltarune/` on the card.
+One chapter at a time. Each game has its own program, data, object files
+and save file; on the card they share `Assets/butterscotch/common/`, where
+Deltarune's files are `deltarune.win`, `dr_textures.bin` and
+`dr_music.bin`. The program still opens `data.win`, `textures.bin` and
+`music.bin`: those names are bound to data slots 4 to 6, and the game's
+entry (`dist/Assets/butterscotch/zenibako.Butterscotch/Deltarune.json`)
+decides which files the Pocket puts in the slots. `tools/mkcard.sh` does
+the assembly and leaves out the entry of a game that is not built.
 
 Two things differ from Undertale. The music folder is shared by all
 chapters, so the setup script links only the `.ogg` files the chapter's
@@ -152,7 +158,7 @@ SAVE_DIR=<folder>` packs a desktop save folder into `undertale_0.sav`
 (`SAVE_DIR` defaults to the macOS location, `~/Library/Application
 Support/com.tobyfox.undertale`; on Windows it is `%LOCALAPPDATA%\UNDERTALE`,
 on Linux `~/.config/UNDERTALE`). Copy that file to
-`Saves/undertale/common/` on the SD card; it replaces any progress made on
+`Saves/butterscotch/common/` on the SD card; it replaces any progress made on
 the Pocket. `make export-save EXPORT_DIR=<folder>` goes the other way, and
 `tools/mksave list <file>` shows what a slot file holds. The slot file is
 deliberately not part of the SD tree, so copying a build never touches saves.

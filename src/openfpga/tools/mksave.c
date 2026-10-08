@@ -10,7 +10,7 @@
  *   macOS    ~/Library/Application Support/com.tobyfox.undertale/
  *   Windows  %LOCALAPPDATA%\UNDERTALE\
  *   Linux    ~/.config/UNDERTALE/
- * On the Pocket the slot file lives at Saves/undertale/common/ on the SD card.
+ * On the Pocket the slot file lives at Saves/butterscotch/common/ on the SD card.
  */
 
 #include "../platform/ut_save_format.h"
