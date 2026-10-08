@@ -6,6 +6,7 @@
 #include "of_diag.h"
 #include "of_perf.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,6 +88,81 @@ static void ioReport(void) {
     utLogPrint("same 64K region again: %u\n", ioTest(85, 65536));
 }
 
+/* The same pack read with the OS's non-blocking call instead of fread.
+ * fread is served from the OS file cache, which fetches one 32 KB block per
+ * command to the Pocket's host however much was asked for, and each command
+ * has a round trip of its own. This times single commands of several sizes,
+ * to show how much of a read is that round trip and how much is data, and
+ * then a megabyte in the largest commands the OS accepts: into the OS's
+ * staging memory (no copy) and into ordinary memory (one copy). */
+#ifndef OF_PC
+#define UT_ASYNC_TIMEOUT_NANOS 3000000000ull
+#define UT_ASYNC_READS_PER_SIZE 8
+
+static volatile int g_asyncDone;
+static volatile int g_asyncResult;
+
+/* Runs from the read-completion interrupt. */
+static void asyncCallback(int token, int result) {
+    (void) token;
+    g_asyncResult = result;
+    g_asyncDone = 1;
+}
+
+/* Reads `total` bytes from `offset` in commands of `length`. Returns the
+ * time in microseconds, or 0 if a read failed or timed out. */
+static uint32_t asyncTime(uint32_t slot, uint32_t offset, uint8_t *dest, bool advanceDest, uint32_t length, uint32_t total) {
+    uint64_t start = nowNanos();
+    for (uint32_t done = 0; done < total; done += length) {
+        g_asyncDone = 0;
+        g_asyncResult = 0;
+        uint64_t issued = nowNanos();
+        if (of_file_read_async((int) slot, offset + done, advanceDest ? dest + done : dest, length, asyncCallback) < 0) return 0;
+        /* The poll is the OS's fallback for a lost interrupt. */
+        while (!g_asyncDone && of_file_async_poll() != 1) {
+            if (nowNanos() - issued > UT_ASYNC_TIMEOUT_NANOS) return 0;
+        }
+        if (g_asyncResult < 0) return 0;
+    }
+    return (uint32_t) ((nowNanos() - start) / 1000u);
+}
+
+static void asyncReport(void) {
+    static uint8_t heapBuffer[UT_IO_BYTES] __attribute__((aligned(512)));
+    static const uint32_t sizes[] = { 4096, 16384, 32768, 65536 };
+    char line[64];
+    int at;
+
+    uint32_t slot = 0;
+    uint32_t maxRead = of_file_async_max_read();
+    uint8_t *stage = maxRead > 0 ? of_file_dma_stage_alloc(maxRead, 4096) : NULL;
+    if (stage == NULL || of_file_slot_find(UT_IO_FILE, &slot) != 0) {
+        utLogPrint("async read: not available (max %u)\n", (unsigned) maxRead);
+        return;
+    }
+
+    at = snprintf(line, sizeof(line), "async max %uK ms:", (unsigned) (maxRead / 1024u));
+    for (int i = 0; i < 4; i++) {
+        if (sizes[i] > maxRead) continue;
+        /* Each size gets its own untouched stretch of the pack. */
+        uint32_t micros = asyncTime(slot, (110u + 2u * (uint32_t) i) * 1024u * 1024u, stage, false, sizes[i],
+                                    sizes[i] * UT_ASYNC_READS_PER_SIZE);
+        unsigned tenths = micros / (100u * UT_ASYNC_READS_PER_SIZE);
+        at += snprintf(line + at, sizeof(line) - (size_t) at, " %uK %u.%u", (unsigned) (sizes[i] / 1024u), tenths / 10, tenths % 10);
+    }
+    utLogPrint("%s\n", line);
+
+    uint32_t total = UT_IO_BYTES - UT_IO_BYTES % maxRead;
+    uint32_t staged = asyncTime(slot, 118u * 1024u * 1024u, stage, false, maxRead, total);
+    uint32_t copied = asyncTime(slot, 120u * 1024u * 1024u, heapBuffer, true, maxRead, total);
+    utLogPrint("async 1M KB/s: staged %u, copied %u\n",
+               staged > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / staged) : 0,
+               copied > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / copied) : 0);
+}
+#else
+static void asyncReport(void) {}
+#endif
+
 void utBenchAddFlipTime(uint64_t nanos) {
     if (g_running) g_flipNanos += nanos;
 }
@@ -136,5 +212,6 @@ void utBenchFrame(void) {
     utLogPrint("%d frames in %u.%u s; full speed is 33.3\n", firstFrame, totalMs / 1000, (totalMs % 1000) / 100);
     utLogPrint("work = total minus display flip\n");
     ioReport();
+    asyncReport();
     utDiagHalt("benchmark finished");
 }
