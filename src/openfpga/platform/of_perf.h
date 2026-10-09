@@ -9,6 +9,20 @@
 void utPerfToggle(void);
 void utPerfToggleLog(void);
 void utPerfHideOverlays(void);
+void utPerfShowLog(void);
+
+/* Logs where game-script time went over the last `frames` frames, short
+ * enough for the log overlay:
+ *
+ *   scripts 6.4 ms 5210 ops /frame (41, 60 fr)
+ *     2.1  1830 obj_mainchara_Step_0
+ *     ...
+ *
+ * First line: all scripts together, how many ran, and the window. Then the
+ * heaviest eight: ms per frame, VM instructions per frame, name. Times are
+ * a script's own, without the scripts it calls. */
+struct Profiler;
+void utPerfScriptReport(const struct Profiler *profiler, int frames);
 
 /* Recent log lines for the overlay; age 0 is the newest complete line. */
 #define UT_LOG_LINES 21

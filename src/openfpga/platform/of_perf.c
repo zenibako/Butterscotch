@@ -14,6 +14,8 @@
 #include "debug_font.h"
 #include "gettime.h"
 #include "log.h"
+#include "profiler.h"
+#include "stb_ds.h"
 
 #include <string.h>
 
@@ -92,6 +94,46 @@ void utPerfToggle(void) {
 
 void utPerfToggleLog(void) {
     g_logEnabled = !g_logEnabled;
+}
+
+void utPerfShowLog(void) {
+    g_logEnabled = true;
+}
+
+/* Butterscotch's own report is a line per script too wide for a 320-pixel
+ * log, so this writes its own: ms per frame and instructions per frame for
+ * the heaviest few, names without the "gml_Object_"/"gml_Script_" prefix. */
+#define UT_SCRIPT_TOP 8
+
+void utPerfScriptReport(const Profiler *profiler, int frames) {
+    if (profiler == NULL || frames <= 0) return;
+    int count = (int) shlen(profiler->entries);
+    uint64_t totalNanos = 0, totalOps = 0;
+    int top[UT_SCRIPT_TOP];
+    int shown = 0;
+    for (int i = 0; i < count; i++) {
+        uint64_t nanos = profiler->entries[i].value.nanos;
+        totalNanos += nanos;
+        totalOps += profiler->entries[i].value.ops;
+        int at = shown;
+        while (at > 0 && profiler->entries[top[at - 1]].value.nanos < nanos) at--;
+        if (at >= UT_SCRIPT_TOP) continue;
+        if (shown < UT_SCRIPT_TOP) shown++;
+        for (int j = shown - 1; j > at; j--) top[j] = top[j - 1];
+        top[at] = i;
+    }
+
+    /* Tenths of a millisecond per frame, in integers: no float printf here. */
+    unsigned perFrame = (unsigned) (totalNanos / 100000u / (unsigned) frames);
+    logInfo("scripts %u.%u ms %u ops /frame (%d, %d fr)\n", perFrame / 10, perFrame % 10,
+            (unsigned) (totalOps / (unsigned) frames), count, frames);
+    for (int i = 0; i < shown; i++) {
+        const ProfilerEntry *entry = &profiler->entries[top[i]];
+        const char *name = entry->key;
+        if (strncmp(name, "gml_Object_", 11) == 0 || strncmp(name, "gml_Script_", 11) == 0) name += 11;
+        perFrame = (unsigned) (entry->value.nanos / 100000u / (unsigned) frames);
+        logInfo(" %2u.%u %5u %s\n", perFrame / 10, perFrame % 10, (unsigned) (entry->value.ops / (unsigned) frames), name);
+    }
 }
 
 void utPerfHideOverlays(void) {

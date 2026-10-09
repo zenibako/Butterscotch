@@ -141,6 +141,45 @@ whatever was running (a 3 s "music read" or "texture load" right after a
 screenshot is the screenshot), and the log overlay only shows the first 53 characters of a
 line, so anything longer is invisible on the device.
 
+**Script times** (Select + X in debug mode; `UT_PROFILE=n` on desktop).
+The slow-frame line says "step 300"; this says which scripts the step
+went to. It is Butterscotch's GML profiler (`--profile-gml-scripts`),
+reported every 60 frames in a form that fits the log overlay:
+
+```
+scripts 6.4 ms 5210 ops /frame (41, 60 fr)
+  2.1  1830 obj_mainchara_Step_0
+  1.2  7218 obj_base_writer_Draw_0
+  ...
+```
+
+First line: all game code together per frame, how many scripts ran, the
+window. Then the heaviest eight: ms per frame, VM instructions per frame,
+name (without `gml_Object_`/`gml_Script_`). Reading it:
+- Times are a script's own, not the scripts it calls, but they do include
+  the built-in functions it calls. A Draw event's time is mostly the
+  renderer; compare with the slow line's draw kinds before blaming the
+  interpreter.
+- ms divided by ops is the cost per instruction. A script far above the
+  others on that ratio is spending its time in built-ins, not bytecode.
+- Desktop times are near zero and mean nothing; the ops column is the
+  same on both, so the desktop can rank scripts by instructions for a
+  scene before asking for a device run.
+- Timing every script call costs time itself. Take frame-time numbers
+  with it off. The cost of having it compiled in but off (a test per
+  instruction) has not been measured on the device.
+- The report is nine log lines every two seconds and pushes slow-frame
+  lines out of the 11-line overlay quickly.
+When asking the user for it: debug mode on, go to the scene, Select + X
+(the log comes up with it), wait a few seconds, screenshot.
+
+**Opcode ranking** (desktop only: `make ops`, then run `undertale_pc_ops`
+with `UT_EXIT_FRAME=n`, usually with `UT_PLAYBACK` or `UT_SCRIPT`). Prints
+how often each bytecode instruction ran, split by operand types, when it
+leaves the main loop. Counts are the same as on the device. Use it before
+hand-tuning the interpreter, to see which instruction and type
+combinations a scene is made of; it does not say what each costs.
+
 **Benchmark** (`--bench` in the OS config's `ARGS=`; `make compare` adds a
 "Benchmark" entry to each core). It plays a fixed input script with a
 fixed seed, no frame pacing and saves disabled, then draws a report:
@@ -187,13 +226,16 @@ marks a mode switch. `Audio: playing NAME` marks a streamed track.
    undertale-pocket-verify skill) and read the log for texture loads,
    room changes and mode switches around the moment they describe. A
    freeze that lines up with `Loaded TXTR page` is a page load.
-2. Profile the desktop build with `sample <pid> 5` while the scene runs.
+2. If the slow part is `step`, get script times for the scene: on desktop
+   for the ranking by instructions (`UT_PROFILE=60`), and from the user
+   (Select + X) for real milliseconds.
+3. Profile the desktop build with `sample <pid> 5` while the scene runs.
    The game's own functions are a small share of samples next to the SDL
    display code, so read relative weights among `swr*` and VM functions
    only.
-3. If the cause is still unclear, add a measurement to the benchmark or
+4. If the cause is still unclear, add a measurement to the benchmark or
    the log rather than a fix.
-4. When you do change something, verify output is unchanged on desktop,
+5. When you do change something, verify output is unchanged on desktop,
    then ask for one benchmark run and name the lines you need.
 
 ## Asking the user for a run

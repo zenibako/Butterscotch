@@ -52,6 +52,10 @@ device):
 | `UT_DISASM=name` | print that code entry's bytecode at start (`*` for all, about a million lines) |
 | `UT_DUMP_EVERY=n`, `UT_DUMP_DIR=d` | also write every nth frame to `d/f<frame>.ppm` on the way to `UT_DUMP_FRAME` |
 | `UT_NOFLIP=1` | never present to the window; without it a run is capped at the display's 60 fps even with `UT_UNCAPPED` |
+| `UT_RECORD=f.json` | write every key press and release, by frame, when the run ends (Butterscotch's `--record-inputs`) |
+| `UT_PLAYBACK=f.json` | replay a recording (`--playback-inputs`). With `UT_RECORD` as well it replays, then records what follows, so a recording can be extended |
+| `UT_PROFILE=n` | log the heaviest game scripts every n frames; the report Select + X gives on the device (see the perf skill) |
+| `UT_EXIT_FRAME=n` | leave the main loop at frame n, the ordinary way out (a frame dump exits on the spot) |
 | `UT_GOTO="frame:room"` | jump to a room index on that frame; the game's own state is left as it was |
 | `UT_SET="frame:name=1,arr[2]=3"` | set numeric globals (or elements of existing global arrays) on that frame |
 
@@ -78,6 +82,34 @@ With that script and seed 7:
 
 To reach somewhere new, extend a script and look at a few frames; expect
 two or three attempts to get movement distances right.
+
+### Recordings instead of scripts
+
+A script has to be guessed frame by frame. A recording is made by playing:
+anyone at the Mac's own screen can play to the spot once, and the file
+then replays exactly, as often as needed. Use one whenever the scene is
+more than a short walk away, and to reproduce a bug the user can show on
+the desktop build. Ask the user to record it; you cannot play
+interactively.
+
+```bash
+cd src/openfpga
+UT_SEED=7 UT_RECORD=/path/to/ruins.json ./undertale_pc    # play, then close the window
+scripts/ut-frames.sh -e UT_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
+```
+
+- Record and replay with the same seed (ut-frames.sh uses 7) and from the
+  same save state; ut-frames.sh starts from none, so record from none too
+  (delete `undertale_0.sav`, `file0`, `file9`, `undertale.ini` first).
+- A recording is by frame number, so it replays the same uncapped. Checked
+  with flowey.script: recorded through `UT_RECORD`, replayed without the
+  script, frames 1300 and 2400 identical.
+- To go further from the end of one: `UT_PLAYBACK=a.json UT_RECORD=b.json`.
+- Turn a script into a recording by running it once with `UT_RECORD`.
+- It records the game's keys, not Pocket buttons: Select chords, L and R
+  are not in it.
+- A change that alters game logic or timing in frames (not just speed)
+  makes an old recording drift, like a script would.
 
 ## The standard check for a change
 
@@ -111,6 +143,19 @@ that only shows on the Mac's own screen; run it under a watchdog. Use
 `stb_ds.h:1132`, a left shift in the vendored hash function. A function
 Butterscotch calls into the port needs its prototype in
 `platform/of_hooks.h`, or lint reports it.
+
+## Looking inside the game
+
+When behaviour is wrong rather than slow, Butterscotch's own tracing is
+there on the desktop build. Already wired: `UT_DUMP_STATE` (every instance
+and variable at a frame) and `UT_DISASM` (a code entry's bytecode). The
+rest of its `--trace-*` family (variable reads and writes, function calls,
+alarms, events, collisions, instance creation, tiles, opcodes, stack) is
+not wired to a variable, but each is one line in `main.c` next to
+`UT_DISASM`: put the name to trace (or `*`) in the matching
+`args.*ToBeTraced` map, as `src/cli/args.c` does. Add the one the bug
+needs rather than all of them; `*` on a running game prints thousands of
+lines a frame.
 
 ## Traps that have cost time
 

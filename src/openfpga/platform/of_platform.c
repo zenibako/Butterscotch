@@ -16,6 +16,8 @@
 
 #include "of_hooks.h"
 #include "of_perf.h"
+#include "profiler.h"
+#include "runner.h"
 #include "ut_bench.h"
 #include "ut_strings.h"
 
@@ -117,6 +119,41 @@ static void showNotice(const char *text) {
 
 void utPlatformSetDebugMode(bool enabled) {
     g_debugRequested = enabled;
+}
+
+/* Script times (Select + X in debug mode, UT_PROFILE on desktop): Butterscotch's
+ * GML profiler, reported to the log every so many frames. Timing every script
+ * call costs time itself, so it is off until asked for. */
+#define UT_PROFILE_FRAMES 60
+static int g_profileFrames = 0;
+static bool g_profileRequested = false;
+
+void utPlatformSetScriptProfile(int frames) {
+    g_profileFrames = frames > 0 ? frames : UT_PROFILE_FRAMES;
+    g_profileRequested = true;
+}
+
+static bool scriptProfileOn(void) {
+    return g_runner != NULL && g_runner->vmContext->profiler != NULL;
+}
+
+static void setScriptProfile(bool enabled) {
+    if (g_runner == NULL) return;
+    if (g_profileFrames <= 0) g_profileFrames = UT_PROFILE_FRAMES;
+    Profiler_setEnabled(&g_runner->vmContext->profiler, enabled);
+}
+
+/* Once per presented frame. */
+static void scriptProfileFrame(void) {
+    static int frames = 0;
+    if (!scriptProfileOn()) {
+        frames = 0;
+        return;
+    }
+    if (++frames < g_profileFrames) return;
+    utPerfScriptReport(g_runner->vmContext->profiler, frames);
+    Profiler_reset(g_runner->vmContext->profiler);
+    frames = 0;
 }
 
 void utPlatformSetInputScript(const char *script) {
@@ -315,6 +352,7 @@ void platformSwapBuffers(void) {
         }
     }
 #endif
+    scriptProfileFrame();
     utPerfFrame(g_nextFb, g_nextW, g_nextH);
     /* L's setting, by the name the instruction screen gives the toggle:
      * for a moment after L is pressed, and in debug mode for as long as a
@@ -501,10 +539,11 @@ bool platformHandleEvents(void) {
     if (debugNow != g_debugMode) {
         g_debugMode = debugNow;
         utPerfHideOverlays();
+        if (!debugNow) setScriptProfile(false);
         /* The frame times coming up are the sign that the hold took. */
         if (debugNow && byHold) utPerfToggle();
         showNotice(debugNow ? "Debug mode on" : "Debug mode off");
-        logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick" : "off");
+        logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick, X script times" : "off");
     }
     /* Frame stepping is the one hotkey the runner itself gates on this. */
     if (g_runner != NULL) g_runner->debugMode = g_debugMode;
@@ -524,7 +563,20 @@ bool platformHandleEvents(void) {
     }
     runInputScript();
     if (g_runner == NULL) return false;
+    if (g_profileRequested) {
+        g_profileRequested = false;
+        setScriptProfile(true);
+    }
 
+    if (chording && of_btn_pressed(OF_BTN_X)) {
+        /* The report goes to the log, so bring that up with it. */
+        bool enable = !scriptProfileOn();
+        setScriptProfile(enable);
+        if (enable) utPerfShowLog();
+        chordUsed = true;
+        showNotice(enable ? "Script times on" : "Script times off");
+        logInfo("Debug: script times %s\n", enable ? "on, every 2 s" : "off");
+    }
     if (chording) {
         /* One hotkey per frame; it is released on the next. */
         for (size_t i = 0; i < UT_DEBUG_CHORD_COUNT && keyToRelease == 0; i++) {

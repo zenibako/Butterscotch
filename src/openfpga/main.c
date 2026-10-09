@@ -37,6 +37,11 @@ extern int swrMirrorFaintAlpha;
 #define UT_SLOT_MUSIC 6
 #define UT_MUSIC_NAME "music.bin"
 
+#ifdef OF_PC
+/* In loop.c, which has no header for it: writes the input recording out. */
+void saveInputRecording(void);
+#endif
+
 int main(int argc, char **argv) {
 #ifndef OF_PC
     of_file_slot_register(UT_SLOT_DATA_WIN, UT_DATA_WIN_NAME);
@@ -82,6 +87,21 @@ int main(int argc, char **argv) {
     if (getenv("UT_NO_MIRROR") != NULL) swrMirrorMerge = false;
     if (getenv("UT_MIRROR_FAINT") != NULL) swrMirrorFaintAlpha = atoi(getenv("UT_MIRROR_FAINT"));
     if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugMode(true);
+    /* UT_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report Select + X gives
+     * on the device). */
+    if (getenv("UT_PROFILE") != NULL) utPlatformSetScriptProfile(atoi(getenv("UT_PROFILE")));
+#ifdef ENABLE_VM_OPCODE_PROFILER
+    /* `make ops` builds with this: the ranking of bytecode instructions executed, printed on the way out. */
+    args.opcodeProfiler = true;
+#endif
+    /* UT_RECORD=<file> writes every key press and release, by frame, when the run ends; UT_PLAYBACK=<file>
+     * replays one. Both together replay and then go on recording, to extend a recording. */
+    args.recordInputsPath = getenv("UT_RECORD");
+    args.playbackInputsPath = getenv("UT_PLAYBACK");
+    if (args.recordInputsPath != NULL) atexit(saveInputRecording);
+    /* UT_EXIT_FRAME=<n> leaves the main loop at that frame, the ordinary way out: the opcode ranking of
+     * `make ops` is only printed on that path (a frame dump exits on the spot). */
+    if (getenv("UT_EXIT_FRAME") != NULL) args.exitAtFrame = atoi(getenv("UT_EXIT_FRAME"));
     /* UT_DUMP_STATE=<frame> prints every instance and its variables at that
      * frame; UT_DISASM=<code entry name, or *> prints its bytecode at start. */
     if (getenv("UT_DUMP_STATE") != NULL) {

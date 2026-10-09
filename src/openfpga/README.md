@@ -108,10 +108,14 @@ screen names the hold on Select instead. With it on:
   Select + B sets `global.interact` to 0 when a cutscene has left the player
   stuck. Select alone acts on release. The state dumps (F11, F12) are not
   mapped: they print far more than the device can show.
+- Select + X turns script times on or off: every two seconds the log gets
+  the eight game scripts that took the most time, as milliseconds and VM
+  instructions per frame (Butterscotch's GML profiler). The log overlay
+  comes up with it. Measuring slows the game a little while it is on.
 
 Anything that would otherwise leave the screen unchanged says what it did
 in the top right corner for two seconds: "Debug mode on" and "off", "Next
-room", "Previous room", "interact = 0" and "Resumed". A paused game shows
+room", "Previous room", "interact = 0", "Script times on" and "off", and "Resumed". A paused game shows
 "Paused, frame N" for as long as it is paused, and each step advances N.
 
 With it off, none of those buttons do anything and nothing extra is drawn.

@@ -26,6 +26,8 @@ void utSaveFsSetVolatile(bool enabled);
 void utPlatformSetInputScript(const char *script);
 /* Turns debug mode (overlays and Select-chord hotkeys) on from start-up; see of_platform.c. */
 void utPlatformSetDebugMode(bool enabled);
+/* Turns the script profiler on from the start, reporting every `frames` frames (0: the default). */
+void utPlatformSetScriptProfile(int frames);
 void utPlatformSetUncapped(bool uncapped);
 
 #endif /* UT_BENCH_H */

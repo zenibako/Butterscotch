@@ -98,7 +98,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
 BS_DEFS = -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
-          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK \
+          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
 
@@ -277,6 +277,14 @@ asan:
 	$(MAKE) PC_BIN=undertale_pc_asan PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-asan \
 	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" undertale_pc_asan
 
+# The desktop build again, counting every bytecode instruction the game runs,
+# as undertale_pc_ops. Run it with UT_EXIT_FRAME=<n>: it prints the ranking
+# when it leaves the main loop. A separate binary because the count is a
+# compile-time option of Butterscotch's and costs time on every instruction.
+ops:
+	$(MAKE) PC_BIN=undertale_pc_ops PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-ops \
+	        PC_EXTRA_CFLAGS="-DENABLE_VM_OPCODE_PROFILER" undertale_pc_ops
+
 # Strict warnings for the code this port owns (not Butterscotch or the SDK,
 # whose headers are treated as system headers so they stay quiet). Compiles
 # nothing; fails if anything is reported.
@@ -291,7 +299,7 @@ lint:
 	done; [ -z "$$failed" ] && echo "lint: clean"
 
 clean: sdk-clean
-	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan undertale_pc undertale_pc_asan
+	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops undertale_pc undertale_pc_asan undertale_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all release debug copy compare compare-copy package test asan lint clean
+.PHONY: all release debug copy compare compare-copy package test asan ops lint clean
