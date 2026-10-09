@@ -1710,14 +1710,12 @@ static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
     return hash;
 }
 
-static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+// Draws the run from its cached picture, building it first if need be. Returns false if the run cannot be drawn that way.
+static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
 {
-    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
     SWRenderer* swr = (SWRenderer*) renderer;
-    swrOverlayFlush(swr);
-    
 #if PIXEL_SIZE != 16
-    (void) tiles; (void) offsets; (void) count;
+    (void) swr; (void) tiles; (void) offsets; (void) count;
     return false;
 #else
     // The picture is in room pixels and holds no partial coverage, so it can
@@ -1816,6 +1814,33 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
                   &picture, 0, 0, run->width, run->height, 0xFFFFFF, 1.0f);
     return true;
 #endif
+}
+
+// A run that cannot be drawn from a picture (too big, scaled, translucent, a
+// few tiles only) is drawn tile by tile, leaving out the tiles that cannot
+// reach the port: a room's tiles are mostly somewhere else, and each one
+// costs a whole sprite draw to find that out further down.
+static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+{
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
+    SWRenderer* swr = (SWRenderer*) renderer;
+    swrOverlayFlush(swr);
+    if (swrDrawTileRunCached(renderer, tiles, offsets, count)) return true;
+    
+    for (int32_t t = 0; t < count; t++)
+    {
+        const RoomTile* tile = tiles[t];
+        // Where the tile lands in the buffer, whichever way its scale points, with a pixel to spare.
+        float x = ((float) tile->x + offsets[t * 2] - (float) swr->viewX) * swr->scaleX + (float) swr->portX;
+        float y = ((float) tile->y + offsets[t * 2 + 1] - (float) swr->viewY) * swr->scaleY + (float) swr->portY;
+        float w = (float) tile->width * tile->scaleX * swr->scaleX, h = (float) tile->height * tile->scaleY * swr->scaleY;
+        float left = w < 0.0f ? x + w : x, right = w < 0.0f ? x : x + w;
+        float top = h < 0.0f ? y + h : y, bottom = h < 0.0f ? y : y + h;
+        if (right < (float) swr->portX - 1.0f || left > (float) swr->maxX + 1.0f) continue;
+        if (bottom < (float) swr->portY - 1.0f || top > (float) swr->maxY + 1.0f) continue;
+        Renderer_drawTile(renderer, tiles[t], offsets[t * 2], offsets[t * 2 + 1]);
+    }
+    return true;
 }
 
 // ===[ Tile layers ]===

@@ -1183,15 +1183,30 @@ void Runner_draw(Runner* runner) {
             if (parsedLayer != nullptr && parsedLayer->type == RoomLayerType_Assets) {
                 RoomLayerAssetsData* data = parsedLayer->assetsData;
                 size_t tileElementCount = arrlenu(runtimeLayer->elements);
+                // The layer's tiles are gathered and offered to the renderer as one run (see drawTileRun), like
+                // the tiles of an older room; drawn one by one only if it declines. A tile whose element carries
+                // another alpha is handed over as a copy.
+                static RoomTile** layerTiles = nullptr;
+                static float* layerOffsets = nullptr;
+                static RoomTile* layerCopies = nullptr;
+                arrsetlen(layerTiles, 0);
+                arrsetlen(layerOffsets, 0);
+                arrsetlen(layerCopies, 0);
+                if (data->legacyTileCount > 0) arrsetcap(layerCopies, data->legacyTileCount); // copies must not move
+                size_t searchFrom = 0;
                 repeat(data->legacyTileCount, j) {
                     if (runner->renderer != nullptr) {
                         RoomTile* tile = &data->legacyTiles[j];
-                        // Find the matching RuntimeLayerElement so we can honor per-element visibility
+                        // Find the matching RuntimeLayerElement so we can honor per-element visibility. Elements
+                        // were created in the tiles' order, so the search resumes where the last one ended.
                         RuntimeLayerElement* tileEl = nullptr;
                         repeat(tileElementCount, k) {
-                            RuntimeLayerElement* candidate = &runtimeLayer->elements[k];
+                            size_t at = searchFrom + k;
+                            if (at >= tileElementCount) at -= tileElementCount;
+                            RuntimeLayerElement* candidate = &runtimeLayer->elements[at];
                             if (candidate->type == RuntimeLayerElementType_Tile && candidate->tileElement == tile) {
                                 tileEl = candidate;
+                                searchFrom = at + 1;
                                 break;
                             }
                         }
@@ -1231,9 +1246,24 @@ void Runner_draw(Runner* runner) {
                         }
 #endif
 
-                        RoomTile runtimeTile = *tile;
-                        if (tileEl != nullptr) runtimeTile.alpha = tileEl->alpha;
-                        Renderer_drawTile(runner->renderer, &runtimeTile, offsetX, offsetY);
+                        RoomTile* drawn = tile;
+                        if (tileEl != nullptr && tileEl->alpha != tile->alpha) {
+                            arrput(layerCopies, *tile);
+                            drawn = &layerCopies[arrlen(layerCopies) - 1];
+                            drawn->alpha = tileEl->alpha;
+                        }
+                        arrput(layerTiles, drawn);
+                        arrput(layerOffsets, offsetX);
+                        arrput(layerOffsets, offsetY);
+                    }
+                }
+                int32_t layerTileCount = (int32_t) arrlen(layerTiles);
+                if (layerTileCount > 0) {
+                    bool taken = runner->renderer->vtable->drawTileRun != nullptr &&
+                                 runner->renderer->vtable->drawTileRun(runner->renderer, layerTiles, layerOffsets, layerTileCount);
+                    if (!taken) {
+                        repeat(layerTileCount, j)
+                            Renderer_drawTile(runner->renderer, layerTiles[j], layerOffsets[j * 2], layerOffsets[j * 2 + 1]);
                     }
                 }
 
