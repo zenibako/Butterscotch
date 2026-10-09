@@ -1818,6 +1818,156 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
 #endif
 }
 
+// ===[ Tile layers ]===
+// A GMS2 room is built from tile layers: a grid of cells, each naming a tile
+// of one tileset. Drawn cell by cell through drawSpritePart, a layer costs a
+// sprite draw for every cell of the room on every frame, in view or not.
+// Here only the cells in view are drawn, and a cell that is neither mirrored,
+// flipped nor rotated is copied straight from the tileset: a row at a time
+// when the tile has no transparent pixels, not at all when it has nothing
+// but. What comes out is what the cell-by-cell draws would have produced.
+#define SWR_TILESETS 8
+enum { SWR_TILE_UNKNOWN, SWR_TILE_EMPTY, SWR_TILE_SOLID, SWR_TILE_MIXED };
+
+typedef struct {
+    int32_t tpagIndex;
+    uint32_t count;
+    uint8_t* kinds;     // one SWR_TILE_* per tile index; NULL when the entry is free
+    uint32_t lastUsedFrame;
+} SWTileset;
+
+static SWTileset swrTilesets[SWR_TILESETS];
+bool swrTileLayerFast = true;
+
+static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
+{
+    SWTileset* spare = &swrTilesets[0];
+    for (int e = 0; e < SWR_TILESETS; e++) {
+        SWTileset* entry = &swrTilesets[e];
+        if (entry->kinds != NULL && entry->tpagIndex == tpagIndex && entry->count == count) {
+            entry->lastUsedFrame = swr->frameCounter;
+            return entry->kinds;
+        }
+        if (entry->kinds == NULL) {
+            if (spare->kinds != NULL) spare = entry;
+        } else if (spare->kinds != NULL && entry->lastUsedFrame < spare->lastUsedFrame)
+            spare = entry;
+    }
+    uint8_t* kinds = (uint8_t*) calloc((size_t) count + 1, 1);
+    if (kinds == NULL) return NULL;
+    free(spare->kinds);
+    spare->kinds = kinds;
+    spare->tpagIndex = tpagIndex;
+    spare->count = count;
+    spare->lastUsedFrame = swr->frameCounter;
+    return kinds;
+}
+
+static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, const uint32_t* cells,
+                                     uint32_t tilesX, uint32_t tilesY, float offsetX, float offsetY)
+{
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
+    SWRenderer* swr = (SWRenderer*) renderer;
+#if PIXEL_SIZE != 16
+    (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
+    return false;
+#else
+    DataWin* dwin = renderer->dataWin;
+    int32_t tpagIndex = tileset->tpagIndex;
+    if (!swrTileLayerFast || tpagIndex < 0 || (uint32_t) tpagIndex >= dwin->tpag.count) return false;
+    if (swr->scaleX <= 0.0f || swr->scaleY <= 0.0f || tilesX == 0 || tilesY == 0) return false;
+    swrOverlayFlush(swr);
+    
+    int tileW = (int) tileset->gms2TileWidth, tileH = (int) tileset->gms2TileHeight;
+    int borderX = (int) tileset->gms2OutputBorderX, borderY = (int) tileset->gms2OutputBorderY;
+    uint32_t columns = tileset->gms2TileColumns;
+    
+    // The cells that can reach the port, with one to spare each way for a rotated tile.
+    float viewLeft = (float) swr->viewX - offsetX, viewTop = (float) swr->viewY - offsetY;
+    float viewRight = viewLeft + (float) swr->portW / swr->scaleX, viewBottom = viewTop + (float) swr->portH / swr->scaleY;
+    int firstX = swrFloor(viewLeft / (float) tileW) - 1, lastX = swrFloor(viewRight / (float) tileW) + 1;
+    int firstY = swrFloor(viewTop / (float) tileH) - 1, lastY = swrFloor(viewBottom / (float) tileH) + 1;
+    if (firstX < 0) firstX = 0;
+    if (firstY < 0) firstY = 0;
+    if (lastX > (int) tilesX - 1) lastX = (int) tilesX - 1;
+    if (lastY > (int) tilesY - 1) lastY = (int) tilesY - 1;
+    
+    // A copy stands in for a draw only at full size, with normal blending, of an item stored at the size it is drawn.
+    TexturePageItem* tpag = &dwin->tpag.items[tpagIndex];
+    bool direct = swr->scaleX == 1.0f && swr->scaleY == 1.0f && swr->blendMode == bm_normal &&
+                  tpag->sourceWidth == tpag->targetWidth && tpag->sourceHeight == tpag->targetHeight;
+    uint8_t* kinds = direct ? swrTileKinds(swr, tpagIndex, tileset->gms2TileCount) : NULL;
+    SWTexture* texture = kinds != NULL ? swrTextureForItem(swr, tpagIndex) : NULL;
+    
+    for (int ty = firstY; ty <= lastY; ty++)
+    {
+        for (int tx = firstX; tx <= lastX; tx++)
+        {
+            uint32_t cell = cells[(uint32_t) ty * tilesX + (uint32_t) tx];
+            uint32_t tileIndex = cell & 0x0007FFFF;
+            if (tileIndex == 0 || tileIndex > tileset->gms2TileCount) continue;
+            
+            int srcX = (int) (tileIndex % columns) * (tileW + 2 * borderX) + borderX;
+            int srcY = (int) (tileIndex / columns) * (tileH + 2 * borderY) + borderY;
+            bool mirror = (cell & 0x10000000) != 0, flip = (cell & 0x20000000) != 0, rotate = (cell & 0x40000000) != 0;
+            
+            if (texture != NULL && !mirror && !flip && !rotate)
+            {
+                int sx = tpag->sourceX + srcX - texture->originX;
+                int sy = tpag->sourceY + srcY - texture->originY;
+                if (sx >= 0 && sy >= 0 && sx + tileW <= texture->width && sy + tileH <= texture->height)
+                {
+                    uint8_t kind = kinds[tileIndex];
+                    if (kind == SWR_TILE_UNKNOWN)
+                    {
+                        int opaque = 0;
+                        for (int y = 0; y < tileH; y++) {
+                            const uintpixel_t* src = &texture->buffer[(sy + y) * texture->width + sx];
+                            for (int x = 0; x < tileW; x++) opaque += swrIsOpaque(src[x]) ? 1 : 0;
+                        }
+                        kind = opaque == 0 ? SWR_TILE_EMPTY : opaque == tileW * tileH ? SWR_TILE_SOLID : SWR_TILE_MIXED;
+                        kinds[tileIndex] = kind;
+                    }
+                    if (kind == SWR_TILE_EMPTY) continue;
+                    
+                    float fx = (float) (tx * tileW) + offsetX, fy = (float) (ty * tileH) + offsetY;
+                    swrTransformPosIfNeeded(swr, &fx, &fy);
+                    int dx = swrFloor(fx), dy = swrFloor(fy);
+                    int x0 = dx < swr->portX ? swr->portX : dx, x1 = dx + tileW > swr->maxX ? swr->maxX : dx + tileW;
+                    int y0 = dy < swr->portY ? swr->portY : dy, y1 = dy + tileH > swr->maxY ? swr->maxY : dy + tileH;
+                    if (x0 >= x1 || y0 >= y1) continue;
+                    
+                    int width = x1 - x0;
+                    for (int y = y0; y < y1; y++)
+                    {
+                        const uintpixel_t* src = &texture->buffer[(sy + (y - dy)) * texture->width + sx + (x0 - dx)];
+                        uintpixel_t* dst = &swr->fb[y * swr->fbPitch + x0];
+                        if (kind == SWR_TILE_SOLID)
+                            memcpy(dst, src, (size_t) width * sizeof(uintpixel_t));
+                        else for (int x = 0; x < width; x++) {
+                            uintpixel_t pixel = src[x];
+                            if (swrIsOpaque(pixel)) dst[x] = pixel;
+                        }
+                    }
+                    continue;
+                }
+            }
+            
+            // Anything else is drawn the way the runner would have drawn it.
+            float angleDeg = rotate ? 90.0f : 0.0f;
+            float pivotX = (float) (tx * tileW) + offsetX + (float) tileW / 2.0f;
+            float pivotY = (float) (ty * tileH) + offsetY + (float) tileH / 2.0f;
+            float dstX = (float) (tx * tileW) + offsetX + (mirror ? (float) tileW : 0.0f);
+            float dstY = (float) (ty * tileH) + offsetY + (flip ? (float) tileH : 0.0f);
+            SWRenderer_drawSpritePart(renderer, tpagIndex, (float) srcX, (float) srcY, (float) tileW, (float) tileH, dstX, dstY,
+                                      mirror ? -1.0f : 1.0f, flip ? -1.0f : 1.0f, angleDeg, pivotX, pivotY, 0xFFFFFF, 1.0f);
+            if (texture != NULL) texture = swrTextureForItem(swr, tpagIndex); // the draw may have moved it
+        }
+    }
+    return true;
+#endif
+}
+
 #ifdef SW_DRAW_PROFILE
 // Times each kind of draw call and hands the totals to the platform, which
 // can then say what a slow frame was spent drawing.
@@ -1854,6 +2004,13 @@ static bool SWRenderer_profDrawTileRun(Renderer* renderer, RoomTile** tiles, con
 {
     bool drawn;
     SWR_PROFILED(SWR_PROF_PART, drawn = SWRenderer_drawTileRun(renderer, tiles, offsets, count));
+    return drawn;
+}
+
+static bool SWRenderer_profDrawTileLayer(Renderer* renderer, Background* tileset, const uint32_t* cells, uint32_t tilesX, uint32_t tilesY, float offsetX, float offsetY)
+{
+    bool drawn;
+    SWR_PROFILED(SWR_PROF_PART, drawn = SWRenderer_drawTileLayer(renderer, tileset, cells, tilesX, tilesY, offsetX, offsetY));
     return drawn;
 }
 
@@ -1949,6 +2106,10 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawTileRun              = SWRenderer_drawTileRun;
 #ifdef SW_DRAW_PROFILE
     swrVtable.drawTileRun              = SWRenderer_profDrawTileRun;
+#endif
+    swrVtable.drawTileLayer            = SWRenderer_drawTileLayer;
+#ifdef SW_DRAW_PROFILE
+    swrVtable.drawTileLayer            = SWRenderer_profDrawTileLayer;
 #endif
     
     swrVtable.drawTile                 = NULL;

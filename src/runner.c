@@ -786,6 +786,11 @@ void Runner_drawTileLayer(Runner* runner, RoomLayerTilesData* data, float layerO
     uint32_t borderY = tileset->gms2OutputBorderY;
     uint32_t columns = tileset->gms2TileColumns;
 
+    // A renderer may draw the whole layer itself (see drawTileLayer).
+    if (runner->renderer->vtable->drawTileLayer != nullptr &&
+        runner->renderer->vtable->drawTileLayer(runner->renderer, tileset, data->tileData, data->tilesX, data->tilesY, layerOffsetX, layerOffsetY))
+        return;
+
     repeat(data->tilesY, ty) {
         repeat(data->tilesX, tx) {
             uint32_t cell = data->tileData[ty * data->tilesX + tx];

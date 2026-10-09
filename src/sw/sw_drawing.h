@@ -20,6 +20,8 @@ extern bool swrSkipFrame;
 extern bool swrMirrorMerge;
 extern int swrMirrorFaintAlpha;
 extern bool swrFavorSpeed;
+// When false, GMS2 tile layers are drawn cell by cell through drawSpritePart (for comparing).
+extern bool swrTileLayerFast;
 bool swrMirrorHoldFill(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t pxcolor, float alpha);
 
 void swrPlotPixel(Renderer* renderer, float x, float y, uintpixel_t color, float alpha);
