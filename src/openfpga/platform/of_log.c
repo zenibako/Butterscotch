@@ -83,7 +83,14 @@ bool utLogDump(void) {
         FILE *old = fopen(UT_LOG_SLOT_FILE, "rb");
         char *text = old != NULL ? malloc(UT_SAVE_SLOT_BYTES) : NULL;
         if (text != NULL) {
-            size_t got = fread(text, 1, UT_SAVE_SLOT_BYTES - 1, old);
+            /* In pieces: one read for more than the slot holds came back empty on the device. */
+            size_t got = 0;
+            while (got < UT_SAVE_SLOT_BYTES - 1) {
+                size_t want = UT_SAVE_SLOT_BYTES - 1 - got;
+                size_t piece = fread(text + got, 1, want < 4096 ? want : 4096, old);
+                if (piece == 0) break;
+                got += piece;
+            }
             text[got] = '\0';
             size_t len = strlen(text); /* the text ends at the first NUL */
             /* A slot never written, or holding something else, reads as anything at all. */

@@ -47,6 +47,10 @@ if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
     write_ini deltarune_bench.ini deltarune.elf --bench os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bench.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark.json"
+    # Speed again with game-script times in the log: slower, and there to name the scripts, not to be timed.
+    write_ini deltarune_bscr.ini deltarune.elf "--bench-smooth --scripts" os25
+    sed -e 's/"deltarune_os\.ini"/"deltarune_bscr.ini"/' "$DR_INSTANCE" \
+        > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark scripts.json"
     write_ini deltarune_bspd.ini deltarune.elf --bench-smooth os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bspd.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark speed.json"
