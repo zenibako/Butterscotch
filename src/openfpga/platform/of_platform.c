@@ -47,6 +47,7 @@ static uint64_t g_modeShownUntil = 0;
 extern bool swrSmoothMinify; /* butterscotch/src/sw/sw_drawing.c */
 extern bool swrSkipFrame;
 extern int swrMirrorFaintAlpha;
+extern bool swrFavorSpeed;
 static int g_modeW = 0; /* 0 until the first frame sets a mode */
 static int g_modeH = 0;
 static int g_modeStride = 0; /* bytes per row of the display surface */
@@ -173,10 +174,13 @@ void utPlatformSetHiresAllowed(bool allowed) {
 static int32_t visibleWidth(Runner *runner);
 
 /* L's two settings. Accuracy draws everything as the game asks. Speed gives
- * up three things for time:
+ * up four things for time:
  *   - 640x480 rooms are drawn at 320x240 with 2x2 averaging;
  *   - mirrored blend layers too faint to move a 16-bit channel by more than
  *     one step are left out (swrMirrorFaintAlpha);
+ *   - a stack of mirrored layers is worked out for every second pixel each
+ *     way, and sprite draws at 8/256 opacity or less are left out
+ *     (swrFavorSpeed);
  *   - frames are skipped when the game is running behind (below).
  *
  * Frame skipping. Without it a scene that cannot be drawn in a frame's time
@@ -288,6 +292,7 @@ bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
     bool hires = g_hiresAvailable && !g_smoothLowres && shown > UT_SCREEN_W;
     swrSmoothMinify = g_smoothLowres;
     swrMirrorFaintAlpha = g_faintOverride >= 0 ? g_faintOverride : g_smoothLowres ? UT_SPEED_FAINT_ALPHA : 0;
+    swrFavorSpeed = g_smoothLowres;
     *outW = hires ? UT_HIRES_W : UT_SCREEN_W;
     *outH = hires ? UT_HIRES_H : UT_SCREEN_H;
     return true;

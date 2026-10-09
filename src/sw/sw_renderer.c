@@ -465,13 +465,25 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
                                      uint32_t color, float alpha, bool outline)
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return;
-    swrOverlayFlush((SWRenderer*) renderer);
+    SWRenderer* swr = (SWRenderer*) renderer;
     uintpixel_t pxcolor = swrConvertPixel(color);
+#ifdef SW_HAS_PREMUL_BLEND
+    // A fill over a held stack of mirrored layers may join it instead of letting it out.
+    if (!outline && swrMirrorHoldFill(renderer, x1, y1, x2, y2, pxcolor, alpha)) return;
+#endif
+    
+    // Still one colour if the flush has nothing to draw; a fill with that colour is then redundant.
+    bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
+    bool kept = swr->uniformValid && nothingHeld;
+    swrOverlayFlush(swr);
     
     if (outline)
         swrDrawRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
-    else
+    else {
+        swr->uniformKept = kept;
         swrFillRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
+        swr->uniformKept = false;
+    }
 }
 
 static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1, float x2, float y2,
@@ -766,6 +778,10 @@ static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alp
     
     for (int y = 0; y < swr->height; y++) {
         swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->width, (uintpixel_t) color);
+    }
+    if (swr->fb == swr->mainFb && swr->fbPitch == swr->width) {
+        swr->uniformValid = true;
+        swr->uniformColor = (uintpixel_t) color;
     }
 }
 

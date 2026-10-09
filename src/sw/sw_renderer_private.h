@@ -62,6 +62,14 @@ typedef struct {
     int alpha;
 } SWSpriteCall;
 
+// One layer of a mirrored stack: a sprite drawn as four quarters, or a solid
+// fill of the whole mirrored area that followed them.
+typedef struct {
+    SWSpriteCall calls[4];      // the quarters as asked for; a fill uses calls[0]'s tintColor and alpha
+    int sx, sy, xstep, ystep;   // how the unflipped quarter samples its texture, after clipping
+    bool solid;
+} SWMirrorLayer;
+
 typedef struct
 {
     Renderer base;
@@ -115,8 +123,16 @@ typedef struct
     int mirrorPitch;
     int mirrorPort[6];          // portX, portY, portW, portH, maxX, maxY when the first quarter was held
     int mirrorCx, mirrorCy, mirrorW, mirrorH; // the unflipped quarter's clipped rectangle
-    int mirrorSx, mirrorSy, mirrorXstep, mirrorYstep; // sampling of the layer in progress
-    SWSpriteCall mirrorCalls[SW_MIRROR_MAX_LAYERS + 1][4];
+    bool mirrorUnderKnown;      // everything under the stack was one colour when it was started
+    uintpixel_t mirrorUnder;
+    SWMirrorLayer mirrorStack[SW_MIRROR_MAX_LAYERS + 1];
+    
+    // The whole main buffer holds one colour: set by a full clear or fill,
+    // dropped by the next thing drawn. Lets a repeated fill be skipped and a
+    // mirrored stack be worked out without reading the buffer back.
+    bool uniformValid;
+    uintpixel_t uniformColor;
+    bool uniformKept;           // for the one swrFillRectangle call SWRenderer_drawRectangle is making
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;

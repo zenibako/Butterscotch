@@ -75,6 +75,12 @@ data file names. And the game reads its text from `lang_en.json`, which
 has no data slot to live in, so it is stored in `music.bin` and the file
 layer reads it from there (`utAudioReadPackFile`).
 
+The character creation screens stack six translucent, mirrored layers
+under a darkening fill on every frame; the renderer works such a stack out
+for one quarter of the screen in a single pass and mirrors it
+(`swrMirrorFlush`). In Speed mode it does so for every second pixel each
+way, and sprite draws at 3% opacity or less are left out.
+
 Chapter 1 plays on the desktop build through the opening and a Dark World
 battle. Fog (the hit flash) is not implemented in the software renderer.
 
