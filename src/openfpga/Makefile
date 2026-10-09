@@ -130,6 +130,14 @@ CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN)
 GAME_PACKS = $(if $(wildcard $(G)data.win),$(G)textures.bin) $(if $(wildcard $(G)music/*.ogg),$(G)music.bin)
 MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
 
+# Neither sdk.mk's rules nor the desktop ones track headers, and objects built
+# against an old struct layout link without complaint and then crash (the
+# device build did, twice). So a change to any header empties the object
+# directories this run builds into. (Before sdk.mk, which looks at what is
+# in them; PC_OBJ_DIR is only set this early when a sub-make passes it.)
+HEADER_SUM := $(shell cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null | cksum | cut -d' ' -f1)
+$(foreach d,$(OBJ_DIR) $(or $(PC_OBJ_DIR),$(ROOT)/.obj/$(APP)-pc),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
+
 # Declare default target before sdk.mk's rules
 .DEFAULT_GOAL := all
 
@@ -242,13 +250,6 @@ package: all
 # works on macOS too. of_init.c only fetches the kernel's caps/services
 # tables, which the PC shim does not use.
 PC_OBJ_DIR = $(ROOT)/.obj/$(APP)-pc
-
-# Neither sdk.mk's rules nor the desktop ones track headers, and objects built
-# against an old struct layout link without complaint and then crash (the
-# device build did, twice). So a change to any header empties the object
-# directories this run builds into.
-HEADER_SUM := $(shell cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null | cksum | cut -d' ' -f1)
-$(foreach d,$(OBJ_DIR) $(PC_OBJ_DIR),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
 PC_SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null || sdl2-config --cflags)
 PC_SDL_LIBS   := $(shell pkg-config --libs sdl2 2>/dev/null || sdl2-config --libs)
 PC_SRCS = $(SRCS) $(SDK_DIR)/pc/of_sdl2.c
