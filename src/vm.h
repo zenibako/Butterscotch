@@ -43,7 +43,10 @@
 // non-IEEE FPUs (example: PS2's R5900 which rounds toward zero instead of round-to-nearest) can
 // exceed the default epsilon.
 #ifdef USE_FLOAT_REALS
-#define GML_MATH_EPSILON 1e-4
+// Typed as a real: against a bare 1e-4 every comparison the VM makes is promoted to double, which a
+// single-precision FPU does in software. The floats that are <= 1e-4 as a double are exactly the
+// floats <= (float) 1e-4 (the nearest float below it), so nothing compares differently.
+#define GML_MATH_EPSILON ((GMLReal) 1e-4)
 #else
 #define GML_MATH_EPSILON 1e-5
 #endif

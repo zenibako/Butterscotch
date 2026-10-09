@@ -627,7 +627,7 @@ static inline int64_t RValue_toInt64(RValue val) {
 
 static inline bool RValue_toBool(RValue val) {
     switch (val.type) {
-        case RVALUE_REAL:   return val.real > 0.5;
+        case RVALUE_REAL:   return val.real > (GMLReal) 0.5; // typed: see GML_MATH_EPSILON
         case RVALUE_INT32:  return val.int32 > 0;
 #ifndef NO_RVALUE_INT64
         case RVALUE_INT64:  return val.int64 > 0;

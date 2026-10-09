@@ -1692,7 +1692,7 @@ static void handleConv(VMContext* ctx, uint8_t srcType, uint8_t dstType, uint8_t
         // Double (0) -> other
         case 0x20: result = RValue_makeInt32((int32_t) val.real); break;
         case 0x30: result = RValue_makeInt64((int64_t) val.real); break;
-        case 0x40: result = RValue_makeBool(val.real > 0.5); break;
+        case 0x40: result = RValue_makeBool(val.real > (GMLReal) 0.5); break;
         case 0x50: result = val; break; // Double -> Variable (passthrough)
         case 0x60: { char* s = RValue_toString(val, ctx->runner->dataWin); result = RValue_makeOwnedString(s); break; }
         case 0xF0: result = RValue_makeInt32((int32_t) val.real); break;
@@ -1701,7 +1701,7 @@ static void handleConv(VMContext* ctx, uint8_t srcType, uint8_t dstType, uint8_t
         case 0x01: result = RValue_makeReal(val.real); break;
         case 0x21: result = RValue_makeInt32((int32_t) val.real); break;
         case 0x31: result = RValue_makeInt64((int64_t) val.real); break;
-        case 0x41: result = RValue_makeBool(val.real > 0.5); break;
+        case 0x41: result = RValue_makeBool(val.real > (GMLReal) 0.5); break;
         case 0x51: result = val; break; // Float -> Variable (passthrough)
 
         // Int32 (2) -> other
