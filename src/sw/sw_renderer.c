@@ -2186,11 +2186,14 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         if (tileLeft + (int) tile->width > right) right = tileLeft + (int) tile->width;
         if (tileTop + (int) tile->height > bottom) bottom = tileTop + (int) tile->height;
         
-        int32_t ints[7] = { tile->x, tile->y, tile->useSpriteDefinition, tile->backgroundDefinition, tile->sourceX, tile->sourceY, (int32_t) tile->color };
-        uint32_t size[2] = { tile->width, tile->height };
-        key = swrTileRunHash(key, ints, sizeof(ints));
-        key = swrTileRunHash(key, size, sizeof(size));
-        key = swrTileRunHash(key, &offsets[t * 2], 2 * sizeof(float));
+        // Everything that decides what the tile looks like, a word at a time:
+        // this runs for every tile of the layer on every frame.
+        uint32_t words[11] = {
+            (uint32_t) tile->x, (uint32_t) tile->y, (uint32_t) tile->useSpriteDefinition, (uint32_t) tile->backgroundDefinition,
+            (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height, 0, 0,
+        };
+        memcpy(&words[9], &offsets[t * 2], 2 * sizeof(float));
+        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * 1099511628211ull;
     }
     
     // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
