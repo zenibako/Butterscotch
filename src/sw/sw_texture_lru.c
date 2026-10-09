@@ -154,6 +154,8 @@ static SWTexture* loadFromPack(SWRenderer* swr, uint32_t pageId)
     texture->width = (uint16_t) w;
     texture->height = (uint16_t) h;
     texture->halfBuffer = NULL;
+    texture->rowBounds = NULL;
+    texture->halfRowBounds = NULL;
     texture->immutable = true;
     texture->halfCoverage = NULL;
     texture->solid = texture->halfSolid = 0;
@@ -310,6 +312,8 @@ static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_
     texture->width = (uint16_t) w;
     texture->height = (uint16_t) h;
     texture->halfBuffer = NULL;
+    texture->rowBounds = NULL;
+    texture->halfRowBounds = NULL;
     texture->immutable = true;
     texture->halfCoverage = NULL;
     texture->solid = texture->halfSolid = 0;

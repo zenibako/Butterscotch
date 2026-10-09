@@ -60,10 +60,11 @@ static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
     int phaseX = wantX & 1, phaseY = wantY & 1;
     int halfW = (texture->width + phaseX + 1) / 2, halfH = (texture->height + phaseY + 1) / 2;
     size_t texels = (size_t) halfW * halfH;
-    // One allocation: the texels, then room for the coverage should it be needed.
-    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + texels);
+    // One allocation: the texels, each row's bounds, then room for the coverage should it be needed.
+    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + (size_t) halfH * 2 * sizeof(uint16_t) + texels);
     if (half == NULL) return false; // may fit another time
-    uint8_t* coverage = (uint8_t*) (half + texels);
+    uint16_t* bounds = (uint16_t*) (half + texels);
+    uint8_t* coverage = (uint8_t*) (bounds + (size_t) halfH * 2);
     bool partial = false;
     
     for (int hy = 0; hy < halfH; hy++)
@@ -99,7 +100,18 @@ static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
             if (covered != 0 && covered != 4) partial = true;
         }
     }
+    for (int hy = 0; hy < halfH; hy++) {
+        int first = 0, end = 0;
+        for (int hx = 0; hx < halfW; hx++) {
+            if (coverage[hy * halfW + hx] == 0) continue;
+            if (end == 0) first = hx;
+            end = hx + 1;
+        }
+        bounds[hy * 2] = (uint16_t) first;
+        bounds[hy * 2 + 1] = (uint16_t) end;
+    }
     texture->halfBuffer = half;
+    texture->halfRowBounds = bounds;
     texture->halfCoverage = partial ? coverage : NULL;
     texture->halfSolid = 2;
     if (!partial) {
@@ -111,6 +123,28 @@ static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
     texture->halfPhaseY = (uint8_t) phaseY;
     return true;
 #endif
+}
+
+// The row bounds of an immutable texture (see SWTexture), or NULL.
+static const uint16_t* swrRowBounds(SWTexture* texture)
+{
+    if (texture->rowBounds != NULL) return texture->rowBounds;
+    if (!texture->immutable) return NULL;
+    uint16_t* bounds = (uint16_t*) malloc((size_t) texture->height * 2 * sizeof(uint16_t));
+    if (bounds == NULL) return NULL;
+    for (int y = 0; y < texture->height; y++) {
+        const uintpixel_t* row = &texture->buffer[y * texture->width];
+        int first = 0, end = 0;
+        for (int x = 0; x < texture->width; x++) {
+            if (!swrIsOpaque(row[x])) continue;
+            if (end == 0) first = x;
+            end = x + 1;
+        }
+        bounds[y * 2] = (uint16_t) first;
+        bounds[y * 2 + 1] = (uint16_t) end;
+    }
+    texture->rowBounds = bounds;
+    return bounds;
 }
 
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
@@ -921,7 +955,11 @@ static void swrDrawSpriteInternal(
                 uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
                 const uintpixel_t* srcline = &halved.buffer[(sy + y) * halfW + sx];
                 const uint8_t* covline = &coverage[(sy + y) * halfW + sx];
-                for (int x = 0; x < dw; x++)
+                // Only the stretch of the row that has anything in it.
+                int from = (int) halved.halfRowBounds[(sy + y) * 2] - sx, to = (int) halved.halfRowBounds[(sy + y) * 2 + 1] - sx;
+                if (from < 0) from = 0;
+                if (to > dw) to = dw;
+                for (int x = from; x < to; x++)
                 {
                     uint32_t covered = covline[x];
                     if (covered == 0) continue;
@@ -1067,6 +1105,9 @@ static void swrDrawSpriteInternal(
     // colour and reuse it while consecutive source pixels are the same.
     if (blendmode == bm_normal && swrIsPartialAlpha(alpha))
     {
+        const uint16_t* rowBounds = NULL;
+        if (!flipX && xstep == (1 << fp_prec) && dh == sh)
+            rowBounds = texture->buffer == texture->halfBuffer ? texture->halfRowBounds : swrRowBounds(texture); // the half-size copy stands in as a texture of its own
         uint32_t dstalpha = 256 - alpha;
         uint32_t lastPixel = 0xFFFFFFFF;
         uint32_t srcRedBlue = 0, srcGreen = 0;
@@ -1082,7 +1123,17 @@ static void swrDrawSpriteInternal(
                 srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
             
             fixedp_t xs2 = ixs2;
-            for (int x = 0; x < dw; x++, xs2 += oxs2)
+            int from = 0, to = dw;
+            if (rowBounds != NULL) {
+                // Unscaled and not mirrored: only the stretch of the row that has anything in it.
+                int row = sy + ys;
+                from = (int) rowBounds[row * 2] - sx;
+                to = (int) rowBounds[row * 2 + 1] - sx;
+                if (from < 0) from = 0;
+                if (to > dw) to = dw;
+                xs2 += (fixedp_t) from * oxs2;
+            }
+            for (int x = from; x < to; x++, xs2 += oxs2)
             {
                 uintpixel_t pixel = srcline[(int)(xs2 >> fp_prec)];
                 if (!swrIsOpaque(pixel))
@@ -1118,6 +1169,9 @@ static void swrDrawSpriteInternal(
             texture->solid = opaque == count ? 1 : 2;
         }
         bool solid = texture->solid == 1;
+        const uint16_t* rowBounds = NULL;
+        if (!solid && untinted && !flipX && xstep == (1 << fp_prec) && dh == sh)
+            rowBounds = texture->buffer == texture->halfBuffer ? texture->halfRowBounds : swrRowBounds(texture); // the half-size copy stands in as a texture of its own
         
         fixedp_t ys2 = iys2;
         for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
@@ -1137,8 +1191,17 @@ static void swrDrawSpriteInternal(
             }
             else if (untinted && !flipX && xstep == (1 << fp_prec))
             {
-                // Unscaled: no stepping through the source needed.
-                for (int x = 0; x < dw; x++)
+                // Unscaled: no stepping through the source needed, and only
+                // the stretch of the row that has anything in it looked at.
+                int from = 0, to = dw;
+                if (rowBounds != NULL) {
+                    int row = sy + ys;
+                    from = (int) rowBounds[row * 2] - sx;
+                    to = (int) rowBounds[row * 2 + 1] - sx;
+                    if (from < 0) from = 0;
+                    if (to > dw) to = dw;
+                }
+                for (int x = from; x < to; x++)
                 {
                     uintpixel_t pixel = srcline[x];
                     if (swrIsOpaque(pixel))

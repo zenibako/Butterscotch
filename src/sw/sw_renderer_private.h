@@ -42,6 +42,14 @@ typedef struct
     // without looking at them: 0 not looked at yet, 1 yes, 2 no. Looked at
     // only for an immutable texture; halfSolid is the same for the half-size copy.
     uint8_t solid, halfSolid;
+    // For each row, the first column that has an opaque texel and the one
+    // after the last (both 0 for an empty row), so that a draw can leave out
+    // the transparent ends of the row without looking at them: most of a row
+    // when the texture is a few thin lines. Made on first need, for an
+    // immutable texture only (swrRowBounds); the half-size copy's are made
+    // with it and live in its allocation.
+    uint16_t* rowBounds;
+    uint16_t* halfRowBounds;
 }
 SWTexture;
 
