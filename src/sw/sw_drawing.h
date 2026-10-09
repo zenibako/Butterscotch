@@ -35,6 +35,8 @@ void swrFillRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
 void swrOverlayFlush(SWRenderer* swr);
 // Draws the tile pictures being held (sw_renderer.c); NULL for whichever renderer holds them.
 void swrTileRunsFlush(SWRenderer* swr);
+void swrClearSettle(SWRenderer* swr);
+void swrOverlayFlushForState(SWRenderer* swr);
 void swrDrawSprite(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha);
 void swrDrawSpriteRotated(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, float angleDeg, float pivotX, float pivotY);
 void swrDrawTriangle(Renderer* renderer, float x1, float y1, float x2, float y2, float x3, float y3, uint32_t color1, uint32_t color2, uint32_t color3, float alpha);

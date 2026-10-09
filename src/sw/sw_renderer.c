@@ -190,7 +190,7 @@ static void SWRenderer_endFrameEnd(Renderer* renderer)
 static void SWRenderer_beginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH,
                                  int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle)
 {
-    swrOverlayFlush((SWRenderer*) renderer);
+    swrOverlayFlushForState((SWRenderer*) renderer);
     (void)renderer; (void)viewX; (void)viewY; (void)viewW; (void)viewH;
     (void)portX; (void)portY; (void)portW; (void)portH; (void)viewAngle;
     UNIMP2();
@@ -475,11 +475,15 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
     // Still one colour if the flush has nothing to draw; a fill with that colour is then redundant.
     bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
     bool kept = swr->uniformValid && nothingHeld;
+    // A clear still held is handed to the fill, which replaces it if it covers as much.
+    bool clearTaken = kept && !outline && swr->clearHeld;
+    if (clearTaken) swr->clearHeld = false;
     swrOverlayFlush(swr);
     
     if (outline)
         swrDrawRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
     else {
+        swr->clearHeldForFill = clearTaken;
         swr->uniformKept = kept;
         swrFillRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
         swr->uniformKept = false;
@@ -751,11 +755,26 @@ static void swrFlushPendingClear(SWRenderer* swr)
     swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->pendingClearColor);
 }
 
+// A clear of the whole main buffer is held back as well: a room's tiles
+// usually come next and cover most of it, and held tile pictures take the
+// clear with them (swrTileRunsFlush), writing the colour only where they
+// leave a gap. Anything else that draws performs it first (swrOverlayFlush).
+void swrClearSettle(SWRenderer* swr)
+{
+    if (!swr->clearHeld) return;
+    swr->clearHeld = false;
+    if (!swr->mainFb) return;
+    swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->clearHeldColor);
+}
+
 static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return;
-    swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
+    bool wholeMain = swr->fb == swr->mainFb && swr->fbPitch == swr->width &&
+                     swr->width == swr->mainWidth && swr->height == swr->mainHeight;
+    if (wholeMain) swr->clearHeld = false; // this one covers it
+    swrOverlayFlush(swr);
     
     // A clear of the whole main buffer makes the pending one redundant.
     if (swr->fb == swr->mainFb && swr->fbPitch == swr->width)
@@ -786,6 +805,13 @@ static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alp
         color = PXL_TRANSPARENT;
 #endif
     
+    if (wholeMain) {
+        swr->clearHeld = true;
+        swr->clearHeldColor = (uintpixel_t) color;
+        swr->uniformValid = true;
+        swr->uniformColor = (uintpixel_t) color;
+        return;
+    }
     for (int y = 0; y < swr->height; y++) {
         swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->width, (uintpixel_t) color);
     }
@@ -1789,7 +1815,9 @@ static void swrRunClassify(SWTileRun* run)
                 const uintpixel_t* row = &run->pixels[y * run->width];
                 for (int x = bx * SWR_TILE_RUN_BLOCK; x < x1; x++, total++) opaque += swrIsOpaque(row[x]) ? 1 : 0;
             }
-            run->blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : opaque == total ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
+            // Solid means the whole block: one cut short by the picture's edge is not.
+            bool whole = total == SWR_TILE_RUN_BLOCK * SWR_TILE_RUN_BLOCK;
+            run->blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : (opaque == total && whole) ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
         }
     }
 }
@@ -1808,8 +1836,10 @@ static bool swrRunAllocate(SWTileRun* run, int width, int height)
 }
 
 // Draws pictures, bottom first, onto pixels whose top left is at (left, top)
-// in the pictures' units and that are width by height, block by block.
-static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixels, int pitch, int left, int top, int width, int height)
+// in the pictures' units and that are width by height, block by block. With
+// a colour to go under them, the pixels are first cleared to it wherever no
+// picture is solid.
+static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixels, int pitch, int left, int top, int width, int height, const uintpixel_t* under)
 {
     int right = left + width, bottom = top + height;
     for (int by = swrFloorToStep(top, SWR_TILE_RUN_BLOCK); by < bottom; by += SWR_TILE_RUN_BLOCK)
@@ -1817,8 +1847,16 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
         for (int bx = swrFloorToStep(left, SWR_TILE_RUN_BLOCK); bx < right; bx += SWR_TILE_RUN_BLOCK)
         {
             int first = 0;
-            for (int i = count - 1; i > 0; i--) {
-                if (swrRunBlockKind(runs[i], bx, by) == SWR_BLOCK_SOLID) { first = i; break; }
+            bool covered = false;
+            for (int i = count - 1; i >= 0; i--) {
+                if (swrRunBlockKind(runs[i], bx, by) == SWR_BLOCK_SOLID) { first = i; covered = true; break; }
+            }
+            // The block, cut to the target.
+            int tx0 = bx < left ? left : bx, tx1 = bx + SWR_TILE_RUN_BLOCK > right ? right : bx + SWR_TILE_RUN_BLOCK;
+            int ty0 = by < top ? top : by, ty1 = by + SWR_TILE_RUN_BLOCK > bottom ? bottom : by + SWR_TILE_RUN_BLOCK;
+            if (under != NULL && !covered) {
+                for (int y = ty0; y < ty1; y++)
+                    swrFillPixels(&pixels[(y - top) * pitch + (tx0 - left)], (size_t) (tx1 - tx0), *under);
             }
             for (int i = first; i < count; i++)
             {
@@ -1826,9 +1864,8 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
                 uint8_t kind = swrRunBlockKind(run, bx, by);
                 if (kind == SWR_BLOCK_EMPTY) continue;
                 
-                // The block, cut to the picture and to the target.
-                int x0 = bx < left ? left : bx, x1 = bx + SWR_TILE_RUN_BLOCK > right ? right : bx + SWR_TILE_RUN_BLOCK;
-                int y0 = by < top ? top : by, y1 = by + SWR_TILE_RUN_BLOCK > bottom ? bottom : by + SWR_TILE_RUN_BLOCK;
+                // And to the picture.
+                int x0 = tx0, x1 = tx1, y0 = ty0, y1 = ty1;
                 if (x1 > run->x + run->width) x1 = run->x + run->width;
                 if (y1 > run->y + run->height) y1 = run->y + run->height;
                 if (x0 >= x1 || y0 >= y1) continue;
@@ -1879,7 +1916,7 @@ static SWTileRun* swrPendingFlattened(SWRenderer* swr)
             if (!swrRunAllocate(entry, width, height)) return NULL;
             entry->x = left; entry->y = top;
             entry->shift = swrPendingRuns[0]->shift;
-            swrRunsDrawOnto(swrPendingRuns, swrPendingCount, entry->pixels, width, left, top, width, height);
+            swrRunsDrawOnto(swrPendingRuns, swrPendingCount, entry->pixels, width, left, top, width, height, NULL);
             swrRunClassify(entry);
             return entry;
         }
@@ -1904,14 +1941,28 @@ static void swrTileRunsDrawPending(SWRenderer* swr)
     int32_t viewX = (int32_t) swr->viewX, viewY = (int32_t) swr->viewY;
     int left = shift == 0 ? viewX : (viewX + 1) >> 1, top = shift == 0 ? viewY : (viewY + 1) >> 1;
     uintpixel_t* target = &swr->fb[swr->portY * swr->fbPitch + swr->portX];
+    int width = swr->maxX - swr->portX, height = swr->maxY - swr->portY;
+    
+    // A clear still held goes under the pictures if they are drawn over the
+    // whole of what it clears; they then write its colour only in their gaps.
+    const uintpixel_t* under = NULL;
+    if (swr->clearHeld) {
+        if (swr->fb == swr->mainFb && swr->fbPitch == swr->mainWidth && swr->portX == 0 && swr->portY == 0 &&
+            width == swr->mainWidth && height == swr->mainHeight) {
+            under = &swr->clearHeldColor;
+            swr->clearHeld = false;
+        } else {
+            swrClearSettle(swr);
+        }
+    }
     
     SWTileRun* flat = swrPendingCount > 1 ? swrPendingFlattened(swr) : NULL;
     if (flat != NULL) {
         SWTileRun* const one[1] = { flat };
-        swrRunsDrawOnto(one, 1, target, swr->fbPitch, left, top, swr->maxX - swr->portX, swr->maxY - swr->portY);
+        swrRunsDrawOnto(one, 1, target, swr->fbPitch, left, top, width, height, under);
         return;
     }
-    swrRunsDrawOnto(swrPendingRuns, swrPendingCount, target, swr->fbPitch, left, top, swr->maxX - swr->portX, swr->maxY - swr->portY);
+    swrRunsDrawOnto(swrPendingRuns, swrPendingCount, target, swr->fbPitch, left, top, width, height, under);
 }
 
 // Draws the pictures being held, if any. Everything that draws comes through
@@ -2078,6 +2129,7 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
     swr->tileRunEntering = false;
     if (swrDrawTileRunCached(renderer, tiles, offsets, count)) return true;
     swrTileRunsFlush(swr);
+    swrClearSettle(swr);
     
     for (int32_t t = 0; t < count; t++)
     {

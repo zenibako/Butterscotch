@@ -113,6 +113,9 @@ typedef struct
     uint32_t frameCounter;
     bool pendingClear;      // clearFrameBuffer was requested but not done yet (see swrFlushPendingClear)
     uintpixel_t pendingClearColor;
+    bool clearHeld;         // a clear of the whole main buffer is still to be done (see swrClearSettle)
+    uintpixel_t clearHeldColor;
+    bool clearHeldForFill;  // SWRenderer_drawRectangle took the held clear for the swrFillRectangle call it is making
     bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
     
     // A solid-colour sprite draw that has been held back so that identical

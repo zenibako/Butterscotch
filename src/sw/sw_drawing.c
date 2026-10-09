@@ -380,6 +380,7 @@ static void swrOverlayFlushHeld(SWRenderer* swr)
 #ifdef SW_HAS_PREMUL_BLEND
     int count = swr->overlayCount;
     if (count == 0) return;
+    swrClearSettle(swr); // a clear still held is older than the stack
     swr->overlayCount = 0;
     
     uint32_t dstalpha, srcRedBlue, srcGreen;
@@ -610,6 +611,7 @@ static void swrMirrorFlush(SWRenderer* swr)
 {
     int layers = swr->mirrorLayers, stage = swr->mirrorStage;
     if (layers == 0 && stage == 0) return;
+    swrClearSettle(swr); // a clear still held is older than the layers
     swr->mirrorLayers = 0;
     swr->mirrorStage = 0;
     swr->mirrorReplaying = true;
@@ -784,12 +786,36 @@ bool swrMirrorHoldFill(Renderer* renderer, float x1, float y1, float x2, float y
 }
 #endif
 
+// For a change of state that draws nothing itself (a new view): a clear
+// still held, with nothing held over it, can stay that way.
+void swrOverlayFlushForState(SWRenderer* swr)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    swrTileRunsFlush(swr); // takes the clear along if there were pictures
+    if (swr->clearHeld && swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0) {
+        bool uniform = swr->uniformValid;
+        swr->clearHeld = false;
+        swrOverlayFlush(swr);
+        swr->clearHeld = true;
+        swr->uniformValid = uniform; // nothing was drawn
+        return;
+    }
+#endif
+    swrOverlayFlush(swr);
+}
+
 void swrOverlayFlush(SWRenderer* swr)
 {
 #ifdef SW_HAS_PREMUL_BLEND
-    // Held tile pictures are older than anything else held, so they go first.
+    // Held tile pictures are older than anything else held, so they go first,
+    // and a held clear is older still: the pictures take it with them, and
+    // it stays held for a run of tiles coming in to do the same.
     if (!swr->tileRunEntering) swrTileRunsFlush(swr);
+    bool othersHeld = swr->mirrorLayers != 0 || swr->mirrorStage != 0 || swr->overlayCount != 0;
+    if (!swr->tileRunEntering || othersHeld) swrClearSettle(swr);
     if (!swr->mirrorReplaying) swrMirrorFlush(swr);
+#else
+    swrClearSettle(swr);
 #endif
     swrOverlayFlushHeld(swr);
     swr->uniformValid = false; // every caller is about to draw
@@ -947,6 +973,7 @@ static void swrDrawSpriteInternal(
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
         return;
     swr->uniformValid = false;
+    swrClearSettle(swr);
     if (swrFavorSpeed && alpha <= 8 && blendmode == bm_normal) return; // too faint to miss; see swrFavorSpeed
 #endif
     
@@ -1652,7 +1679,12 @@ void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2
     int yd = y2i - y1i;
     if (xd < 0) { x1i = x2i; xd = -xd; }
     if (yd < 0) { y1i = y2i; yd = -yd; }
-    if (xd <= 0 || yd <= 0) return;
+    bool clearTaken = swr->clearHeldForFill;
+    swr->clearHeldForFill = false;
+    if (xd <= 0 || yd <= 0) {
+        swr->clearHeld = clearTaken; // nothing drawn: held as before
+        return;
+    }
     
     // A fill of the whole main buffer. While the buffer is known to hold one
     // colour, the fill turns it into one other colour that can be worked out
@@ -1664,20 +1696,42 @@ void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2
                        swr->portX == 0 && swr->portY == 0 && swr->maxX >= swr->mainWidth && swr->maxY >= swr->mainHeight &&
                        x1i <= 0 && y1i <= 0 && x1i + xd >= swr->mainWidth && y1i + yd + 1 >= swr->mainHeight;
     bool opaque = alphaInt > 253;
+    // The result is itself held back as a clear (swrClearSettle) when the
+    // buffer is exactly what a clear covers: a room's tiles tend to follow.
+    bool holdable = swr->fbPitch == swr->mainWidth;
+    if (clearTaken && !holdable) {
+        swr->clearHeld = true;
+        swrClearSettle(swr);
+        clearTaken = false;
+    }
 #ifdef SW_HAS_PREMUL_BLEND
     if (wholeBuffer && swr->uniformKept) {
         uintpixel_t result = opaque ? pxcolor
             : swrBlendPremultiplied(swr->uniformColor, swrSpreadRedBlue(pxcolor) * (uint32_t) alphaInt,
                                     swrGreen(pxcolor) * (uint32_t) alphaInt, (uint32_t) (256 - alphaInt));
-        if (result != swr->uniformColor) {
+        if (holdable && (clearTaken || result != swr->uniformColor)) {
+            swr->clearHeld = true;
+            swr->clearHeldColor = result;
+        } else if (result != swr->uniformColor) {
             for (int y = 0; y < swr->mainHeight; y++)
                 swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->mainWidth, result);
-            swr->uniformColor = result;
         }
+        swr->uniformColor = result;
         swr->uniformValid = true;
         return;
     }
 #endif
+    if (clearTaken) {
+        swr->clearHeld = true;
+        swrClearSettle(swr);
+    }
+    if (wholeBuffer && opaque && holdable) {
+        swr->clearHeld = true;
+        swr->clearHeldColor = pxcolor;
+        swr->uniformValid = true;
+        swr->uniformColor = pxcolor;
+        return;
+    }
     
     for (int y = 0; y <= yd; y++) {
         swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor, pxcolor, alphaInt);
