@@ -43,7 +43,9 @@ device):
 | `UT_SCRIPT="30:Z,700:R*400"` | press keys on given frames; `*N` holds for N frames. Keys: U D L R, Z X C, E (Enter) |
 | `UT_SEED=n` | fix the game's random seed |
 | `UT_UNCAPPED=1` | no frame pacing (runs as fast as the display flip allows) |
-| `UT_SMOOTH=1` | render 640x480 rooms at 320x240 with 2x2 averaging |
+| `UT_SMOOTH=1` | speed mode, as L sets it: 640x480 rooms at 320x240 with 2x2 averaging, faint mirrored layers left out. (Frame skipping needs frame pacing, so it never happens with `UT_UNCAPPED`.) |
+| `UT_SKIP=n` | draw only every nth frame, whatever the mode. A frame captured this way must be identical to one from a run without it: a difference means something drawn on a skipped frame mattered to a later one |
+| `UT_MIRROR_FAINT=a`, `UT_NO_MIRROR=1` | fix the faint-layer threshold (of 256) whatever the mode; draw mirrored layers the ordinary way |
 | `UT_OVERLAY=1` | turn on the frame-time and log overlays |
 | `UT_DEBUG=1` | debug mode, as holding Select for two seconds sets it on the device: the Accuracy/Speed mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
 | `UT_AUDIO_DUMP=f.raw` | write the mixed output, 48 kHz stereo s16le |
@@ -119,7 +121,10 @@ scripts/ut-frames.sh -e UT_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
 2. Make the change, rebuild, dump the same frames with a different prefix.
 3. `ppmtool.py cmp` each pair. An optimisation should report `identical`.
    For an intended visual change, look at the PNG and describe what changed.
-4. Report exactly which frames you compared.
+4. For a renderer change, repeat one capture with `-e UT_SKIP=2`: it must
+   match the unskipped one (frame skipping relies on a skipped frame
+   leaving nothing behind that a later frame needs).
+5. Report exactly which frames you compared.
 
 For audio, compare a new `UT_AUDIO_DUMP` against an earlier one. Captures
 can start a few dozen samples apart, so search for the shift that makes

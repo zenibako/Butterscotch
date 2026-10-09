@@ -85,7 +85,10 @@ int main(int argc, char **argv) {
     /* UT_NO_MIRROR=1 draws mirrored layers the ordinary way; UT_MIRROR_FAINT=<alpha of 256> sets how faint
      * a mirrored layer has to be to be left out (4 leaves none out). For comparing frames. */
     if (getenv("UT_NO_MIRROR") != NULL) swrMirrorMerge = false;
-    if (getenv("UT_MIRROR_FAINT") != NULL) swrMirrorFaintAlpha = atoi(getenv("UT_MIRROR_FAINT"));
+    if (getenv("UT_MIRROR_FAINT") != NULL) utPlatformSetMirrorFaint(atoi(getenv("UT_MIRROR_FAINT")));
+    /* UT_SKIP=<n> draws only every nth frame, to check that a skipped frame leaves the game where a drawn
+     * one would. */
+    if (getenv("UT_SKIP") != NULL) utPlatformSetForcedSkip(atoi(getenv("UT_SKIP")));
     if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugMode(true);
     /* UT_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report Select + X gives
      * on the device). */

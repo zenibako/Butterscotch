@@ -207,11 +207,24 @@ keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
 **Overlays** (only in debug mode: hold Select for two seconds; ask the
-user to switch it on first): Select shows three numbers (average
-work, worst work, worst frame period over 30 frames, in ms). R shows the
-last log lines over the game. L toggles crisp/smoothed 640x480 rooms. The
-log overlay itself costs a lot of frame time, so read the numbers with it
-off.
+user to switch it on first): Select shows four numbers over 30 frames
+(average work, worst work and worst frame period in ms, then frames
+skipped). R shows the last log lines over the game. The log overlay itself
+costs a lot of frame time, so read the numbers with it off.
+
+**L, speed or accuracy.** Always ask which the user was in; numbers from
+the two are not comparable. Speed does three things: 640x480 rooms at
+320x240 smoothed, faint mirrored blend layers left out
+(`swrMirrorFaintAlpha` 8, against 0 in accuracy), and frame skipping. With
+skipping on, "average work" falls because skipped frames are cheap, and
+the worst period can go under 33 (a frame shortened to pay back time), so
+judge a scene in speed mode by the skipped count: 0 means it holds full
+speed drawn, 15 means every other frame is being dropped. To measure what
+a scene costs to draw, use accuracy mode or the benchmark, which never
+skips. A new fidelity-for-speed trade-off belongs under this toggle (see
+the comment above `decideFrameSkip` in `platform/of_platform.c`), not
+behind a new button; one that cannot be switched at run time (colour
+depth, mono audio, float reals) is a known difference for the README.
 
 **Log lines worth knowing:** every line carries seconds since start.
 `DataWin: NAME, n KB` marks each chunk as loading starts on it.

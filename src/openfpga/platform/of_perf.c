@@ -2,11 +2,12 @@
  * Frame-time overlay (Select) and log overlay (R), both in debug mode, and
  * the word that shows which way L's speed/accuracy toggle is set.
  *
- * Shows three numbers in the top-left corner, in milliseconds, over the last
- * 30 frames:
+ * Shows four numbers in the top-left corner over the last 30 frames, the
+ * first three in milliseconds:
  *   average work time (frame period minus time spent sleeping for pacing)
  *   worst work time
  *   worst frame period (33 at full speed for a 30 fps game)
+ *   frames skipped (speed mode's frame skipping; 0 in accuracy mode)
  */
 
 #include "of_perf.h"
@@ -29,6 +30,7 @@ static uint64_t g_sleepNanos = 0;
 static unsigned g_worstWork = 0, g_worstPeriod = 0, g_totalWork = 0;
 static unsigned g_shownWork = 0, g_shownPeriod = 0, g_shownAverage = 0;
 static int g_count = 0;
+static unsigned g_skipped = 0, g_shownSkipped = 0;
 static uint64_t g_loadNanos[UT_LOAD_KINDS];
 static uint64_t g_phaseNanos[UT_PHASES];
 static uint64_t g_drawNanos[UT_DRAW_KINDS];
@@ -242,6 +244,7 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
      * and is reported with the next frame. */
     utPerfPhase(UT_PHASE_OUT);
     uint64_t now = nowNanos();
+    if (fb == NULL) g_skipped++;
     if (g_lastFrame != 0) {
         uint64_t period = now - g_lastFrame;
         uint64_t work = period > g_sleepNanos ? period - g_sleepNanos : 0;
@@ -255,6 +258,8 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
             g_shownAverage = g_totalWork / UT_PERF_WINDOW;
             g_shownWork = g_worstWork;
             g_shownPeriod = g_worstPeriod;
+            g_shownSkipped = g_skipped;
+            g_skipped = 0;
             g_worstWork = g_worstPeriod = g_totalWork = 0;
             g_count = 0;
         }
@@ -262,9 +267,11 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
     g_lastFrame = now;
     g_sleepNanos = 0;
 
+    if (fb == NULL) return; /* a skipped frame: counted, nothing to draw on */
     if (g_logEnabled) drawLog(fb, width, height);
-    if (!g_enabled || width < 96 || height < 16) return;
+    if (!g_enabled || width < 128 || height < 16) return;
     int x = drawNumber(fb, width, 2, 2, g_shownAverage);
     x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownWork);
-    drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownPeriod);
+    x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownPeriod);
+    drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownSkipped);
 }

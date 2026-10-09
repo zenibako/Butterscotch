@@ -81,9 +81,12 @@ battle. Fog (the hit flash) is not implemented in the software renderer.
 ## Controls
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
-Start = Enter. L is "Toggle speed/accuracy": it switches 640x480 rooms
-between native resolution (accuracy) and smoothed 320x240 (speed), and shows
-the new setting in the top right corner for two seconds.
+Start = Enter. L is "Toggle speed/accuracy" and shows the new setting in
+the top right corner for two seconds. Accuracy draws everything the game
+asks for. Speed gives up three things for time: 640x480 rooms are drawn at
+320x240 and smoothed (see Resolution), blend layers too faint to change a
+16-bit colour by more than one step are left out, and frames are skipped
+when the game is running behind (see Frame skipping).
 
 ### Debug mode
 
@@ -95,13 +98,14 @@ again at the next launch. It is not in the Pocket's core menu because the
 hardware gives a core no menu variables of its own; the Pocket's controls
 screen names the hold on Select instead. With it on:
 
-- Select toggles the frame-time overlay: three numbers in milliseconds over
-  the last 30 frames (average work, worst work, worst frame period; 33 means
-  full speed).
+- Select toggles the frame-time overlay: four numbers over the last 30
+  frames. The first three are milliseconds (average work, worst work, worst
+  frame period; 33 means full speed); the fourth is how many of the 30
+  frames were skipped, which is always 0 in accuracy mode.
 - R shows the last log lines over the game. The log is kept whether or not
   debug mode is on, so it can be switched on after a hitch to read it.
-- Battle and menu rooms keep "Accuracy" or "Speed" in the top right corner,
-  the way L's toggle is set (native 640x480, or smoothed 320x240).
+- "Accuracy" or "Speed" stays in the top right corner, the way L's toggle
+  is set.
 - Butterscotch's own debug hotkeys are reached with Select held, since the
   Pocket has no keyboard: Select + Right/Left goes to the next/previous
   room, Select + Start pauses, Select + A steps one frame while paused, and
@@ -132,6 +136,19 @@ L switches to the alternative: every room at 320x240, with the renderer
 averaging each 2x2 block of texels when it shrinks a 640x480 screen. Small
 text is slightly soft but readable, and those screens cost about a quarter
 of the pixels.
+
+## Frame skipping
+
+In accuracy mode a scene that cannot be drawn in a frame's time (33 ms)
+runs the whole game slow. In speed mode the time lost to slow frames is
+kept as a debt; when it reaches half a frame, one frame is run without
+drawing to the screen and the time that saves pays the debt, so the game
+keeps its pace and loses smoothness instead. The game's Draw events still
+run on a skipped frame, because Undertale keeps logic in them; only the
+pixel work is left out, and drawing to surfaces still happens. No two
+frames in a row are skipped, and the debt is capped at one frame so a long
+stall (a room load) is not chased with a burst of fast frames. The
+benchmark never skips.
 
 ## Texture pack
 

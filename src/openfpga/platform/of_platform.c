@@ -45,6 +45,8 @@ static bool g_smoothLowres = false;
 #define UT_MODE_SHOWN_NANOS 2000000000ull
 static uint64_t g_modeShownUntil = 0;
 extern bool swrSmoothMinify; /* butterscotch/src/sw/sw_drawing.c */
+extern bool swrSkipFrame;
+extern int swrMirrorFaintAlpha;
 static int g_modeW = 0; /* 0 until the first frame sets a mode */
 static int g_modeH = 0;
 static int g_modeStride = 0; /* bytes per row of the display surface */
@@ -168,6 +170,66 @@ void utPlatformSetHiresAllowed(bool allowed) {
     g_hiresAvailable = allowed;
 }
 
+static int32_t visibleWidth(Runner *runner);
+
+/* L's two settings. Accuracy draws everything as the game asks. Speed gives
+ * up three things for time:
+ *   - 640x480 rooms are drawn at 320x240 with 2x2 averaging;
+ *   - mirrored blend layers too faint to move a 16-bit channel by more than
+ *     one step are left out (swrMirrorFaintAlpha);
+ *   - frames are skipped when the game is running behind (below).
+ *
+ * Frame skipping. Without it a scene that cannot be drawn in a frame's time
+ * runs the whole game slow. With it, time lost to slow frames is kept as a
+ * debt; once that reaches half a frame, one frame is run without drawing to
+ * the screen (swrSkipFrame) and the time it saves pays the debt, by shortening
+ * the wait at the end of the frame. The game keeps its pace and loses
+ * smoothness instead. The debt is capped at one frame so a long stall (a room
+ * load) is not chased with a burst of fast frames, and no two frames in a row
+ * are skipped. */
+#define UT_SPEED_FAINT_ALPHA 8
+#define UT_SKIP_DEBT_NANOS 16000000ull
+#define UT_SKIP_DEBT_CAP_NANOS 33000000ull
+static uint64_t g_debtNanos = 0;
+static bool g_skipThisFrame = false;
+static int g_faintOverride = -1;
+static int g_forceSkip = 0;
+#ifdef OF_PC
+static int g_dumpFrame = 0;
+static int g_dumpTarget = -2;
+#endif
+
+/* Desktop test aids: a fixed threshold whatever L says, and skipping all but
+ * every nth frame whatever the clock says. */
+void utPlatformSetMirrorFaint(int alpha) {
+    g_faintOverride = alpha;
+}
+
+void utPlatformSetForcedSkip(int every) {
+    g_forceSkip = every;
+}
+
+static void decideFrameSkip(void) {
+    static bool lastSkipped = false;
+    static int32_t lastShown = 0;
+    static int frame = 0;
+    frame++;
+    int32_t shown = visibleWidth(g_runner);
+    bool skip = g_smoothLowres && !g_uncapped && !lastSkipped && g_debtNanos >= UT_SKIP_DEBT_NANOS;
+    if (g_forceSkip > 0) skip = frame % g_forceSkip != 0;
+    /* Not across a change of picture size (the display mode follows the frame
+     * that is drawn), not while paused or about to be (that frame is the one
+     * left on screen), and not before anything has been shown. */
+    if (shown != lastShown || g_nextFb == NULL || g_runner == NULL || g_runner->paused || of_btn(OF_BTN_SELECT)) skip = false;
+#ifdef OF_PC
+    if (g_dumpFrame == g_dumpTarget) skip = false;
+#endif
+    lastShown = shown;
+    lastSkipped = skip;
+    g_skipThisFrame = skip;
+    swrSkipFrame = skip;
+}
+
 void utPlatformSetUncapped(bool uncapped) {
     g_uncapped = uncapped;
 }
@@ -225,6 +287,7 @@ bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
     }
     bool hires = g_hiresAvailable && !g_smoothLowres && shown > UT_SCREEN_W;
     swrSmoothMinify = g_smoothLowres;
+    swrMirrorFaintAlpha = g_faintOverride >= 0 ? g_faintOverride : g_smoothLowres ? UT_SPEED_FAINT_ALPHA : 0;
     *outW = hires ? UT_HIRES_W : UT_SCREEN_W;
     *outH = hires ? UT_HIRES_H : UT_SCREEN_H;
     return true;
@@ -318,29 +381,46 @@ static void writeFrameDump(void) {
 
 /* UT_DUMP_EVERY=<n> also writes every nth frame on the way there, to
  * <UT_DUMP_DIR>/f<frame>.ppm, to follow a long scripted run. */
-static void dumpFrameIfRequested(void) {
-    static int frame = 0;
-    static int target = -2;
+static void dumpFrameIfRequested(bool drawn) {
     static int every = 0;
-    if (target == -2) {
+    if (g_dumpTarget == -2) {
         const char *env = getenv("UT_DUMP_FRAME");
-        target = env != NULL ? atoi(env) : -1;
+        g_dumpTarget = env != NULL ? atoi(env) : -1;
         env = getenv("UT_DUMP_EVERY");
         every = env != NULL ? atoi(env) : 0;
     }
+    /* A skipped frame counts but has no picture. */
+    if (!drawn) {
+        g_dumpFrame++;
+        return;
+    }
+    int frame = g_dumpFrame;
+    int target = g_dumpTarget;
     if (every > 0 && frame > 0 && frame % every == 0) {
         const char *dir = getenv("UT_DUMP_DIR");
         char path[512];
         snprintf(path, sizeof(path), "%s/f%06d.ppm", dir != NULL ? dir : ".", frame);
         writeFrameTo(path, false);
     }
-    if (target < 0 || frame++ != target) return;
+    g_dumpFrame++;
+    if (target < 0 || frame != target) return;
     writeFrameDump();
 }
 #endif
 
 void platformSwapBuffers(void) {
     if (g_nextFb == NULL) return;
+    if (g_skipThisFrame) {
+        /* Nothing was drawn: the frame is counted and the last picture stays up. */
+        scriptProfileFrame();
+        utPerfFrame(NULL, 0, 0);
+        utBenchFrame();
+#ifdef OF_PC
+        dumpFrameIfRequested(false);
+#endif
+        utPerfPhase(UT_PHASE_OTHER);
+        return;
+    }
 #ifdef OF_PC
     /* UT_OVERLAY=1 turns both overlays on, to check them in frame dumps. */
     static bool overlaysChecked = false;
@@ -371,12 +451,12 @@ void platformSwapBuffers(void) {
         utPerfDrawMode(g_nextFb, g_nextW, g_nextH, text);
     } else if (nowNanos() < g_noticeUntil) {
         utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_notice);
-    } else if (nowNanos() < g_modeShownUntil || (g_debugMode && visibleWidth(g_runner) > UT_SCREEN_W)) {
+    } else if (nowNanos() < g_modeShownUntil || g_debugMode) {
         utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_smoothLowres ? "Speed" : "Accuracy");
     }
     utBenchFrame();
 #ifdef OF_PC
-    dumpFrameIfRequested();
+    dumpFrameIfRequested(true);
 #endif
 
     if (!g_showingFramebuffer) {
@@ -559,9 +639,10 @@ bool platformHandleEvents(void) {
     if (of_btn_pressed(OF_BTN_L1)) {
         g_smoothLowres = !g_smoothLowres;
         g_modeShownUntil = nowNanos() + UT_MODE_SHOWN_NANOS;
-        logInfo("Video: 640x480 rooms drawn at %s\n", g_smoothLowres ? "320x240, smoothed (speed)" : "640x480 (accuracy)");
+        logInfo("Video: %s\n", g_smoothLowres ? "speed (640x480 rooms at 320x240, faint layers left out, frame skipping)" : "accuracy");
     }
     runInputScript();
+    decideFrameSkip();
     if (g_runner == NULL) return false;
     if (g_profileRequested) {
         g_profileRequested = false;
@@ -602,6 +683,16 @@ bool platformHandleEvents(void) {
 void platformSleepUntil(uint64_t time) {
     if (g_uncapped) return;
     uint64_t start = nowNanos();
+    if (!g_smoothLowres) {
+        g_debtNanos = 0;
+    } else if (start > time) {
+        g_debtNanos += start - time;
+        if (g_debtNanos > UT_SKIP_DEBT_CAP_NANOS) g_debtNanos = UT_SKIP_DEBT_CAP_NANOS;
+    } else {
+        uint64_t paid = time - start < g_debtNanos ? time - start : g_debtNanos;
+        time -= paid;
+        g_debtNanos -= paid;
+    }
     int64_t remaining = (int64_t) time - (int64_t) start;
     if (remaining > 2000000)
         usleep((useconds_t) ((remaining - 1000000) / 1000));

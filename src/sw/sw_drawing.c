@@ -24,6 +24,9 @@ bool swrSmoothMinify = false;
 // Mirrored layers (see swrMirrorFlush). Layers fainter than swrMirrorFaintAlpha
 // (of 256) are left out: at 16-bit colour they move a channel by one step at most.
 bool swrMirrorMerge = true;
+
+// See sw_drawing.h.
+bool swrSkipFrame = false;
 int swrMirrorFaintAlpha = 8;
 
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)

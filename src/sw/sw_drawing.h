@@ -10,6 +10,13 @@ enum {
 bool swrSwitchToSurface(Renderer* renderer, int32_t targetSurfaceId, bool restoreOldView);
 // When true, sprites drawn at roughly half size are box-filtered instead of point-sampled.
 extern bool swrSmoothMinify;
+// Frame skipping: while true, nothing is drawn to the screen. The game's Draw
+// events still run (games keep logic in them), and drawing to surfaces still
+// happens because a surface outlives the frame; only the pixel work for the
+// screen itself is left out. The platform sets it before a frame it will not
+// present and must not change it between beginFrame and endFrameEnd.
+extern bool swrSkipFrame;
+#define SWR_SKIPPED(swr) (swrSkipFrame && !(swr)->drawingToSurface)
 extern bool swrMirrorMerge;
 extern int swrMirrorFaintAlpha;
 

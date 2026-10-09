@@ -29,5 +29,7 @@ void utPlatformSetDebugMode(bool enabled);
 /* Turns the script profiler on from the start, reporting every `frames` frames (0: the default). */
 void utPlatformSetScriptProfile(int frames);
 void utPlatformSetUncapped(bool uncapped);
+void utPlatformSetMirrorFaint(int alpha);
+void utPlatformSetForcedSkip(int every);
 
 #endif /* UT_BENCH_H */

@@ -179,6 +179,7 @@ static void SWRenderer_endFrameEnd(Renderer* renderer)
 #endif
     
     // Nothing cleared the frame itself: do it now rather than present stale pixels.
+    if (swrSkipFrame) swr->pendingClear = false;
     swrFlushPendingClear(swr);
     
     platformSetNextFramebuffer(swr->fb, swr->width, swr->height, PIXEL_SIZE);
@@ -305,6 +306,7 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
                                   float originX, float originY, float xscale, float yscale,
                                   float angleDeg, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dwin = renderer->dataWin;
 
@@ -366,6 +368,7 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
                                       float x, float y, float xscale, float yscale, float angleDeg,
                                       float pivotX, float pivotY, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     // The interface allows fractional source rectangles; this renderer samples whole texels.
     int32_t srcOffX = (int32_t) srcOffXf, srcOffY = (int32_t) srcOffYf, srcW = (int32_t) srcWf, srcH = (int32_t) srcHf;
     swrOverlayFlush((SWRenderer*) renderer);
@@ -423,6 +426,7 @@ static void SWRenderer_drawSpritePos(Renderer* renderer, int32_t tpagIndex,
                                      float x1, float y1, float x2, float y2,
                                      float x3, float y3, float x4, float y4, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     // TODO: Implement this properly.  (I won't in this PR)
     //
@@ -460,6 +464,7 @@ static void SWRenderer_drawSpritePos(Renderer* renderer, int32_t tpagIndex,
 static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2,
                                      uint32_t color, float alpha, bool outline)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     uintpixel_t pxcolor = swrConvertPixel(color);
     
@@ -473,6 +478,7 @@ static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1
                                           uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4,
                                           float alpha, bool outline)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     uintpixel_t pxcolor1 = swrConvertPixel(color1);
     uintpixel_t pxcolor2 = swrConvertPixel(color2);
@@ -488,6 +494,7 @@ static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1
 static void SWRenderer_drawLine(Renderer* renderer, float x1, float y1, float x2, float y2,
                                 float width, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     (void)renderer; (void)x1; (void)y1; (void)x2; (void)y2;
     (void)width; (void)color; (void)alpha;
@@ -504,6 +511,7 @@ static void SWRenderer_drawTriangle(Renderer* renderer,
                                     uint32_t color1, uint32_t color2, uint32_t color3,
                                     float alpha, bool outline)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     if (outline)
     {
@@ -523,6 +531,7 @@ static void SWRenderer_drawTriangle(Renderer* renderer,
 static void SWRenderer_drawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2,
                                      float width, uint32_t color1, uint32_t color2, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     swrDrawLine(renderer, x1, y1, x2, y2, width, swrConvertPixel(color1), swrConvertPixel(color2), alpha, SWR_LINE_ALIGN_CENTER);
 }
@@ -530,6 +539,7 @@ static void SWRenderer_drawLineColor(Renderer* renderer, float x1, float y1, flo
 static void SWRenderer_drawText(Renderer* renderer, const char* text, float x, float y,
                                 float xscale, float yscale, float angleDeg, float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha, lineSeparation);
@@ -540,6 +550,7 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
                                      int32_t c1, int32_t c2, int32_t c3, int32_t c4, MAYBE_UNUSED float alpha,
                                      float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     
@@ -556,6 +567,7 @@ static void SWRenderer_drawTextUI(Renderer* renderer, const char* text, float x,
                                   int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
                                   float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     
@@ -575,6 +587,7 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
                                        float xscale, float yscale, bool tileX, bool tileY,
                                        float roomW, float roomH, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dwin = renderer->dataWin;
@@ -644,6 +657,7 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
 
 static void SWRenderer_drawSurfaceTiled(Renderer* renderer, int32_t surfaceID, float x, float y, float xscale, float yscale, float roomW, float roomH, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
 
@@ -717,6 +731,7 @@ static void swrFlushPendingClear(SWRenderer* swr)
 
 static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     
@@ -987,6 +1002,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
                                    float x, float y, float xscale, float yscale, float angleDeg,
                                    uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     SWTexture* surface, localSurface;
@@ -1323,6 +1339,7 @@ static void SWRenderer_drawTiledPart(Renderer* renderer, int32_t tpagIndex,
                                      float dstX, float dstY, float dstW, float dstH,
                                      uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     UNIMP();
     (void)renderer; (void)tpagIndex;
@@ -1623,6 +1640,7 @@ static void SWRenderer_drawVertex(Renderer* renderer, float x, float y, float z,
 
 static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer, int32_t primitive, int32_t texture, int32_t offset, int32_t count)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     // TODO
     
@@ -1678,6 +1696,7 @@ static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
 
 static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
     SWRenderer* swr = (SWRenderer*) renderer;
     swrOverlayFlush(swr);
     
