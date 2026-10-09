@@ -5,6 +5,20 @@ description: Measure and diagnose performance of the Undertale port on the Analo
 
 # Performance work on the Pocket
 
+## Speed and accuracy
+
+L switches between two settings, and the core starts in **speed** (the
+desktop build starts in accuracy, because frame comparisons are made against
+what the game asks for; `UT_SMOOTH=1` gives it speed). The user's rule,
+2026-10-09: accuracy is the target. A shortcut that changes the picture or
+drops frames belongs under speed only, and whenever an optimisation brings
+accuracy up to speed's frame rate in some domain, remove speed's shortcut
+there so the two settings stop differing in it. Before adding a new
+speed-only shortcut, look for an exact optimisation first; after an exact
+one lands, check which speed shortcuts it has made unnecessary. `--bench`
+measures accuracy and `--bench-smooth` speed, so the pair shows where the
+two have reached parity.
+
 ## Measure first; this project has paid for guessing
 
 During the port, three confident explanations for a slow load were each

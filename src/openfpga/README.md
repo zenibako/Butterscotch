@@ -99,8 +99,12 @@ battle. Fog (the hit flash) is not implemented in the software renderer.
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
 Start = Enter. L is "Toggle speed/accuracy" and shows the new setting in
-the top right corner for two seconds. Accuracy draws everything the game
-asks for. Speed gives up three things for time: 640x480 rooms are drawn at
+the top right corner for two seconds. The core starts in speed (the desktop
+build in accuracy, since frames are compared against what the game asks
+for). Accuracy is the target: when an optimisation brings accuracy up to
+speed's frame rate somewhere, the shortcut speed takes there is removed, so
+the two differ only where they still have to. Accuracy draws everything the
+game asks for. Speed gives up these for time: 640x480 rooms are drawn at
 320x240 and smoothed (see Resolution), blend layers too faint to change a
 16-bit colour by more than one step are left out, and frames are skipped
 when the game is running behind (see Frame skipping).

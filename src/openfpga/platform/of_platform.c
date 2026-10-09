@@ -39,9 +39,18 @@ static bool g_showingFramebuffer = false;
 static const char *g_inputScript = NULL;
 static bool g_uncapped = false;
 static bool g_hiresAvailable = true;
-/* Alternative to 640x480: keep every room at 320x240 and let the renderer
- * average 2x2 texels when it shrinks. Faster, slightly soft small text. */
+/* L's setting: true is speed, false accuracy (see the list of what speed
+ * gives up further down). Speed is what the player starts in. Accuracy is the
+ * target: wherever an optimisation brings accuracy up to speed's frame rate,
+ * the shortcut speed takes there should go, so that the two differ only
+ * where they still have to. The desktop build starts in accuracy instead,
+ * because frame comparisons are made against what the game asks for;
+ * UT_SMOOTH=1 gives it speed. */
+#ifdef OF_PC
 static bool g_smoothLowres = false;
+#else
+static bool g_smoothLowres = true;
+#endif
 #define UT_MODE_SHOWN_NANOS 2000000000ull
 static uint64_t g_modeShownUntil = 0;
 extern bool swrSmoothMinify; /* butterscotch/src/sw/sw_drawing.c */

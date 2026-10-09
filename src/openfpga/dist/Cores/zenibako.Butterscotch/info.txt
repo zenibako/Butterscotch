@@ -19,6 +19,7 @@ Controls
   B        Cancel
   X or Y   Menu (In-game)
   L        Toggle speed/accuracy
+           (starts in speed)
 
 Debug mode (hold Select 2 s: on/off)
   Select      Frame-time overlay

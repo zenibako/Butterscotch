@@ -64,16 +64,17 @@ int main(int argc, char **argv) {
     args.renderer = SOFTWARE;
     args.dataWinPath = UT_DATA_WIN_NAME;
     for (int i = 0; i < argc; i++) {
-        /* --bench-lowres keeps every room at 320x240 with plain point
-         * sampling, for bitstreams whose 640x480 mode misbehaves;
-         * --bench-smooth does the same with 2x2 averaging. */
+        /* --bench measures accuracy mode and --bench-smooth speed mode,
+         * whichever the player would start in. --bench-lowres keeps every
+         * room at 320x240 with plain point sampling, for bitstreams whose
+         * 640x480 mode misbehaves. */
         bool lowres = strcmp(argv[i], "--bench-lowres") == 0;
         bool smooth = strcmp(argv[i], "--bench-smooth") == 0;
         if (lowres || smooth || strcmp(argv[i], "--bench") == 0) {
             args.seed = 7;
             args.hasSeed = true;
+            utPlatformSetSmoothLowres(smooth);
             if (lowres) utPlatformSetHiresAllowed(false);
-            if (smooth) utPlatformSetSmoothLowres(true);
             utBenchStart();
         }
         if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugMode(true);
