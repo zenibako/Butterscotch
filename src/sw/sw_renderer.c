@@ -1714,7 +1714,7 @@ static uint64_t swrProfInner = 0;
 // game that moves, adds, hides or recolours tiles just gets a new picture.
 #define SWR_TILE_RUN_ENTRIES 4
 #define SWR_TILE_RUN_MIN_TILES 16
-#define SWR_TILE_RUN_MAX_PIXELS (1024 * 1024)
+#define SWR_TILE_RUN_MAX_PIXELS (2 * 1024 * 1024)
 #define SWR_TILE_RUN_MAX_SIDE 4096
 #define SWR_TILE_RUN_IDLE_FRAMES 300
 
@@ -1724,11 +1724,15 @@ static uint64_t swrProfInner = 0;
 #define SWR_TILE_RUN_BLOCK 16
 enum { SWR_BLOCK_EMPTY, SWR_BLOCK_SOLID, SWR_BLOCK_MIXED };
 
+// A picture is in the pixels the room is drawn in: room pixels, or every
+// second one (shift 1) when the room is drawn at half size. Its place and
+// size are in those units, and it starts on a block boundary of them.
 typedef struct {
     uint64_t key;
     uintpixel_t* pixels;    // NULL when the entry is free
     uint8_t* blocks;        // one SWR_BLOCK_* per block, row by row; lives in the same allocation as pixels
     int x, y, width, height;
+    int shift;
     uint32_t lastUsedFrame;
 } SWTileRun;
 
@@ -1744,41 +1748,87 @@ static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES];
 static int swrPendingCount = 0;
 static SWRenderer* swrPendingOwner = NULL;
 
-static int swrFloorToBlock(int v)
+// The same pictures held together frame after frame are flattened into one,
+// so that the screen is gone over once and not once per layer. An entry with
+// a key and no pixels is a set seen once, to be flattened if it comes again.
+#define SWR_TILE_FLAT_ENTRIES 2
+#define SWR_TILE_FLAT_RECENT 8 // frames; more than one, since a skipped frame draws nothing
+static SWTileRun swrFlatRuns[SWR_TILE_FLAT_ENTRIES];
+
+static int swrFloorToStep(int v, int step)
 {
-    int r = v % SWR_TILE_RUN_BLOCK;
-    return r < 0 ? v - r - SWR_TILE_RUN_BLOCK : v - r;
+    int r = v % step;
+    return r < 0 ? v - r - step : v - r;
 }
 
-static uint8_t swrRunBlockKind(const SWTileRun* run, int roomX, int roomY)
+static uint8_t swrRunBlockKind(const SWTileRun* run, int unitX, int unitY)
 {
-    int bx = (roomX - run->x) / SWR_TILE_RUN_BLOCK, by = (roomY - run->y) / SWR_TILE_RUN_BLOCK;
-    if (roomX < run->x || roomY < run->y || roomX >= run->x + run->width || roomY >= run->y + run->height) return SWR_BLOCK_EMPTY;
+    int bx = (unitX - run->x) / SWR_TILE_RUN_BLOCK, by = (unitY - run->y) / SWR_TILE_RUN_BLOCK;
+    if (unitX < run->x || unitY < run->y || unitX >= run->x + run->width || unitY >= run->y + run->height) return SWR_BLOCK_EMPTY;
     return run->blocks[by * ((run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK) + bx];
 }
 
-static void swrTileRunsDrawPending(SWRenderer* swr)
+static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
 {
-    // The room rectangle the port shows (the scale is 1 for a cached run), block by block.
-    int roomLeft = swr->viewX, roomTop = swr->viewY;
-    int roomRight = roomLeft + (swr->maxX - swr->portX), roomBottom = roomTop + (swr->maxY - swr->portY);
-    for (int by = swrFloorToBlock(roomTop); by < roomBottom; by += SWR_TILE_RUN_BLOCK)
+    const uint8_t* at = (const uint8_t*) data;
+    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * 1099511628211ull;
+    return hash;
+}
+
+// Marks each block of a picture empty, solid or mixed.
+static void swrRunClassify(SWTileRun* run)
+{
+    int blocksX = (run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (run->height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    for (int by = 0; by < blocksY; by++) {
+        for (int bx = 0; bx < blocksX; bx++) {
+            int x1 = bx * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK, y1 = by * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK;
+            if (x1 > run->width) x1 = run->width;
+            if (y1 > run->height) y1 = run->height;
+            int opaque = 0, total = 0;
+            for (int y = by * SWR_TILE_RUN_BLOCK; y < y1; y++) {
+                const uintpixel_t* row = &run->pixels[y * run->width];
+                for (int x = bx * SWR_TILE_RUN_BLOCK; x < x1; x++, total++) opaque += swrIsOpaque(row[x]) ? 1 : 0;
+            }
+            run->blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : opaque == total ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
+        }
+    }
+}
+
+// Allocates a picture's pixels (cleared) and block marks in one piece.
+static bool swrRunAllocate(SWTileRun* run, int width, int height)
+{
+    int blocksX = (width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    size_t pixelBytes = (size_t) width * height * sizeof(uintpixel_t);
+    uintpixel_t* pixels = (uintpixel_t*) calloc(pixelBytes + (size_t) blocksX * blocksY, 1);
+    if (pixels == NULL) return false;
+    run->pixels = pixels;
+    run->blocks = (uint8_t*) pixels + pixelBytes;
+    run->width = width; run->height = height;
+    return true;
+}
+
+// Draws pictures, bottom first, onto pixels whose top left is at (left, top)
+// in the pictures' units and that are width by height, block by block.
+static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixels, int pitch, int left, int top, int width, int height)
+{
+    int right = left + width, bottom = top + height;
+    for (int by = swrFloorToStep(top, SWR_TILE_RUN_BLOCK); by < bottom; by += SWR_TILE_RUN_BLOCK)
     {
-        for (int bx = swrFloorToBlock(roomLeft); bx < roomRight; bx += SWR_TILE_RUN_BLOCK)
+        for (int bx = swrFloorToStep(left, SWR_TILE_RUN_BLOCK); bx < right; bx += SWR_TILE_RUN_BLOCK)
         {
             int first = 0;
-            for (int i = swrPendingCount - 1; i > 0; i--) {
-                if (swrRunBlockKind(swrPendingRuns[i], bx, by) == SWR_BLOCK_SOLID) { first = i; break; }
+            for (int i = count - 1; i > 0; i--) {
+                if (swrRunBlockKind(runs[i], bx, by) == SWR_BLOCK_SOLID) { first = i; break; }
             }
-            for (int i = first; i < swrPendingCount; i++)
+            for (int i = first; i < count; i++)
             {
-                const SWTileRun* run = swrPendingRuns[i];
+                const SWTileRun* run = runs[i];
                 uint8_t kind = swrRunBlockKind(run, bx, by);
                 if (kind == SWR_BLOCK_EMPTY) continue;
                 
-                // The block, cut to the picture and to the port, in room coordinates.
-                int x0 = bx < roomLeft ? roomLeft : bx, x1 = bx + SWR_TILE_RUN_BLOCK > roomRight ? roomRight : bx + SWR_TILE_RUN_BLOCK;
-                int y0 = by < roomTop ? roomTop : by, y1 = by + SWR_TILE_RUN_BLOCK > roomBottom ? roomBottom : by + SWR_TILE_RUN_BLOCK;
+                // The block, cut to the picture and to the target.
+                int x0 = bx < left ? left : bx, x1 = bx + SWR_TILE_RUN_BLOCK > right ? right : bx + SWR_TILE_RUN_BLOCK;
+                int y0 = by < top ? top : by, y1 = by + SWR_TILE_RUN_BLOCK > bottom ? bottom : by + SWR_TILE_RUN_BLOCK;
                 if (x1 > run->x + run->width) x1 = run->x + run->width;
                 if (y1 > run->y + run->height) y1 = run->y + run->height;
                 if (x0 >= x1 || y0 >= y1) continue;
@@ -1786,7 +1836,7 @@ static void swrTileRunsDrawPending(SWRenderer* swr)
                 for (int y = y0; y < y1; y++)
                 {
                     const uintpixel_t* src = &run->pixels[(y - run->y) * run->width + (x0 - run->x)];
-                    uintpixel_t* dst = &swr->fb[(y - roomTop + swr->portY) * swr->fbPitch + (x0 - roomLeft + swr->portX)];
+                    uintpixel_t* dst = &pixels[(y - top) * pitch + (x0 - left)];
                     if (kind == SWR_BLOCK_SOLID)
                         memcpy(dst, src, (size_t) (x1 - x0) * sizeof(uintpixel_t));
                     else for (int x = 0; x < x1 - x0; x++) {
@@ -1797,6 +1847,71 @@ static void swrTileRunsDrawPending(SWRenderer* swr)
             }
         }
     }
+}
+
+// The pictures being held flattened into one, or NULL: when they have not
+// been held together before, are too big together, or there is no room.
+static SWTileRun* swrPendingFlattened(SWRenderer* swr)
+{
+    uint64_t key = 14695981039346656037ull;
+    int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
+    for (int i = 0; i < swrPendingCount; i++) {
+        const SWTileRun* run = swrPendingRuns[i];
+        key = swrTileRunHash(key, &run->key, sizeof(run->key));
+        if (run->x < left) left = run->x;
+        if (run->y < top) top = run->y;
+        if (run->x + run->width > right) right = run->x + run->width;
+        if (run->y + run->height > bottom) bottom = run->y + run->height;
+    }
+    int width = right - left, height = bottom - top;
+    if (width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE || width * height > SWR_TILE_RUN_MAX_PIXELS) return NULL;
+    
+    SWTileRun* spare = NULL;
+    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++)
+    {
+        SWTileRun* entry = &swrFlatRuns[e];
+        bool recent = swr->frameCounter - entry->lastUsedFrame <= SWR_TILE_FLAT_RECENT;
+        if (entry->key == key && (entry->pixels != NULL || recent))
+        {
+            entry->lastUsedFrame = swr->frameCounter;
+            if (entry->pixels != NULL) return entry;
+            // Seen a moment ago too: worth a picture of its own.
+            if (!swrRunAllocate(entry, width, height)) return NULL;
+            entry->x = left; entry->y = top;
+            entry->shift = swrPendingRuns[0]->shift;
+            swrRunsDrawOnto(swrPendingRuns, swrPendingCount, entry->pixels, width, left, top, width, height);
+            swrRunClassify(entry);
+            return entry;
+        }
+        // One not used for a while can be given to this set.
+        if (!recent && (spare == NULL || entry->lastUsedFrame < spare->lastUsedFrame)) spare = entry;
+    }
+    if (spare != NULL) {
+        free(spare->pixels);
+        spare->pixels = NULL;
+        spare->key = key;
+        spare->lastUsedFrame = swr->frameCounter;
+    }
+    return NULL;
+}
+
+static void swrTileRunsDrawPending(SWRenderer* swr)
+{
+    // The top left of the port in the pictures' units: the view's corner, or
+    // at half size the unit that a room position of zero lands a whole number
+    // of pixels from (positions are floored, and a picture starts on an even one).
+    int shift = swrPendingRuns[0]->shift;
+    int32_t viewX = (int32_t) swr->viewX, viewY = (int32_t) swr->viewY;
+    int left = shift == 0 ? viewX : (viewX + 1) >> 1, top = shift == 0 ? viewY : (viewY + 1) >> 1;
+    uintpixel_t* target = &swr->fb[swr->portY * swr->fbPitch + swr->portX];
+    
+    SWTileRun* flat = swrPendingCount > 1 ? swrPendingFlattened(swr) : NULL;
+    if (flat != NULL) {
+        SWTileRun* const one[1] = { flat };
+        swrRunsDrawOnto(one, 1, target, swr->fbPitch, left, top, swr->maxX - swr->portX, swr->maxY - swr->portY);
+        return;
+    }
+    swrRunsDrawOnto(swrPendingRuns, swrPendingCount, target, swr->fbPitch, left, top, swr->maxX - swr->portX, swr->maxY - swr->portY);
 }
 
 // Draws the pictures being held, if any. Everything that draws comes through
@@ -1814,20 +1929,14 @@ bool swrTileRunsFree(void)
 {
     swrTileRunsFlush(NULL); // a held picture must be drawn before it goes
     bool freed = false;
-    for (int e = 0; e < SWR_TILE_RUN_ENTRIES; e++) {
-        if (swrTileRuns[e].pixels == NULL) continue;
-        free(swrTileRuns[e].pixels);
-        swrTileRuns[e].pixels = NULL;
+    for (int e = 0; e < SWR_TILE_RUN_ENTRIES + SWR_TILE_FLAT_ENTRIES; e++) {
+        SWTileRun* entry = e < SWR_TILE_RUN_ENTRIES ? &swrTileRuns[e] : &swrFlatRuns[e - SWR_TILE_RUN_ENTRIES];
+        if (entry->pixels == NULL) continue;
+        free(entry->pixels);
+        entry->pixels = NULL;
         freed = true;
     }
     return freed;
-}
-
-static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
-{
-    const uint8_t* at = (const uint8_t*) data;
-    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * 1099511628211ull;
-    return hash;
 }
 
 // Draws the run from its cached picture, building it first if need be. Returns false if the run cannot be drawn that way.
@@ -1838,21 +1947,31 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     (void) swr; (void) tiles; (void) offsets; (void) count;
     return false;
 #else
-    // The picture is in room pixels and holds no partial coverage, so it can
-    // only stand in for tiles drawn unscaled, opaque and with normal blending.
+    // The picture holds no partial coverage, so it can only stand in for
+    // tiles drawn opaque and with normal blending, and at the room's own
+    // size or at half of it.
     if (count < SWR_TILE_RUN_MIN_TILES) return false;
     if (swr->drawingToSurface || swr->blendMode != bm_normal) return false;
-    if (swr->scaleX != 1.0f || swr->scaleY != 1.0f) return false;
+    int shift;
+    if (swr->scaleX == 1.0f && swr->scaleY == 1.0f) shift = 0;
+    else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f) shift = 1;
+    else return false;
     
     uint64_t key = 14695981039346656037ull;
+    int32_t mode[2] = { shift, swrFavorSpeed ? 1 : 0 };
+    key = swrTileRunHash(key, mode, sizeof(mode));
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
     for (int32_t t = 0; t < count; t++)
     {
         const RoomTile* tile = tiles[t];
         if (tile->scaleX != 1.0f || tile->scaleY != 1.0f || tile->alpha < 1.0f) return false;
         
-        int tileLeft = swrFloor((float) tile->x + offsets[t * 2]);
-        int tileTop = swrFloor((float) tile->y + offsets[t * 2 + 1]);
+        float exactLeft = (float) tile->x + offsets[t * 2], exactTop = (float) tile->y + offsets[t * 2 + 1];
+        int tileLeft = swrFloor(exactLeft);
+        int tileTop = swrFloor(exactTop);
+        // At half size a tile lands where it would on the screen only from an
+        // even position: from an odd one it moves a pixel as the view scrolls.
+        if (shift != 0 && ((float) tileLeft != exactLeft || (float) tileTop != exactTop || ((tileLeft | tileTop) & 1) != 0)) return false;
         if (tileLeft < left) left = tileLeft;
         if (tileTop < top) top = tileTop;
         if (tileLeft + (int) tile->width > right) right = tileLeft + (int) tile->width;
@@ -1865,10 +1984,10 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         key = swrTileRunHash(key, &offsets[t * 2], 2 * sizeof(float));
     }
     
-    // The picture starts on a block boundary of the room, so that the pictures of a room share one grid of blocks.
-    left = swrFloorToBlock(left);
-    top = swrFloorToBlock(top);
-    int width = right - left, height = bottom - top;
+    // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
+    left = swrFloorToStep(left, SWR_TILE_RUN_BLOCK << shift);
+    top = swrFloorToStep(top, SWR_TILE_RUN_BLOCK << shift);
+    int width = (right - left + shift) >> shift, height = (bottom - top + shift) >> shift;
     if (width <= 0 || height <= 0 || width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE) return false;
     if (width * height > SWR_TILE_RUN_MAX_PIXELS) return false;
     
@@ -1889,27 +2008,35 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
             spare = entry;
         }
     }
+    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++) {
+        SWTileRun* entry = &swrFlatRuns[e];
+        if (entry->pixels != NULL && swr->frameCounter - entry->lastUsedFrame > SWR_TILE_RUN_IDLE_FRAMES) {
+            free(entry->pixels);
+            entry->pixels = NULL;
+        }
+    }
     
     if (run == NULL)
     {
         // An entry used this frame belongs to another run of the room being drawn; leave it be.
         if (spare->pixels != NULL && spare->lastUsedFrame == swr->frameCounter) return false;
+        
+        // Pictures being held belong on the screen, and would come out into the
+        // new one once the tiles below start drawing: let them out first. That
+        // also has to happen before one of them is given up for it.
+        swrTileRunsFlush(swr);
         free(spare->pixels);
         spare->pixels = NULL;
-        
-        int blocksX = (width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
-        size_t pixelBytes = (size_t) width * height * sizeof(uintpixel_t);
-        uintpixel_t* pixels = (uintpixel_t*) calloc(pixelBytes + (size_t) blocksX * blocksY, 1);
-        if (pixels == NULL) return false;
-        
-        // Pictures being held belong on the screen, and would come out into this
-        // one once the tiles below start drawing: let them out first.
-        swrTileRunsFlush(swr);
+        if (!swrRunAllocate(spare, width, height)) return false;
+        run = spare;
+        run->key = key;
+        run->x = left >> shift; run->y = top >> shift;
+        run->shift = shift;
         
         // Point the renderer at the picture, with a view that maps the run's
         // bounding box onto it, and draw the tiles the ordinary way.
         SWRenderer saved = *swr;
-        swr->fb = pixels;
+        swr->fb = run->pixels;
         swr->fbPitch = (uint16_t) width;
         swr->viewX = left; swr->viewY = top;
         swr->portX = 0; swr->portY = 0;
@@ -1925,32 +2052,12 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         swr->portW = saved.portW; swr->portH = saved.portH;
         swr->maxX = saved.maxX; swr->maxY = saved.maxY;
         
-        uint8_t* blocks = (uint8_t*) pixels + pixelBytes;
-        for (int by = 0; by < blocksY; by++) {
-            for (int bx = 0; bx < blocksX; bx++) {
-                int x1 = bx * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK, y1 = by * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK;
-                if (x1 > width) x1 = width;
-                if (y1 > height) y1 = height;
-                int opaque = 0, total = 0;
-                for (int y = by * SWR_TILE_RUN_BLOCK; y < y1; y++) {
-                    const uintpixel_t* row = &pixels[y * width];
-                    for (int x = bx * SWR_TILE_RUN_BLOCK; x < x1; x++, total++) opaque += swrIsOpaque(row[x]) ? 1 : 0;
-                }
-                blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : opaque == total ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
-            }
-        }
-        
-        run = spare;
-        run->key = key;
-        run->pixels = pixels;
-        run->blocks = blocks;
-        run->x = left; run->y = top;
-        run->width = width; run->height = height;
+        swrRunClassify(run);
     }
     run->lastUsedFrame = swr->frameCounter;
     
     // Held, to be drawn together with the pictures that follow it directly.
-    if (swrPendingCount == SWR_TILE_RUN_ENTRIES) swrTileRunsFlush(swr);
+    if (swrPendingCount == SWR_TILE_RUN_ENTRIES || (swrPendingCount > 0 && swrPendingRuns[0]->shift != shift)) swrTileRunsFlush(swr);
     swrPendingRuns[swrPendingCount++] = run;
     swrPendingOwner = swr;
     return true;
