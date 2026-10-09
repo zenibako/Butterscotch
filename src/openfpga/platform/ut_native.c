@@ -22,6 +22,8 @@
 #include "rvalue.h"
 #include "vm.h"
 
+#define UT_GRASS_MAX_CELLS 4096
+
 /* a < b as the VM's Cmp does it. */
 static bool lessThan(GMLReal a, GMLReal b) {
     GMLReal diff = a - b;
@@ -64,20 +66,38 @@ static bool purpleGrassDraw(VMContext *ctx) {
     GMLReal x = (GMLReal) self->x, y = (GMLReal) self->y;
     int32_t sprite = self->spriteIndex;
 
+    /* The loops' counters come out the same however many cells are drawn. */
     GMLReal i = 0, j = 0;
-    bool innerRan = false;
-    for (; lessThan(i, length); i = i + 1) {
-        innerRan = true;
-        for (j = 0; lessThan(j, height); j = j + 1) {
-            GMLReal drawY = y + (GMLReal) 40 * j;
-            GMLReal drawX = x + (GMLReal) 40 * i;
+    int32_t cols = 0, rows = 0;
+    for (; lessThan(i, length); i = i + 1) cols++;
+    bool innerRan = cols > 0;
+    if (innerRan) for (; lessThan(j, height); j = j + 1) rows++;
+
+    /* The image of each cell, in the order the script draws them; then the
+     * whole grid in one call if the renderer takes it, else cell by cell. */
+    static int32_t subimgs[UT_GRASS_MAX_CELLS];
+    bool whole = cols > 0 && rows > 0 && cols <= UT_GRASS_MAX_CELLS && rows <= UT_GRASS_MAX_CELLS &&
+                 cols * rows <= UT_GRASS_MAX_CELLS && runner->renderer->vtable->drawSpriteGrid != NULL;
+    GMLReal ci = 0;
+    for (int32_t col = 0; col < cols; col++, ci = ci + 1) {
+        GMLReal cj = 0;
+        for (int32_t row = 0; row < rows; row++, cj = cj + 1) {
             GMLReal image = index + x / (GMLReal) 320;
-            image = image + i * (GMLReal) 0.125;
-            image = image + j * (GMLReal) 0.125;
+            image = image + ci * (GMLReal) 0.125;
+            image = image + cj * (GMLReal) 0.125;
             image = image + y / (GMLReal) 320;
             int32_t subimg = (int32_t) image;
             if (0 > subimg) subimg = (int32_t) self->imageIndex; /* as draw_sprite does */
-            Renderer_drawSprite(runner->renderer, sprite, subimg, (float) drawX, (float) drawY);
+            if (whole) subimgs[col * rows + row] = subimg;
+            else Renderer_drawSprite(runner->renderer, sprite, subimg, (float) (x + (GMLReal) 40 * ci), (float) (y + (GMLReal) 40 * cj));
+        }
+    }
+    if (whole && !runner->renderer->vtable->drawSpriteGrid(runner->renderer, sprite, subimgs, cols, rows, (float) x, (float) y, 40.0f, 40.0f)) {
+        ci = 0;
+        for (int32_t col = 0; col < cols; col++, ci = ci + 1) {
+            GMLReal cj = 0;
+            for (int32_t row = 0; row < rows; row++, cj = cj + 1)
+                Renderer_drawSprite(runner->renderer, sprite, subimgs[col * rows + row], (float) (x + (GMLReal) 40 * ci), (float) (y + (GMLReal) 40 * cj));
         }
     }
     Instance_setSelfVar(self, iVar, RValue_makeReal(i));

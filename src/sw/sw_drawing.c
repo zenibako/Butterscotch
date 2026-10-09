@@ -414,7 +414,8 @@ static void swrOverlayFlushHeld(SWRenderer* swr)
 #ifdef SW_HAS_PREMUL_BLEND
     int count = swr->overlayCount;
     if (count == 0) return;
-    swrClearSettle(swr); // a clear still held is older than the stack
+    swrTileRunsFlush(swr); // tile pictures and a clear still held are older than the stack
+    swrClearSettle(swr);
     swr->overlayCount = 0;
     
     uint32_t dstalpha, srcRedBlue, srcGreen;
@@ -468,6 +469,7 @@ static void swrOverlayFlushHeld(SWRenderer* swr)
 static bool swrOverlayHold(SWRenderer* swr, int dx, int dy, int dw, int dh, SWTexture* texture,
                            int sx, int sy, int lastCol, int lastRow, uintpixel_t tintColor, int alpha)
 {
+    if (swrGridHeld()) return false; // nothing is held over a held grid (see SWRenderer_drawSpriteGrid)
     if (lastCol >= texture->width || lastRow >= texture->height) return false;
     if ((lastCol - sx + 1) * (lastRow - sy + 1) > SW_OVERLAY_MAX_SOURCE_TEXELS) return false;
     
@@ -645,7 +647,8 @@ static void swrMirrorFlush(SWRenderer* swr)
 {
     int layers = swr->mirrorLayers, stage = swr->mirrorStage;
     if (layers == 0 && stage == 0) return;
-    swrClearSettle(swr); // a clear still held is older than the layers
+    swrTileRunsFlush(swr); // tile pictures and a clear still held are older than the layers
+    swrClearSettle(swr);
     swr->mirrorLayers = 0;
     swr->mirrorStage = 0;
     swr->mirrorReplaying = true;
@@ -719,6 +722,7 @@ static void swrMirrorFlush(SWRenderer* swr)
 static bool swrMirrorHold(SWRenderer* swr, const SWSpriteCall* call, int dx, int dy, int dw, int dh,
                           bool flipX, bool flipY, int sx, int sy, int xstep, int ystep, int unit)
 {
+    if (swrGridHeld()) return false; // nothing is held over a held grid (see SWRenderer_drawSpriteGrid)
     bool eligible = swrMirrorMerge && swr->blendMode == bm_normal && swrIsPartialAlpha(call->alpha) &&
                     dw * dh >= SW_MIRROR_MIN_PIXELS && xstep <= unit && ystep <= unit;
     if (!eligible) {
@@ -826,7 +830,7 @@ void swrOverlayFlushForState(SWRenderer* swr)
 {
 #ifdef SW_HAS_PREMUL_BLEND
     swrTileRunsFlush(swr); // takes the clear along if there were pictures
-    if (swr->clearHeld && swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0) {
+    if (swr->clearHeld && !swrGridHeld() && swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0) {
         bool uniform = swr->uniformValid;
         swr->clearHeld = false;
         swrOverlayFlush(swr);
@@ -844,9 +848,13 @@ void swrOverlayFlush(SWRenderer* swr)
     // Held tile pictures are older than anything else held, so they go first,
     // and a held clear is older still: the pictures take it with them, and
     // it stays held for a run of tiles coming in to do the same.
-    if (!swr->tileRunEntering) swrTileRunsFlush(swr);
+    // A held grid lies between the two. With anything else held as well, all of it goes.
     bool othersHeld = swr->mirrorLayers != 0 || swr->mirrorStage != 0 || swr->overlayCount != 0;
-    if (!swr->tileRunEntering || othersHeld) swrClearSettle(swr);
+    if (!swr->tileRunEntering || othersHeld) {
+        swrTileRunsFlush(swr);
+        swrGridFlush(swr);
+        swrClearSettle(swr);
+    }
     if (!swr->mirrorReplaying) swrMirrorFlush(swr);
 #else
     swrClearSettle(swr);
@@ -1728,6 +1736,23 @@ void swrDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
     swrDrawLine(renderer, x1i, y2i, x2i, y2i, 1.0f, color3, color4, alpha, SWR_LINE_ALIGN_M1);
     swrDrawLine(renderer, x1i, y1i, x1i, y2i, 1.0f, color1, color3, alpha, SWR_LINE_ALIGN_P1);
     swrDrawLine(renderer, x2i, y1i, x2i, y2i, 1.0f, color2, color4, alpha, SWR_LINE_ALIGN_M1);
+}
+
+// Whether swrFillRectangle with these arguments would paint every pixel of
+// the main buffer opaquely: nothing drawn there before it can then show.
+bool swrFillCoversMain(SWRenderer* swr, float x1, float y1, float x2, float y2, float alpha)
+{
+    if (swr->fb != swr->mainFb || swr->blendMode != bm_normal || swrIntAlpha(alpha) <= 253) return false;
+    if (swr->portX != 0 || swr->portY != 0 || swr->maxX < swr->mainWidth || swr->maxY < swr->mainHeight) return false;
+    swrTransformPosIfNeeded(swr, &x1, &y1);
+    swrTransformPosIfNeeded(swr, &x2, &y2);
+    int x1i = swrFloor(x1), x2i = swrCeiling(x2), y1i = swrFloor(y1), y2i = swrCeiling(y2);
+    int xd = x2i - x1i;
+    int yd = y2i - y1i;
+    if (xd < 0) { x1i = x2i; xd = -xd; }
+    if (yd < 0) { y1i = y2i; yd = -yd; }
+    if (xd <= 0 || yd <= 0) return false;
+    return x1i <= 0 && y1i <= 0 && x1i + xd >= swr->mainWidth && y1i + yd + 1 >= swr->mainHeight;
 }
 
 void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t pxcolor, float alpha)
