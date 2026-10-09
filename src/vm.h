@@ -177,6 +177,11 @@ struct Runner;
 typedef struct VMContext VMContext;
 #endif
 
+// Stands in for a code entry (see VM_setNativeCode). Runs with the context set
+// up as for the entry; returns false to have the bytecode run after all, which
+// it may only do before changing anything.
+typedef bool (*VMNativeCode)(VMContext* ctx);
+
 // ===[ Builtin Functions Manager ]===
 #ifndef BUILTINFUNC_DEFINED
 #define BUILTINFUNC_DEFINED
@@ -288,6 +293,8 @@ struct VMContext {
     int traceBytecodeAfterFrame;
 #endif
     Profiler* profiler;
+    // Per code index: a routine that does what the entry's bytecode does, or nullptr (see VM_setNativeCode). The array itself is nullptr until one is set.
+    VMNativeCode* nativeCode;
 
 #ifdef ENABLE_VM_OPCODE_PROFILER
     bool opcodeProfilerEnabled;
@@ -344,6 +351,12 @@ void VM_copyStatic(VMContext* ctx, RValue* parentRef);
 
 // Look up the varID for a self-scoped variable name, allocating a fresh synthetic ID if absent.
 int32_t VM_getOrAllocateVarID(VMContext* ctx, const char* name);
+// A hash of a code entry's bytecode as loaded, or 0 if there is no entry of that name.
+uint64_t VM_codeHash(VMContext* ctx, const char* codeName, uint32_t* length);
+// Has `native` run in place of the named code entry, but only if the entry's
+// bytecode is exactly the one the routine was written against (its length and
+// VM_codeHash). Returns whether it was installed.
+bool VM_setNativeCode(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeCode native);
 
 // Writes to the VMContext's scriptArgs, resizing the underlying array if needed
 // The "val" will be RValue_makeIndependent(val), it won't be freed

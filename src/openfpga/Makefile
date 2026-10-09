@@ -83,7 +83,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/ut_bench.c \
-       platform/ut_strings.c platform/ut_save_fs.c \
+       platform/ut_strings.c platform/ut_save_fs.c platform/ut_native.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
        $(BS_VIDEO_SRCS) $(BS_STB_SRCS) $(BS_VENDOR_SRCS) $(BS_PHYSICS_SRCS)
 SRCS_CXX =

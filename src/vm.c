@@ -3784,9 +3784,51 @@ static uint32_t computeLocalsCount(VMContext* ctx, CodeEntry* code) {
     }
 }
 
+static int32_t findCodeIndexByName(VMContext* ctx, const char* codeName) {
+    repeat(ctx->dataWin->code.count, i) {
+        const char* name = ctx->dataWin->code.entries[i].name;
+        if (name != nullptr && strcmp(name, codeName) == 0) return (int32_t) i;
+    }
+    return -1;
+}
+
+uint64_t VM_codeHash(VMContext* ctx, const char* codeName, uint32_t* length) {
+    int32_t codeIndex = findCodeIndexByName(ctx, codeName);
+    if (0 > codeIndex) return 0;
+    CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+    const uint8_t* bytes = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase) + code->offset;
+    uint64_t hash = 14695981039346656037ull;
+    repeat(code->length, i) hash = (hash ^ bytes[i]) * 1099511628211ull;
+    if (length != nullptr) *length = code->length;
+    return hash;
+}
+
+bool VM_setNativeCode(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeCode native) {
+    uint32_t actualLength = 0;
+    uint64_t actualHash = VM_codeHash(ctx, codeName, &actualLength);
+    if (actualHash == 0 || actualLength != length || actualHash != hash) return false;
+    if (ctx->nativeCode == nullptr) ctx->nativeCode = (VMNativeCode*) safeCalloc(ctx->dataWin->code.count, sizeof(VMNativeCode));
+    ctx->nativeCode[findCodeIndexByName(ctx, codeName)] = native;
+    return true;
+}
+
 RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+
+    if (ctx->nativeCode != nullptr && ctx->nativeCode[codeIndex] != nullptr) {
+        const char* savedCodeName = ctx->currentCodeName;
+        ctx->currentCodeName = code->name;
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_enter(ctx->profiler, code->name);
+#endif
+        bool done = ctx->nativeCode[codeIndex](ctx);
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_exit(ctx->profiler);
+#endif
+        ctx->currentCodeName = savedCodeName;
+        if (done) return RValue_makeUndefined();
+    }
 
     ctx->bytecodeBase = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase);
     ctx->ip = code->offset;
@@ -4530,6 +4572,9 @@ void VM_free(VMContext* ctx) {
 
     // Reset mutable runtime state
     VM_reset(ctx);
+
+    free(ctx->nativeCode);
+    ctx->nativeCode = nullptr;
 
     // Free profiler (no-op if never enabled)
     Profiler_destroy(ctx->profiler);

@@ -20,6 +20,7 @@
 #include "runner.h"
 #include "ut_bench.h"
 #include "ut_strings.h"
+#include "ut_native.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -271,6 +272,7 @@ void platformExit(void) {
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
     utPatchStrings(runner->dataWin);
+    utNativeInstall(runner);
     runner->setCursor = NULL;
     runner->currentCursor = GML_CR_DEFAULT;
 }
