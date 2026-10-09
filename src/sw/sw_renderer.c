@@ -672,6 +672,17 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
     int viewRight = cull ? swr->viewX + (int) ((float) (swr->maxX - swr->portX) / swr->scaleX) + 2 : 0;
     int viewBottom = cull ? swr->viewY + (int) ((float) (swr->maxY - swr->portY) / swr->scaleY) + 2 : 0;
     
+    // Unscaled copies a whole number of pixels apart go down in one pass over the screen's rows.
+    if (xscale == 1.0f && yscale == 1.0f && tileW == (float) (int) tileW && tileH == (float) (int) tileH)
+    {
+        int countX = 0, countY = 0;
+        for (int dx = startX; endX > dx; dx += tileW) countX++;
+        for (int dy = startY; endY > dy; dy += tileH) countY++;
+        int firstX = (int) startX + (int) originX + sx0, firstY = (int) startY + (int) originY + sy0;
+        if (swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha))
+            return;
+    }
+    
     for (int dy = startY; endY > dy; dy += tileH) {
         int cy = dy + (int)(originY * ayScale);
         int vy0 = cy + sy0;

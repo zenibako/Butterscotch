@@ -1929,6 +1929,120 @@ void swrDrawSprite(
     );
 }
 
+// A sprite tiled over the room, unscaled, in one pass over the screen's rows.
+// Tile by tile it is a sprite draw for every copy in view, hundreds for a
+// small tile, and most of what each one costs is getting started. Here every
+// screen row takes its stretch of the tile's row (see SWTexture.rowBounds)
+// once per copy. The pixels come out as those draws leave them: the same
+// texels, from the half-size copy when the room is drawn at half size with
+// speed favoured, put down with the same arithmetic.
+//
+// The texture's part (sx, sy, sw, sh) is drawn at (firstX, firstY) in the room
+// and again every tileW and tileH, countX by countY times. Returns false,
+// having drawn nothing, when the draws would not be that simple.
+bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
+                            int firstX, int firstY, int tileW, int tileH, int countX, int countY,
+                            uint32_t color, float alphaf)
+{
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
+    (void) swr; (void) texture; (void) sx; (void) sy; (void) sw; (void) sh; (void) firstX; (void) firstY;
+    (void) tileW; (void) tileH; (void) countX; (void) countY; (void) color; (void) alphaf;
+    return false;
+#else
+    int alpha = swrIntAlpha(alphaf);
+    if (swr->blendMode != bm_normal || alpha <= 8 || !texture->immutable) return false;
+    if ((swrConvertPixel(color) & 0x7FFF) != 0x7FFF) return false; // tinted
+    if (sw <= 0 || sh <= 0 || tileW <= 0 || tileH <= 0 || countX <= 0 || countY <= 0) return false;
+    if (sx < 0 || sy < 0 || sx + sw > texture->width || sy + sh > texture->height) return false;
+    
+    // What a copy is drawn from, and how far apart the copies land on the screen.
+    const uintpixel_t* buffer;
+    const uint16_t* bounds;
+    const uint8_t* coverage = NULL;
+    int pitch, srcX, srcY, width, height, stepX, stepY;
+    if (swr->scaleX == 1.0f && swr->scaleY == 1.0f) {
+        bounds = swrRowBounds(texture);
+        buffer = texture->buffer;
+        pitch = texture->width;
+        srcX = sx; srcY = sy; width = sw; height = sh;
+        stepX = tileW; stepY = tileH;
+    } else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f && swrFavorSpeed) {
+        // Even sizes only: each copy then starts on a whole pixel, the same part of one as the last.
+        if (((sw | sh | tileW | tileH) & 1) != 0) return false;
+        if (!swrHalfTexture(texture, sx, sy)) return false;
+        if (((sx + texture->halfPhaseX) & 1) != 0 || ((sy + texture->halfPhaseY) & 1) != 0) return false;
+        int halfW = (texture->width + texture->halfPhaseX + 1) / 2, halfH = (texture->height + texture->halfPhaseY + 1) / 2;
+        bounds = texture->halfRowBounds;
+        buffer = texture->halfBuffer;
+        coverage = texture->halfCoverage;
+        pitch = halfW;
+        srcX = (sx + texture->halfPhaseX) / 2; srcY = (sy + texture->halfPhaseY) / 2;
+        width = sw / 2; height = sh / 2;
+        if (srcX + width > halfW) width = halfW - srcX;
+        if (srcY + height > halfH) height = halfH - srcY;
+        stepX = tileW / 2; stepY = tileH / 2;
+    } else {
+        return false;
+    }
+    if (bounds == NULL || width <= 0 || height <= 0 || width > stepX || height > stepY) return false;
+    
+    // Where the first copy lands, as swrDrawSprite places it.
+    float fx = (float) firstX, fy = (float) firstY;
+    swrTransformPosIfNeeded(swr, &fx, &fy);
+    int originX = swrFloor(fx), originY = swrFloor(fy);
+    int minX = swr->portX, minY = swr->portY, maxX = swr->portX + swr->portW, maxY = swr->portY + swr->portH;
+    if (maxX > swr->maxX) maxX = swr->maxX;
+    if (maxY > swr->maxY) maxY = swr->maxY;
+    
+    bool opaque = alpha > 253;
+    uint32_t dstalpha = (uint32_t) (256 - alpha);
+    for (int y = minY; y < maxY; y++)
+    {
+        int fromOrigin = y - originY;
+        if (fromOrigin < 0) continue;
+        int copyY = fromOrigin / stepY, row = fromOrigin - copyY * stepY;
+        if (copyY >= countY) break;
+        if (row >= height) continue;
+        
+        // The stretch of this row of the tile that has anything in it, in columns of the copy.
+        int from = (int) bounds[(srcY + row) * 2] - srcX, to = (int) bounds[(srcY + row) * 2 + 1] - srcX;
+        if (from < 0) from = 0;
+        if (to > width) to = width;
+        if (from >= to) continue;
+        
+        const uintpixel_t* srcline = &buffer[(srcY + row) * pitch + srcX];
+        const uint8_t* covline = coverage != NULL ? &coverage[(srcY + row) * pitch + srcX] : NULL;
+        uintpixel_t* dstline = &swr->fb[y * swr->fbPitch];
+        for (int copyX = 0, left = originX; copyX < countX && left + from < maxX; copyX++, left += stepX)
+        {
+            int x0 = left + from, x1 = left + to;
+            if (x1 <= minX) continue;
+            if (x0 < minX) x0 = minX;
+            if (x1 > maxX) x1 = maxX;
+            for (int x = x0; x < x1; x++)
+            {
+                uintpixel_t pixel = srcline[x - left];
+                if (covline != NULL) {
+                    uint32_t covered = covline[x - left];
+                    if (covered == 0) continue;
+                    int coverageAlpha = covered == 4 ? alpha : (alpha * (int) covered) >> 2;
+                    if (coverageAlpha > 253)
+                        dstline[x] = pixel;
+                    else if (coverageAlpha >= 4)
+                        dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(pixel) * coverageAlpha,
+                                                           swrGreen(pixel) * coverageAlpha, 256 - coverageAlpha);
+                } else if (swrIsOpaque(pixel)) {
+                    dstline[x] = opaque ? pixel
+                        : swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(pixel) * (uint32_t) alpha,
+                                                swrGreen(pixel) * (uint32_t) alpha, dstalpha);
+                }
+            }
+        }
+    }
+    return true;
+#endif
+}
+
 void swrDrawSpriteRotated(
     Renderer* renderer, float dx, float dy, float dw, float dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,

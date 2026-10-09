@@ -36,6 +36,9 @@ void swrOverlayFlush(SWRenderer* swr);
 // Draws the tile pictures being held (sw_renderer.c); NULL for whichever renderer holds them.
 void swrTileRunsFlush(SWRenderer* swr);
 void swrClearSettle(SWRenderer* swr);
+bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
+                            int firstX, int firstY, int tileW, int tileH, int countX, int countY,
+                            uint32_t color, float alphaf);
 void swrGridFlush(SWRenderer* swr);
 bool swrGridHeld(void);
 void swrHeldUnderDiscard(SWRenderer* swr);
