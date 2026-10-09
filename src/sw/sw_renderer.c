@@ -650,17 +650,27 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
     int sx1 = xscale * localX1;
     int sy1 = yscale * localY1;
 
+    // The room rectangle the port shows, with a pixel to spare. A small sprite
+    // tiled over a big room is hundreds of copies, nearly all of them
+    // somewhere else; those are stepped over below without a draw call.
+    bool cull = swr->scaleX > 0.0f && swr->scaleY > 0.0f;
+    int viewLeft = swr->viewX - 1, viewTop = swr->viewY - 1;
+    int viewRight = cull ? swr->viewX + (int) ((float) (swr->maxX - swr->portX) / swr->scaleX) + 2 : 0;
+    int viewBottom = cull ? swr->viewY + (int) ((float) (swr->maxY - swr->portY) / swr->scaleY) + 2 : 0;
+    
     for (int dy = startY; endY > dy; dy += tileH) {
         int cy = dy + (int)(originY * ayScale);
         int vy0 = cy + sy0;
         int vy1 = cy + sy1;
         int dh = vy1 - vy0;
+        if (cull && ((vy0 < viewTop && vy1 < viewTop) || (vy0 > viewBottom && vy1 > viewBottom))) continue;
 
         for (int dx = startX; endX > dx; dx += tileW) {
             int cx = dx + (int)(originX * axScale);
             int vx0 = cx + sx0;
             int vx1 = cx + sx1;
             int dw = vx1 - vx0;
+            if (cull && ((vx0 < viewLeft && vx1 < viewLeft) || (vx0 > viewRight && vx1 > viewRight))) continue;
 
             swrDrawSprite(renderer, vx0, vy0, dw, dh, texture, sx, sy, sw, sh, color, alpha);
         }
@@ -1024,7 +1034,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     SWTexture* surface, localSurface;
     localSurface.halfBuffer = NULL;
     localSurface.immutable = false;
-    localSurface.halfRefused = false;
+    localSurface.halfCoverage = NULL;
     localSurface.halfPhaseX = localSurface.halfPhaseY = 0;
     if (surfaceID == APPLICATION_SURFACE_ID) {
         localSurface.buffer = swr->drawingToSurface ? swr->mainFb : swr->fb;
@@ -1673,6 +1683,27 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
     
     UNIMP();
 }
+// Draw-call timing (SW_DRAW_PROFILE): each kind of call is timed and the
+// totals handed to the platform, which can then say what a frame was spent
+// drawing. A timed call made inside another is taken off the outer one's
+// time, so no time is counted twice: swrProfInner is the time already
+// accounted for by calls that ended since some outer call began.
+#ifdef SW_DRAW_PROFILE
+#include "gettime.h"
+void platformDrawProfile(int kind, uint64_t nanos);
+enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
+static uint64_t swrProfInner = 0;
+#define SWR_PROFILED(kind, call) do { \
+        uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
+        call; \
+        uint64_t span_ = nowNanos() - start_; \
+        platformDrawProfile(kind, span_ - (swrProfInner - inner_)); \
+        swrProfInner = inner_ + span_; \
+    } while (0)
+#else
+#define SWR_PROFILED(kind, call) do { call; } while (0)
+#endif
+
 // ===[ Tile run cache ]===
 // A room's tiles are hundreds of small draws that come out the same every
 // frame. A run of them that nothing else is drawn between is composed once
@@ -1702,8 +1733,85 @@ typedef struct {
 
 static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 
+// Pictures waiting to be drawn, bottom first. A room has several tile layers
+// one over the other, and drawing each in turn fills most of the screen once
+// per layer. Pictures that follow one another with nothing else drawn between
+// are held and drawn together (swrTileRunsFlush): for each block of the
+// screen, drawing starts at the topmost picture that is solid there, since
+// nothing under it can show.
+static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES];
+static int swrPendingCount = 0;
+static SWRenderer* swrPendingOwner = NULL;
+
+static int swrFloorToBlock(int v)
+{
+    int r = v % SWR_TILE_RUN_BLOCK;
+    return r < 0 ? v - r - SWR_TILE_RUN_BLOCK : v - r;
+}
+
+static uint8_t swrRunBlockKind(const SWTileRun* run, int roomX, int roomY)
+{
+    int bx = (roomX - run->x) / SWR_TILE_RUN_BLOCK, by = (roomY - run->y) / SWR_TILE_RUN_BLOCK;
+    if (roomX < run->x || roomY < run->y || roomX >= run->x + run->width || roomY >= run->y + run->height) return SWR_BLOCK_EMPTY;
+    return run->blocks[by * ((run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK) + bx];
+}
+
+static void swrTileRunsDrawPending(SWRenderer* swr)
+{
+    // The room rectangle the port shows (the scale is 1 for a cached run), block by block.
+    int roomLeft = swr->viewX, roomTop = swr->viewY;
+    int roomRight = roomLeft + (swr->maxX - swr->portX), roomBottom = roomTop + (swr->maxY - swr->portY);
+    for (int by = swrFloorToBlock(roomTop); by < roomBottom; by += SWR_TILE_RUN_BLOCK)
+    {
+        for (int bx = swrFloorToBlock(roomLeft); bx < roomRight; bx += SWR_TILE_RUN_BLOCK)
+        {
+            int first = 0;
+            for (int i = swrPendingCount - 1; i > 0; i--) {
+                if (swrRunBlockKind(swrPendingRuns[i], bx, by) == SWR_BLOCK_SOLID) { first = i; break; }
+            }
+            for (int i = first; i < swrPendingCount; i++)
+            {
+                const SWTileRun* run = swrPendingRuns[i];
+                uint8_t kind = swrRunBlockKind(run, bx, by);
+                if (kind == SWR_BLOCK_EMPTY) continue;
+                
+                // The block, cut to the picture and to the port, in room coordinates.
+                int x0 = bx < roomLeft ? roomLeft : bx, x1 = bx + SWR_TILE_RUN_BLOCK > roomRight ? roomRight : bx + SWR_TILE_RUN_BLOCK;
+                int y0 = by < roomTop ? roomTop : by, y1 = by + SWR_TILE_RUN_BLOCK > roomBottom ? roomBottom : by + SWR_TILE_RUN_BLOCK;
+                if (x1 > run->x + run->width) x1 = run->x + run->width;
+                if (y1 > run->y + run->height) y1 = run->y + run->height;
+                if (x0 >= x1 || y0 >= y1) continue;
+                
+                for (int y = y0; y < y1; y++)
+                {
+                    const uintpixel_t* src = &run->pixels[(y - run->y) * run->width + (x0 - run->x)];
+                    uintpixel_t* dst = &swr->fb[(y - roomTop + swr->portY) * swr->fbPitch + (x0 - roomLeft + swr->portX)];
+                    if (kind == SWR_BLOCK_SOLID)
+                        memcpy(dst, src, (size_t) (x1 - x0) * sizeof(uintpixel_t));
+                    else for (int x = 0; x < x1 - x0; x++) {
+                        uintpixel_t pixel = src[x];
+                        if (swrIsOpaque(pixel)) dst[x] = pixel;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Draws the pictures being held, if any. Everything that draws comes through
+// swrOverlayFlush first, which calls this, so nothing is drawn under them
+// that should have been drawn over.
+void swrTileRunsFlush(SWRenderer* swr)
+{
+    if (swrPendingCount == 0) return;
+    if (swr == NULL) swr = swrPendingOwner;
+    SWR_PROFILED(SWR_PROF_PART, swrTileRunsDrawPending(swr));
+    swrPendingCount = 0;
+}
+
 bool swrTileRunsFree(void)
 {
+    swrTileRunsFlush(NULL); // a held picture must be drawn before it goes
     bool freed = false;
     for (int e = 0; e < SWR_TILE_RUN_ENTRIES; e++) {
         if (swrTileRuns[e].pixels == NULL) continue;
@@ -1756,6 +1864,9 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         key = swrTileRunHash(key, &offsets[t * 2], 2 * sizeof(float));
     }
     
+    // The picture starts on a block boundary of the room, so that the pictures of a room share one grid of blocks.
+    left = swrFloorToBlock(left);
+    top = swrFloorToBlock(top);
     int width = right - left, height = bottom - top;
     if (width <= 0 || height <= 0 || width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE) return false;
     if (width * height > SWR_TILE_RUN_MAX_PIXELS) return false;
@@ -1789,6 +1900,10 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         size_t pixelBytes = (size_t) width * height * sizeof(uintpixel_t);
         uintpixel_t* pixels = (uintpixel_t*) calloc(pixelBytes + (size_t) blocksX * blocksY, 1);
         if (pixels == NULL) return false;
+        
+        // Pictures being held belong on the screen, and would come out into this
+        // one once the tiles below start drawing: let them out first.
+        swrTileRunsFlush(swr);
         
         // Point the renderer at the picture, with a view that maps the run's
         // bounding box onto it, and draw the tiles the ordinary way.
@@ -1833,46 +1948,10 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     }
     run->lastUsedFrame = swr->frameCounter;
     
-    // Where the picture's corner lands in the buffer (the scale is 1 here), and the part of it the port shows.
-    float fx = (float) run->x, fy = (float) run->y;
-    swrTransformPosIfNeeded(swr, &fx, &fy);
-    int dx = swrFloor(fx), dy = swrFloor(fy);
-    int px0 = dx < swr->portX ? swr->portX - dx : 0, py0 = dy < swr->portY ? swr->portY - dy : 0;
-    int px1 = dx + run->width > swr->maxX ? swr->maxX - dx : run->width;
-    int py1 = dy + run->height > swr->maxY ? swr->maxY - dy : run->height;
-    if (px0 >= px1 || py0 >= py1) return true;
-    
-    int blocksX = (run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
-    for (int by = py0 / SWR_TILE_RUN_BLOCK; by * SWR_TILE_RUN_BLOCK < py1; by++)
-    {
-        int y0 = by * SWR_TILE_RUN_BLOCK < py0 ? py0 : by * SWR_TILE_RUN_BLOCK;
-        int y1 = (by + 1) * SWR_TILE_RUN_BLOCK > py1 ? py1 : (by + 1) * SWR_TILE_RUN_BLOCK;
-        for (int bx = px0 / SWR_TILE_RUN_BLOCK; bx * SWR_TILE_RUN_BLOCK < px1; bx++)
-        {
-            uint8_t kind = run->blocks[by * blocksX + bx];
-            if (kind == SWR_BLOCK_EMPTY) continue;
-            int x0 = bx * SWR_TILE_RUN_BLOCK < px0 ? px0 : bx * SWR_TILE_RUN_BLOCK;
-            int x1 = (bx + 1) * SWR_TILE_RUN_BLOCK > px1 ? px1 : (bx + 1) * SWR_TILE_RUN_BLOCK;
-            // Solid blocks side by side are copied as one stretch.
-            if (kind == SWR_BLOCK_SOLID) {
-                while ((bx + 1) * SWR_TILE_RUN_BLOCK < px1 && run->blocks[by * blocksX + bx + 1] == SWR_BLOCK_SOLID) {
-                    bx++;
-                    x1 = (bx + 1) * SWR_TILE_RUN_BLOCK > px1 ? px1 : (bx + 1) * SWR_TILE_RUN_BLOCK;
-                }
-            }
-            for (int y = y0; y < y1; y++)
-            {
-                const uintpixel_t* src = &run->pixels[y * run->width + x0];
-                uintpixel_t* dst = &swr->fb[(dy + y) * swr->fbPitch + dx + x0];
-                if (kind == SWR_BLOCK_SOLID)
-                    memcpy(dst, src, (size_t) (x1 - x0) * sizeof(uintpixel_t));
-                else for (int x = 0; x < x1 - x0; x++) {
-                    uintpixel_t pixel = src[x];
-                    if (swrIsOpaque(pixel)) dst[x] = pixel;
-                }
-            }
-        }
-    }
+    // Held, to be drawn together with the pictures that follow it directly.
+    if (swrPendingCount == SWR_TILE_RUN_ENTRIES) swrTileRunsFlush(swr);
+    swrPendingRuns[swrPendingCount++] = run;
+    swrPendingOwner = swr;
     return true;
 #endif
 }
@@ -1885,8 +1964,12 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
     SWRenderer* swr = (SWRenderer*) renderer;
+    // Whatever else is held goes first; pictures already held stay, for this run to join.
+    swr->tileRunEntering = true;
     swrOverlayFlush(swr);
+    swr->tileRunEntering = false;
     if (swrDrawTileRunCached(renderer, tiles, offsets, count)) return true;
+    swrTileRunsFlush(swr);
     
     for (int32_t t = 0; t < count; t++)
     {
@@ -2057,9 +2140,6 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
 #ifdef SW_DRAW_PROFILE
 // Times each kind of draw call and hands the totals to the platform, which
 // can then say what a slow frame was spent drawing.
-void platformDrawProfile(int kind, uint64_t nanos);
-enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
-#define SWR_PROFILED(kind, call) do { uint64_t start_ = nowNanos(); call; platformDrawProfile(kind, nowNanos() - start_); } while (0)
 
 static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {

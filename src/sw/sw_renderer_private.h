@@ -9,6 +9,7 @@
 // the next draw. Returns false if there were none.
 bool swrTileRunsFree(void);
 
+
 // Unimplemented Functions
 #define UNIMP() do { logWarn("NYI %s\n", __func__); } while (0)
 //#define UNIMP() do { } while (0)
@@ -34,8 +35,8 @@ typedef struct
     // that such draws need no averaging. Only for a texture whose pixels never
     // change (immutable: one loaded from the game's data, not a surface).
     uintpixel_t* halfBuffer;
+    uint8_t* halfCoverage;  // how many of its four texels each copied one stands for, 0..4; NULL when every one is 0 or 4
     bool immutable;
-    bool halfRefused;   // looked at and found not to be art at twice its size: no copy will be made
     uint8_t halfPhaseX, halfPhaseY; // 0 or 1: where the 2x2 blocks start (see swrHalfTexture)
 }
 SWTexture;
@@ -141,6 +142,7 @@ typedef struct
     bool uniformValid;
     uintpixel_t uniformColor;
     bool uniformKept;           // for the one swrFillRectangle call SWRenderer_drawRectangle is making
+    bool tileRunEntering;       // SWRenderer_drawTileRun is flushing: leave held tile pictures held
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;

@@ -32,7 +32,7 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     txt->lastUsedFrame = 0;
     txt->halfBuffer = NULL;
     txt->immutable = false;
-    txt->halfRefused = false;
+    txt->halfCoverage = NULL;
     txt->halfPhaseX = txt->halfPhaseY = 0;
     
     return txt;
@@ -53,7 +53,7 @@ void swrFreeTexture(SWTexture* texture)
     if (UNLIKELY(!texture))
         return;
     
-    free(texture->halfBuffer);
+    free(texture->halfBuffer); // the coverage, if any, is in the same allocation
     free(texture->buffer);
     free(texture);
 }

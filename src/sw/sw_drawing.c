@@ -35,72 +35,75 @@ int swrMirrorFaintAlpha = 8;
 // left out. The platform sets it from the player's speed/accuracy choice.
 bool swrFavorSpeed = false;
 
-// Half-size copies. Only art drawn at twice its size gets one: a texture
-// that is a grid of 2x2 blocks of equal texels, so that keeping one texel
-// per block loses nothing. Anything finer (small text, thin lines) is refused
-// and keeps being averaged as it is drawn, which is slower and keeps it
-// legible. The grid need not start at the texture's corner: a tileset has a
-// one-texel border around each tile, which puts its blocks at odd positions.
-// So the grid may start at 0 or 1 each way (the phase), and a block cut by
-// the texture's edge is whatever part of it there is.
+// Half-size copies. Drawing a texture at half size with swrSmoothMinify set
+// averages the opaque texels of each 2x2 block and blends the result by how
+// many of the four there were, for every pixel of every such draw. A texture
+// that is never written to can have that worked out once: its half-size copy
+// holds each block's average, and where some blocks are only partly opaque
+// (the edge of small text, a thin line) a second array holds their coverage,
+// 0..4. A draw from the copy then gives, texel for texel, what the averaging
+// draw would have.
 //
-// Full-size texel x belongs to half-size texel (x + phase) / 2.
-#if PIXEL_SIZE == 16
-static bool swrHalfBlocksFlat(const SWTexture* texture, int phaseX, int phaseY, uintpixel_t* half, int halfW, int halfH)
-{
-    for (int hy = 0; hy < halfH; hy++)
-    {
-        int y0 = hy * 2 - phaseY, y1 = y0 + 1;
-        if (y0 < 0) y0 = y1;
-        if (y1 >= texture->height) y1 = y0;
-        const uintpixel_t* row0 = &texture->buffer[y0 * texture->width];
-        const uintpixel_t* row1 = &texture->buffer[y1 * texture->width];
-        for (int hx = 0; hx < halfW; hx++)
-        {
-            int x0 = hx * 2 - phaseX, x1 = x0 + 1;
-            if (x0 < 0) x0 = x1;
-            if (x1 >= texture->width) x1 = x0;
-            uintpixel_t texel = row0[x0];
-            // Transparent texels are equal by being transparent, whatever colour they carry.
-            bool opaque = swrIsOpaque(texel);
-            bool flat = opaque ? (row0[x1] == texel && row1[x0] == texel && row1[x1] == texel)
-                               : (!swrIsOpaque(row0[x1]) && !swrIsOpaque(row1[x0]) && !swrIsOpaque(row1[x1]));
-            if (!flat) return false;
-            half[hy * halfW + hx] = opaque ? texel : 0;
-        }
-    }
-    return true;
-}
-#endif
-
-// Makes the texture's half-size copy if it has none yet. Returns false if
-// there is none to draw from.
-static bool swrHalfTexture(SWTexture* texture)
+// The blocks start where the draw's source rectangle starts, which for a
+// tileset with a one-texel border around each tile is an odd position. So a
+// copy is made for one phase (0 or 1 each way), that of the first draw to
+// need it; a draw at the other phase keeps the averaging path. A block cut
+// by the texture's edge is whatever part of it there is. Full-size texel x
+// belongs to half-size texel (x + phase) / 2.
+static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
 {
 #if PIXEL_SIZE != 16
-    (void) texture;
+    (void) texture; (void) wantX; (void) wantY;
     return false;
 #else
     if (texture->halfBuffer != NULL) return true;
-    if (texture->halfRefused) return false;
-    // Room for either phase: (size + 2) / 2 texels each way.
-    int maxW = (texture->width + 2) / 2, maxH = (texture->height + 2) / 2;
-    uintpixel_t* half = (uintpixel_t*) malloc((size_t) maxW * maxH * sizeof(uintpixel_t));
+    int phaseX = wantX & 1, phaseY = wantY & 1;
+    int halfW = (texture->width + phaseX + 1) / 2, halfH = (texture->height + phaseY + 1) / 2;
+    size_t texels = (size_t) halfW * halfH;
+    // One allocation: the texels, then room for the coverage should it be needed.
+    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + texels);
     if (half == NULL) return false; // may fit another time
+    uint8_t* coverage = (uint8_t*) (half + texels);
+    bool partial = false;
     
-    static const uint8_t phases[4][2] = { {0, 0}, {1, 1}, {1, 0}, {0, 1} };
-    for (int p = 0; p < 4; p++)
+    for (int hy = 0; hy < halfH; hy++)
     {
-        int halfW = (texture->width + phases[p][0] + 1) / 2, halfH = (texture->height + phases[p][1] + 1) / 2;
-        if (!swrHalfBlocksFlat(texture, phases[p][0], phases[p][1], half, halfW, halfH)) continue;
-        texture->halfBuffer = half;
-        texture->halfPhaseX = phases[p][0];
-        texture->halfPhaseY = phases[p][1];
-        return true;
+        int y0 = hy * 2 - phaseY, y1 = y0 + 1;
+        const uintpixel_t* row0 = (y0 >= 0) ? &texture->buffer[y0 * texture->width] : NULL;
+        const uintpixel_t* row1 = (y1 < texture->height) ? &texture->buffer[y1 * texture->width] : NULL;
+        for (int hx = 0; hx < halfW; hx++)
+        {
+            int x0 = hx * 2 - phaseX, x1 = x0 + 1;
+            // Texels outside the texture count as transparent, as they do to the averaging draw at a sprite's edge.
+            uintpixel_t texels4[4] = {
+                (row0 && x0 >= 0) ? row0[x0] : 0, (row0 && x1 < texture->width) ? row0[x1] : 0,
+                (row1 && x0 >= 0) ? row1[x0] : 0, (row1 && x1 < texture->width) ? row1[x1] : 0,
+            };
+            uint32_t red = 0, green = 0, blue = 0, covered = 0;
+            for (int i = 0; i < 4; i++) {
+                if (!swrIsOpaque(texels4[i])) continue;
+                red += (texels4[i] >> 10) & 0x1F; green += (texels4[i] >> 5) & 0x1F; blue += texels4[i] & 0x1F;
+                covered++;
+            }
+            uintpixel_t out = 0;
+            if (covered == 4 && texels4[0] == texels4[1] && texels4[0] == texels4[2] && texels4[0] == texels4[3]) {
+                out = texels4[0];
+            } else if (covered > 0) {
+                // The averaging draw's arithmetic: x * (65536 / n + 1) >> 16 in place of a divide.
+                static const uint32_t reciprocal[5] = { 0, 65536, 32768, 21846, 16384 };
+                uint32_t scale = reciprocal[covered];
+                out = (uintpixel_t) (0x8000 | (((red * scale) >> 16) << 10) | (((green * scale) >> 16) << 5) | ((blue * scale) >> 16));
+            }
+            half[hy * halfW + hx] = out;
+            coverage[hy * halfW + hx] = (uint8_t) covered;
+            if (covered != 0 && covered != 4) partial = true;
+        }
     }
-    free(half);
-    texture->halfRefused = true;
-    return false;
+    texture->halfBuffer = half;
+    texture->halfCoverage = partial ? coverage : NULL;
+    texture->halfPhaseX = (uint8_t) phaseX;
+    texture->halfPhaseY = (uint8_t) phaseY;
+    return true;
 #endif
 }
 
@@ -778,6 +781,8 @@ bool swrMirrorHoldFill(Renderer* renderer, float x1, float y1, float x2, float y
 void swrOverlayFlush(SWRenderer* swr)
 {
 #ifdef SW_HAS_PREMUL_BLEND
+    // Held tile pictures are older than anything else held, so they go first.
+    if (!swr->tileRunEntering) swrTileRunsFlush(swr);
     if (!swr->mirrorReplaying) swrMirrorFlush(swr);
 #endif
     swrOverlayFlushHeld(swr);
@@ -848,23 +853,60 @@ static void swrDrawSpriteInternal(
     // then sees an unscaled draw of a smaller texture.
     SWTexture halved;
     bool fromHalf = false;
-    // The draw has to start on a block of the copy, and after clipping still be half of what it covers.
-    if (swrFavorSpeed && texture->immutable && (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1) &&
-        swrHalfTexture(texture) && ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0)
+    // The draw has to start on a block of the copy. One that needs coverage
+    // is drawn right here, on the averaging draw's terms (normal blending,
+    // not flipped, not too faint to show); the rest carry on below as a plain
+    // unscaled draw.
+    bool halfScale = (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1);
+    if (swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
+        ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0 &&
+        (texture->halfCoverage == NULL || (swr->blendMode == bm_normal && !flipX && !flipY && alpha >= 4)))
     {
+        int halfW = (texture->width + texture->halfPhaseX + 1) / 2, halfH = (texture->height + texture->halfPhaseY + 1) / 2;
+        const uint8_t* coverage = texture->halfCoverage;
         halved = *texture;
         halved.buffer = texture->halfBuffer;
-        halved.width = (uint16_t) ((texture->width + texture->halfPhaseX + 1) / 2);
-        halved.height = (uint16_t) ((texture->height + texture->halfPhaseY + 1) / 2);
+        halved.width = (uint16_t) halfW;
+        halved.height = (uint16_t) halfH;
         sx = (sx + texture->halfPhaseX) / 2;
         sy = (sy + texture->halfPhaseY) / 2;
         texture = &halved;
-        if (sx + dw > halved.width) dw = halved.width - sx;
-        if (sy + dh > halved.height) dh = halved.height - sy;
+        if (sx + dw > halfW) dw = halfW - sx;
+        if (sy + dh > halfH) dh = halfH - sy;
         if (dw <= 0 || dh <= 0) return;
         sw = dw; sh = dh;
         osw = odw; osh = odh;
         fromHalf = true;
+        
+        if (coverage != NULL)
+        {
+            swrOverlayFlush(swr);
+            uint32_t lastColor = 0xFFFFFFFF;
+            uintpixel_t lastTinted = 0;
+            for (int y = 0; y < dh; y++)
+            {
+                uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
+                const uintpixel_t* srcline = &halved.buffer[(sy + y) * halfW + sx];
+                const uint8_t* covline = &coverage[(sy + y) * halfW + sx];
+                for (int x = 0; x < dw; x++)
+                {
+                    uint32_t covered = covline[x];
+                    if (covered == 0) continue;
+                    uintpixel_t color = srcline[x];
+                    if (color != lastColor) {
+                        lastTinted = tint(tintColor, color);
+                        lastColor = color;
+                    }
+                    int coverageAlpha = covered == 4 ? alpha : (alpha * (int) covered) >> 2;
+                    if (coverageAlpha > 253)
+                        dstline[x] = lastTinted;
+                    else if (coverageAlpha >= 4)
+                        dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(lastTinted) * coverageAlpha,
+                                                           swrGreen(lastTinted) * coverageAlpha, 256 - coverageAlpha);
+                }
+            }
+            return;
+        }
     }
 #endif
     
