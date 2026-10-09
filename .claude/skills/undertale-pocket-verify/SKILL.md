@@ -58,6 +58,8 @@ device):
 | `UT_PLAYBACK=f.json` | replay a recording (`--playback-inputs`). With `UT_RECORD` as well it replays, then records what follows, so a recording can be extended |
 | `UT_PROFILE=n` | log the heaviest game scripts every n frames; the report Select + X gives on the device (see the perf skill) |
 | `UT_EXIT_FRAME=n` | leave the main loop at frame n, the ordinary way out (a frame dump exits on the spot) |
+| `UT_NO_NATIVE=1` | run every game script in the interpreter, leaving out the native stand-ins of `platform/ut_native.c`; frames must match with and without |
+| `UT_CODEHASH=name` | print a code entry's length and bytecode hash, for a row of the table in `ut_native.c` |
 | `UT_GOTO="frame:room"` | jump to a room index on that frame; the game's own state is left as it was |
 | `UT_SET="frame:name=1,arr[2]=3"` | set numeric globals (or elements of existing global arrays) on that frame |
 
