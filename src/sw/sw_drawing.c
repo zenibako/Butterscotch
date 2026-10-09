@@ -101,6 +101,12 @@ static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
     }
     texture->halfBuffer = half;
     texture->halfCoverage = partial ? coverage : NULL;
+    texture->halfSolid = 2;
+    if (!partial) {
+        size_t opaque = 0;
+        for (size_t i = 0; i < texels; i++) opaque += coverage[i] == 4;
+        if (opaque == texels) texture->halfSolid = 1;
+    }
     texture->halfPhaseX = (uint8_t) phaseX;
     texture->halfPhaseY = (uint8_t) phaseY;
     return true;
@@ -865,6 +871,7 @@ static void swrDrawSpriteInternal(
         int halfW = (texture->width + texture->halfPhaseX + 1) / 2, halfH = (texture->height + texture->halfPhaseY + 1) / 2;
         const uint8_t* coverage = texture->halfCoverage;
         halved = *texture;
+        halved.solid = texture->halfSolid;
         halved.buffer = texture->halfBuffer;
         halved.width = (uint16_t) halfW;
         halved.height = (uint16_t) halfH;
@@ -1077,6 +1084,14 @@ static void swrDrawSpriteInternal(
         uint32_t lastPixel = 0xFFFFFFFF;
         uintpixel_t lastTinted = 0;
         
+        // An immutable texture is looked over once to learn whether it has any transparent texel.
+        if (texture->solid == 0 && texture->immutable && untinted && !flipX && xstep == (1 << fp_prec)) {
+            size_t count = (size_t) texture->width * texture->height, opaque = 0;
+            for (size_t i = 0; i < count; i++) opaque += swrIsOpaque(texture->buffer[i]) ? 1 : 0;
+            texture->solid = opaque == count ? 1 : 2;
+        }
+        bool solid = texture->solid == 1;
+        
         fixedp_t ys2 = iys2;
         for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
         {
@@ -1088,7 +1103,12 @@ static void swrDrawSpriteInternal(
                 srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
             
             fixedp_t xs2 = ixs2;
-            if (untinted && !flipX && xstep == (1 << fp_prec))
+            if (untinted && !flipX && xstep == (1 << fp_prec) && solid)
+            {
+                // Nothing transparent anywhere in the texture: the row goes over as it is.
+                memcpy(dstline, srcline, (size_t) dw * sizeof(uintpixel_t));
+            }
+            else if (untinted && !flipX && xstep == (1 << fp_prec))
             {
                 // Unscaled: no stepping through the source needed.
                 for (int x = 0; x < dw; x++)

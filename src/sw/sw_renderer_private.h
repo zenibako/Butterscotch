@@ -38,6 +38,10 @@ typedef struct
     uint8_t* halfCoverage;  // how many of its four texels each copied one stands for, 0..4; NULL when every one is 0 or 4
     bool immutable;
     uint8_t halfPhaseX, halfPhaseY; // 0 or 1: where the 2x2 blocks start (see swrHalfTexture)
+    // Whether every texel is opaque, so that an opaque draw can copy rows
+    // without looking at them: 0 not looked at yet, 1 yes, 2 no. Looked at
+    // only for an immutable texture; halfSolid is the same for the half-size copy.
+    uint8_t solid, halfSolid;
 }
 SWTexture;
 

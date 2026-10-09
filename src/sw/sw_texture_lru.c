@@ -156,6 +156,7 @@ static SWTexture* loadFromPack(SWRenderer* swr, uint32_t pageId)
     texture->halfBuffer = NULL;
     texture->immutable = true;
     texture->halfCoverage = NULL;
+    texture->solid = texture->halfSolid = 0;
     texture->halfPhaseX = texture->halfPhaseY = 0;
     texture->originX = texture->originY = 0;
     return texture;
@@ -311,6 +312,7 @@ static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_
     texture->halfBuffer = NULL;
     texture->immutable = true;
     texture->halfCoverage = NULL;
+    texture->solid = texture->halfSolid = 0;
     texture->halfPhaseX = texture->halfPhaseY = 0;
     texture->originX = (uint16_t) left;
     texture->originY = (uint16_t) top;
