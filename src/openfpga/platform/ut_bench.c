@@ -308,5 +308,6 @@ void utBenchFrame(void) {
                    (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
         firstFrame = g_sections[i].lastFrame;
     }
+    utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
     utDiagHalt("benchmark finished");
 }
