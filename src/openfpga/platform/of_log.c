@@ -7,6 +7,7 @@
 #include "gettime.h"
 #include "of_hooks.h"
 #include "of_perf.h"
+#include "ut_save_format.h"
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -63,12 +64,51 @@ static void keepHistory(const char *text) {
  * A core can only write to its save slots, and the Pocket copies those back
  * to the card (Saves/butterscotch/common/) when the core is left through the
  * Analogue menu: this is how a log gets off the device without a screenshot,
- * which holds 21 short lines. Returns false if the file could not be written. */
+ * which holds 21 short lines.
+ *
+ * What the file held from earlier runs is kept in front of this run's log,
+ * as much of its end as fits, so that two benchmarks run one after the other
+ * are both there to read. Each run starts with a "Butterscotch log" line.
+ * Returns false if the file could not be written. */
+#define UT_LOG_EARLIER (72u * 1024u)
+#define UT_LOG_HEADER "Butterscotch log, " UT_GAME_NAME "\n"
+
 bool utLogDump(void) {
+    /* Read the earlier runs once; later dumps in this run replace only this run's part. */
+    static char *earlier = NULL;
+    static uint32_t earlierLen = 0;
+    static bool earlierRead = false;
+    if (!earlierRead) {
+        earlierRead = true;
+        FILE *old = fopen(UT_LOG_SLOT_FILE, "rb");
+        char *text = old != NULL ? malloc(UT_SAVE_SLOT_BYTES) : NULL;
+        if (text != NULL) {
+            size_t got = fread(text, 1, UT_SAVE_SLOT_BYTES - 1, old);
+            text[got] = '\0';
+            size_t len = strlen(text); /* the text ends at the first NUL */
+            /* A slot never written, or holding something else, reads as anything at all. */
+            if (len > 0 && strncmp(text, "Butterscotch log, ", 18) == 0) {
+                size_t from = len > UT_LOG_EARLIER ? len - UT_LOG_EARLIER : 0;
+                while (from > 0 && from < len && text[from - 1] != '\n') from++;
+                earlierLen = (uint32_t) (len - from);
+                memmove(text, text + from, earlierLen);
+                earlier = text;
+            } else
+                free(text);
+        }
+        if (old != NULL) fclose(old);
+    }
+
     FILE *file = fopen(UT_LOG_SLOT_FILE, "wb");
     if (file == NULL) return false;
-    static const char cut[] = "(the start of the log no longer fitted and was dropped)\n";
-    bool ok = fputs("Butterscotch log, " UT_GAME_NAME "\n", file) >= 0;
+    static const char cut[] = "(the start of this run's log no longer fitted and was dropped)\n";
+    bool ok = true;
+    if (earlier != NULL) {
+        ok = fwrite(earlier, 1, earlierLen, file) == earlierLen;
+        if (earlierLen > 0 && earlier[earlierLen - 1] != '\n') ok = ok && fputc('\n', file) != EOF;
+        ok = ok && fputs("\n", file) >= 0;
+    }
+    ok = ok && fputs(UT_LOG_HEADER, file) >= 0;
     if (g_historyCut) ok = ok && fputs(cut, file) >= 0;
     ok = ok && fwrite(g_history, 1, g_historyLen, file) == g_historyLen;
     /* Text ends here; whatever the slot held beyond this is cut off by the NUL for a reader that stops at one. */

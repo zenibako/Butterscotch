@@ -249,7 +249,7 @@ void utBenchFrame(void) {
     if (++g_section < UT_BENCH_SECTIONS) return;
 
     g_running = false;
-    utLogPrint("=== " UT_BENCH_TITLE " benchmark ===\n");
+    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy");
 #ifndef OF_PC
     {
         /* Say which OS and bitstream this ran on; tables look alike otherwise. */

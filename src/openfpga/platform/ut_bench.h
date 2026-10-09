@@ -24,6 +24,8 @@ void utBenchAddFlipTime(uint64_t nanos);
 bool utPlatformShowLogAndHalt(void);
 void utPlatformSetHiresAllowed(bool allowed);
 void utPlatformSetSmoothLowres(bool enabled);
+/* Which way L's speed/accuracy setting is. */
+bool utPlatformSpeedMode(void);
 void utSaveFsSetVolatile(bool enabled);
 void utPlatformSetInputScript(const char *script);
 /* On `frame` of a scripted run: set the globals in `set` ("name=1,other[2]=3", or NULL) and go to `room`

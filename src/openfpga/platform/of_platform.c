@@ -172,6 +172,10 @@ void utPlatformSetInputScript(const char *script) {
     g_inputScript = script;
 }
 
+bool utPlatformSpeedMode(void) {
+    return g_smoothLowres;
+}
+
 void utPlatformSetSmoothLowres(bool enabled) {
     g_smoothLowres = enabled;
 }
