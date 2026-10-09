@@ -10,12 +10,13 @@
 # mounts it if needed, removes renamed-away cores of the same platform,
 # copies, removes macOS sidecar files, verifies and unmounts, and says what went wrong when it cannot.
 #
-# Usage: sdcopy.sh <build tree> [seconds to wait for the card, default 90]
+# Usage: sdcopy.sh <build tree> [seconds to wait for the card, default 240]
 #
 set -u
 
 TREE="$1"
-WAIT="${2:-90}"
+# The reader on this headless Mac has taken more than 90 seconds to report a reinserted card.
+WAIT="${2:-240}"
 [ -d "$TREE/Cores" ] && [ -d "$TREE/Assets" ] || { echo "sdcopy: $TREE is not an assembled Pocket tree"; exit 1; }
 
 # A mounted volume that looks like a Pocket card.
