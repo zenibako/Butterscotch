@@ -1022,6 +1022,10 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     SWTexture* surface, localSurface;
+    localSurface.halfBuffer = NULL;
+    localSurface.immutable = false;
+    localSurface.halfRefused = false;
+    localSurface.halfPhaseX = localSurface.halfPhaseY = 0;
     if (surfaceID == APPLICATION_SURFACE_ID) {
         localSurface.buffer = swr->drawingToSurface ? swr->mainFb : swr->fb;
         localSurface.width = swr->drawingToSurface ? swr->mainWidth : swr->width;
@@ -1682,9 +1686,16 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
 #define SWR_TILE_RUN_MAX_SIDE 4096
 #define SWR_TILE_RUN_IDLE_FRAMES 300
 
+// The picture is drawn block by block: a layer of decoration is mostly
+// nothing, and a layer of ground mostly has no holes, so each block is
+// marked empty (skipped), solid (copied a row at a time) or mixed.
+#define SWR_TILE_RUN_BLOCK 16
+enum { SWR_BLOCK_EMPTY, SWR_BLOCK_SOLID, SWR_BLOCK_MIXED };
+
 typedef struct {
     uint64_t key;
     uintpixel_t* pixels;    // NULL when the entry is free
+    uint8_t* blocks;        // one SWR_BLOCK_* per block, row by row; lives in the same allocation as pixels
     int x, y, width, height;
     uint32_t lastUsedFrame;
 } SWTileRun;
@@ -1774,7 +1785,9 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         free(spare->pixels);
         spare->pixels = NULL;
         
-        uintpixel_t* pixels = (uintpixel_t*) calloc((size_t) width * height, sizeof(uintpixel_t));
+        int blocksX = (width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+        size_t pixelBytes = (size_t) width * height * sizeof(uintpixel_t);
+        uintpixel_t* pixels = (uintpixel_t*) calloc(pixelBytes + (size_t) blocksX * blocksY, 1);
         if (pixels == NULL) return false;
         
         // Point the renderer at the picture, with a view that maps the run's
@@ -1796,22 +1809,70 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         swr->portW = saved.portW; swr->portH = saved.portH;
         swr->maxX = saved.maxX; swr->maxY = saved.maxY;
         
+        uint8_t* blocks = (uint8_t*) pixels + pixelBytes;
+        for (int by = 0; by < blocksY; by++) {
+            for (int bx = 0; bx < blocksX; bx++) {
+                int x1 = bx * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK, y1 = by * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK;
+                if (x1 > width) x1 = width;
+                if (y1 > height) y1 = height;
+                int opaque = 0, total = 0;
+                for (int y = by * SWR_TILE_RUN_BLOCK; y < y1; y++) {
+                    const uintpixel_t* row = &pixels[y * width];
+                    for (int x = bx * SWR_TILE_RUN_BLOCK; x < x1; x++, total++) opaque += swrIsOpaque(row[x]) ? 1 : 0;
+                }
+                blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : opaque == total ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
+            }
+        }
+        
         run = spare;
         run->key = key;
         run->pixels = pixels;
+        run->blocks = blocks;
         run->x = left; run->y = top;
         run->width = width; run->height = height;
     }
     run->lastUsedFrame = swr->frameCounter;
     
-    SWTexture picture;
-    picture.buffer = run->pixels;
-    picture.width = (uint16_t) run->width;
-    picture.height = (uint16_t) run->height;
-    picture.originX = picture.originY = 0;
-    picture.lastUsedFrame = swr->frameCounter;
-    swrDrawSprite(renderer, (float) run->x, (float) run->y, (float) run->width, (float) run->height,
-                  &picture, 0, 0, run->width, run->height, 0xFFFFFF, 1.0f);
+    // Where the picture's corner lands in the buffer (the scale is 1 here), and the part of it the port shows.
+    float fx = (float) run->x, fy = (float) run->y;
+    swrTransformPosIfNeeded(swr, &fx, &fy);
+    int dx = swrFloor(fx), dy = swrFloor(fy);
+    int px0 = dx < swr->portX ? swr->portX - dx : 0, py0 = dy < swr->portY ? swr->portY - dy : 0;
+    int px1 = dx + run->width > swr->maxX ? swr->maxX - dx : run->width;
+    int py1 = dy + run->height > swr->maxY ? swr->maxY - dy : run->height;
+    if (px0 >= px1 || py0 >= py1) return true;
+    
+    int blocksX = (run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    for (int by = py0 / SWR_TILE_RUN_BLOCK; by * SWR_TILE_RUN_BLOCK < py1; by++)
+    {
+        int y0 = by * SWR_TILE_RUN_BLOCK < py0 ? py0 : by * SWR_TILE_RUN_BLOCK;
+        int y1 = (by + 1) * SWR_TILE_RUN_BLOCK > py1 ? py1 : (by + 1) * SWR_TILE_RUN_BLOCK;
+        for (int bx = px0 / SWR_TILE_RUN_BLOCK; bx * SWR_TILE_RUN_BLOCK < px1; bx++)
+        {
+            uint8_t kind = run->blocks[by * blocksX + bx];
+            if (kind == SWR_BLOCK_EMPTY) continue;
+            int x0 = bx * SWR_TILE_RUN_BLOCK < px0 ? px0 : bx * SWR_TILE_RUN_BLOCK;
+            int x1 = (bx + 1) * SWR_TILE_RUN_BLOCK > px1 ? px1 : (bx + 1) * SWR_TILE_RUN_BLOCK;
+            // Solid blocks side by side are copied as one stretch.
+            if (kind == SWR_BLOCK_SOLID) {
+                while ((bx + 1) * SWR_TILE_RUN_BLOCK < px1 && run->blocks[by * blocksX + bx + 1] == SWR_BLOCK_SOLID) {
+                    bx++;
+                    x1 = (bx + 1) * SWR_TILE_RUN_BLOCK > px1 ? px1 : (bx + 1) * SWR_TILE_RUN_BLOCK;
+                }
+            }
+            for (int y = y0; y < y1; y++)
+            {
+                const uintpixel_t* src = &run->pixels[y * run->width + x0];
+                uintpixel_t* dst = &swr->fb[(dy + y) * swr->fbPitch + dx + x0];
+                if (kind == SWR_BLOCK_SOLID)
+                    memcpy(dst, src, (size_t) (x1 - x0) * sizeof(uintpixel_t));
+                else for (int x = 0; x < x1 - x0; x++) {
+                    uintpixel_t pixel = src[x];
+                    if (swrIsOpaque(pixel)) dst[x] = pixel;
+                }
+            }
+        }
+    }
     return true;
 #endif
 }
