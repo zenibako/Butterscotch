@@ -8,7 +8,7 @@
 # counts as idle, and macOS only auto-mounts removable disks into an active
 # desktop session. This script declares user activity, waits for the card,
 # mounts it if needed, removes renamed-away cores of the same platform,
-# copies, removes macOS sidecar files, verifies and ejects, and says what went wrong when it cannot.
+# copies, removes macOS sidecar files, verifies and unmounts, and says what went wrong when it cannot.
 #
 # Usage: sdcopy.sh <build tree> [seconds to wait for the card, default 90]
 #
@@ -116,15 +116,15 @@ while IFS= read -r file; do
 done < <(find "$TREE" -type f \( -name '*.elf' -o -name '*.bin' -o -name '*.rbf_r' -o -name '*.json' -o -name '*.ini' \) ! -name 'music.bin' ! -name 'textures.bin')
 [ $failed -eq 0 ] || { echo "sdcopy: verification failed; the card was left mounted"; exit 1; }
 
-# With nobody at the screen, loginwindow refuses a normal eject. Everything is
-# written and verified by now, so a forced unmount after a sync is safe.
-if diskutil eject "$CARD" >/dev/null 2>&1; then
-    echo "sdcopy: done, verified and ejected. Safe to remove the card."
+# Unmount, not eject: after an eject macOS does not notice the card again
+# until it is pulled and pushed back in, and sometimes not even then, so the
+# next copy cannot find it. An unmounted card is just as safe to remove, and
+# one left in the reader can be mounted again. Everything is written and
+# verified by now, so a forced unmount after a sync is safe if a plain one is
+# refused (with nobody at the screen, loginwindow can refuse it).
+sync
+if diskutil unmount "$CARD" >/dev/null 2>&1 || diskutil unmount force "$CARD" >/dev/null 2>&1; then
+    echo "sdcopy: done, verified and unmounted. Safe to remove the card."
 else
-    sync
-    if diskutil unmount force "$CARD" >/dev/null 2>&1; then
-        echo "sdcopy: done, verified and unmounted. Safe to remove the card."
-    else
-        echo "sdcopy: copied and verified, but could not unmount $CARD; eject it before removing."
-    fi
+    echo "sdcopy: copied and verified, but could not unmount $CARD; unmount it before removing."
 fi

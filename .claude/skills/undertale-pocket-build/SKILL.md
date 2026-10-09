@@ -104,12 +104,17 @@ Three routes, in order of preference:
    ```bash
    rsync -rc --exclude '._*' --exclude '.DS_Store' <user>@<build-mac>:<path to>/butterscotch-pocket/src/openfpga/out/build/pocket/butterscotch/ /Volumes/Pocket/
    dot_clean -m /Volumes/Pocket/Assets/butterscotch /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
-   diskutil eject /Volumes/Pocket
+   diskutil unmount /Volumes/Pocket
    ```
 3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} /Volumes/Pocket/`
 
 Plain `copy` after a `compare-copy` leaves stale v0.9 cores on the card; use
 `compare-copy` again if those cores should stay current.
+
+Unmount, never eject (`diskutil unmount`, as `sdcopy.sh` does): after an
+eject this Mac does not see the card again until it is reseated, and
+sometimes not then, and the user asked on 2026-10-09 for unmount to be
+used so the card is found next time.
 
 A card reader on an idle, headless Mac can fail to notice a card inserted
 while the machine is idle. `sdcopy.sh` declares user activity to
