@@ -46,12 +46,17 @@ make -C src/openfpga compare        # the above + Benchmark entries + v0.9 cores
 `riscv64-elf-gcc` instead of the SDK's Docker image, which cannot be built
 here because Docker's keychain access fails in non-interactive sessions.
 
-The Makefile does not track header or flag changes. After editing a header,
-or changing `-D` flags, remove the affected objects first:
+A change to any header under `src/`, `src/*/` or `platform/` empties the
+object directories a run builds into (the Makefile keeps a checksum of the
+headers in each one's `.headers`), so objects are never left built against an
+old struct layout: that links without complaint and crashes on the device,
+which happened twice before the check existed. Flag changes are still not
+tracked. After changing `-D` flags, remove the affected objects first
+(`<game>` is `undertale` or `deltarune`):
 
 ```bash
-rm -rf src/openfpga/out/.obj/undertale-pc                    # desktop
-rm -rf src/openfpga/out/.obj/undertale src/openfpga/out/.obj/undertale-v09   # device
+rm -rf src/openfpga/out/.obj/<game>-pc                              # desktop
+rm -rf src/openfpga/out/.obj/<game> src/openfpga/out/.obj/<game>-v09   # device
 ```
 
 `make compare` output should end with `Comparison cores added: ...`. A build
