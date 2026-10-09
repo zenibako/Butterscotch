@@ -792,6 +792,10 @@ static void swrDrawSpriteInternal(
     int blendmode = swr->blendMode;
     
 #ifdef SW_HAS_PREMUL_BLEND
+    // Nothing comes of a draw this faint: alphaBlend skips it, and a 16-bit texel is opaque or absent.
+    // Leaving here keeps what is held, and what is known about the buffer, as it was.
+    if (blendmode == bm_normal && alpha < 4) return;
+    
     // A quarter of a mirrored layer is held back; anything else lets held layers out first.
     if (!swr->mirrorReplaying &&
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
@@ -1491,20 +1495,35 @@ void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2
     if (yd < 0) { y1i = y2i; yd = -yd; }
     if (xd <= 0 || yd <= 0) return;
     
-    // An opaque fill of the whole main buffer: nothing to do if it already
-    // holds that colour, and afterwards it is known to.
-    bool wholeBuffer = swr->fb == swr->mainFb && swr->blendMode == bm_normal && alphaInt > 253 &&
+    // A fill of the whole main buffer. While the buffer is known to hold one
+    // colour, the fill turns it into one other colour that can be worked out
+    // without touching it: the fill's own if opaque, the blend of the two if
+    // translucent. Nothing is written when that is the colour already there
+    // (a game darkening a black screen, or clearing one twice), and one plain
+    // fill replaces a read-blend-write of every pixel otherwise.
+    bool wholeBuffer = swr->fb == swr->mainFb && swr->blendMode == bm_normal && alphaInt >= 4 &&
                        swr->portX == 0 && swr->portY == 0 && swr->maxX >= swr->mainWidth && swr->maxY >= swr->mainHeight &&
                        x1i <= 0 && y1i <= 0 && x1i + xd >= swr->mainWidth && y1i + yd + 1 >= swr->mainHeight;
-    if (wholeBuffer && swr->uniformKept && swr->uniformColor == pxcolor) {
+    bool opaque = alphaInt > 253;
+#ifdef SW_HAS_PREMUL_BLEND
+    if (wholeBuffer && swr->uniformKept) {
+        uintpixel_t result = opaque ? pxcolor
+            : swrBlendPremultiplied(swr->uniformColor, swrSpreadRedBlue(pxcolor) * (uint32_t) alphaInt,
+                                    swrGreen(pxcolor) * (uint32_t) alphaInt, (uint32_t) (256 - alphaInt));
+        if (result != swr->uniformColor) {
+            for (int y = 0; y < swr->mainHeight; y++)
+                swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->mainWidth, result);
+            swr->uniformColor = result;
+        }
         swr->uniformValid = true;
         return;
     }
+#endif
     
     for (int y = 0; y <= yd; y++) {
         swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor, pxcolor, alphaInt);
     }
-    if (wholeBuffer) {
+    if (wholeBuffer && opaque) {
         swr->uniformValid = true;
         swr->uniformColor = pxcolor;
     }
