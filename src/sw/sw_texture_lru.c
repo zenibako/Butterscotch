@@ -153,6 +153,10 @@ static SWTexture* loadFromPack(SWRenderer* swr, uint32_t pageId)
     texture->buffer = buffer;
     texture->width = (uint16_t) w;
     texture->height = (uint16_t) h;
+    texture->halfBuffer = NULL;
+    texture->immutable = true;
+    texture->halfRefused = false;
+    texture->halfPhaseX = texture->halfPhaseY = 0;
     texture->originX = texture->originY = 0;
     return texture;
 }
@@ -193,6 +197,7 @@ static SWTexture* loadFromDataWin(SWRenderer* swr, uint32_t pageId)
     makeRoomFor(swr, (size_t) w * h * sizeof(uintpixel_t));
     SWTexture* texture = swrCreateTexture(pixels, w, h);
     free(pixels);
+    if (texture) texture->immutable = true;
     return texture;
 }
 
@@ -303,6 +308,10 @@ static SWTexture* loadItem(SWRenderer* swr, const TexturePageItem* tpag, uint32_
     texture->buffer = buffer;
     texture->width = (uint16_t) w;
     texture->height = (uint16_t) h;
+    texture->halfBuffer = NULL;
+    texture->immutable = true;
+    texture->halfRefused = false;
+    texture->halfPhaseX = texture->halfPhaseY = 0;
     texture->originX = (uint16_t) left;
     texture->originY = (uint16_t) top;
     return texture;

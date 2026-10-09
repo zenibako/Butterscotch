@@ -29,6 +29,14 @@ typedef struct
     // starts at that part's corner, so page coordinates minus this index it.
     uint16_t originX, originY;
     uint32_t lastUsedFrame; // SWRenderer.frameCounter when last drawn, for cache eviction
+    // A copy at half the size each way, made the first time the texture is
+    // drawn at half scale with swrFavorSpeed set (see swrHalfTexture), so
+    // that such draws need no averaging. Only for a texture whose pixels never
+    // change (immutable: one loaded from the game's data, not a surface).
+    uintpixel_t* halfBuffer;
+    bool immutable;
+    bool halfRefused;   // looked at and found not to be art at twice its size: no copy will be made
+    uint8_t halfPhaseX, halfPhaseY; // 0 or 1: where the 2x2 blocks start (see swrHalfTexture)
 }
 SWTexture;
 

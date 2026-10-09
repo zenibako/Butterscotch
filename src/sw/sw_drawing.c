@@ -35,6 +35,75 @@ int swrMirrorFaintAlpha = 8;
 // left out. The platform sets it from the player's speed/accuracy choice.
 bool swrFavorSpeed = false;
 
+// Half-size copies. Only art drawn at twice its size gets one: a texture
+// that is a grid of 2x2 blocks of equal texels, so that keeping one texel
+// per block loses nothing. Anything finer (small text, thin lines) is refused
+// and keeps being averaged as it is drawn, which is slower and keeps it
+// legible. The grid need not start at the texture's corner: a tileset has a
+// one-texel border around each tile, which puts its blocks at odd positions.
+// So the grid may start at 0 or 1 each way (the phase), and a block cut by
+// the texture's edge is whatever part of it there is.
+//
+// Full-size texel x belongs to half-size texel (x + phase) / 2.
+#if PIXEL_SIZE == 16
+static bool swrHalfBlocksFlat(const SWTexture* texture, int phaseX, int phaseY, uintpixel_t* half, int halfW, int halfH)
+{
+    for (int hy = 0; hy < halfH; hy++)
+    {
+        int y0 = hy * 2 - phaseY, y1 = y0 + 1;
+        if (y0 < 0) y0 = y1;
+        if (y1 >= texture->height) y1 = y0;
+        const uintpixel_t* row0 = &texture->buffer[y0 * texture->width];
+        const uintpixel_t* row1 = &texture->buffer[y1 * texture->width];
+        for (int hx = 0; hx < halfW; hx++)
+        {
+            int x0 = hx * 2 - phaseX, x1 = x0 + 1;
+            if (x0 < 0) x0 = x1;
+            if (x1 >= texture->width) x1 = x0;
+            uintpixel_t texel = row0[x0];
+            // Transparent texels are equal by being transparent, whatever colour they carry.
+            bool opaque = swrIsOpaque(texel);
+            bool flat = opaque ? (row0[x1] == texel && row1[x0] == texel && row1[x1] == texel)
+                               : (!swrIsOpaque(row0[x1]) && !swrIsOpaque(row1[x0]) && !swrIsOpaque(row1[x1]));
+            if (!flat) return false;
+            half[hy * halfW + hx] = opaque ? texel : 0;
+        }
+    }
+    return true;
+}
+#endif
+
+// Makes the texture's half-size copy if it has none yet. Returns false if
+// there is none to draw from.
+static bool swrHalfTexture(SWTexture* texture)
+{
+#if PIXEL_SIZE != 16
+    (void) texture;
+    return false;
+#else
+    if (texture->halfBuffer != NULL) return true;
+    if (texture->halfRefused) return false;
+    // Room for either phase: (size + 2) / 2 texels each way.
+    int maxW = (texture->width + 2) / 2, maxH = (texture->height + 2) / 2;
+    uintpixel_t* half = (uintpixel_t*) malloc((size_t) maxW * maxH * sizeof(uintpixel_t));
+    if (half == NULL) return false; // may fit another time
+    
+    static const uint8_t phases[4][2] = { {0, 0}, {1, 1}, {1, 0}, {0, 1} };
+    for (int p = 0; p < 4; p++)
+    {
+        int halfW = (texture->width + phases[p][0] + 1) / 2, halfH = (texture->height + phases[p][1] + 1) / 2;
+        if (!swrHalfBlocksFlat(texture, phases[p][0], phases[p][1], half, halfW, halfH)) continue;
+        texture->halfBuffer = half;
+        texture->halfPhaseX = phases[p][0];
+        texture->halfPhaseY = phases[p][1];
+        return true;
+    }
+    free(half);
+    texture->halfRefused = true;
+    return false;
+#endif
+}
+
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -772,6 +841,33 @@ static void swrDrawSpriteInternal(
     if (sy + sh >= texture->height) { sh = texture->height - sy; }
     if (sw <= 0 || sh <= 0) return;
     
+#ifdef SW_HAS_PREMUL_BLEND
+    // Drawn at half size with speed favoured: take the texels from the
+    // texture's half-size copy, one for one, instead of averaging four of the
+    // full-size ones for every pixel of every such draw. Everything below
+    // then sees an unscaled draw of a smaller texture.
+    SWTexture halved;
+    bool fromHalf = false;
+    // The draw has to start on a block of the copy, and after clipping still be half of what it covers.
+    if (swrFavorSpeed && texture->immutable && (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1) &&
+        swrHalfTexture(texture) && ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0)
+    {
+        halved = *texture;
+        halved.buffer = texture->halfBuffer;
+        halved.width = (uint16_t) ((texture->width + texture->halfPhaseX + 1) / 2);
+        halved.height = (uint16_t) ((texture->height + texture->halfPhaseY + 1) / 2);
+        sx = (sx + texture->halfPhaseX) / 2;
+        sy = (sy + texture->halfPhaseY) / 2;
+        texture = &halved;
+        if (sx + dw > halved.width) dw = halved.width - sx;
+        if (sy + dh > halved.height) dh = halved.height - sy;
+        if (dw <= 0 || dh <= 0) return;
+        sw = dw; sh = dh;
+        osw = odw; osh = odh;
+        fromHalf = true;
+    }
+#endif
+    
     //okay, now we can finally get on with rendering
     
     int ixs = 0, oxs = 1, iys = 0, oys = 1;
@@ -797,7 +893,8 @@ static void swrDrawSpriteInternal(
     if (blendmode == bm_normal && alpha < 4) return;
     
     // A quarter of a mirrored layer is held back; anything else lets held layers out first.
-    if (!swr->mirrorReplaying &&
+    // (A draw from a half-size copy is not offered: a held layer is worked out from the texture it names.)
+    if (!swr->mirrorReplaying && !fromHalf &&
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
         return;
     swr->uniformValid = false;

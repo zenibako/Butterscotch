@@ -30,6 +30,10 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     txt->height = (uint16_t) height;
     txt->originX = txt->originY = 0;
     txt->lastUsedFrame = 0;
+    txt->halfBuffer = NULL;
+    txt->immutable = false;
+    txt->halfRefused = false;
+    txt->halfPhaseX = txt->halfPhaseY = 0;
     
     return txt;
 }
@@ -49,6 +53,7 @@ void swrFreeTexture(SWTexture* texture)
     if (UNLIKELY(!texture))
         return;
     
+    free(texture->halfBuffer);
     free(texture->buffer);
     free(texture);
 }
