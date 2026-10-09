@@ -21,6 +21,8 @@
 
 void utDiagHalt(const char *why) {
     utLogPrint("[undertale] %s -- halted.\n", why);
+    /* Keep the log: on the screen there is room for its last lines only. */
+    if (utLogDump()) utLogPrint("Log saved; quit from the Analogue menu to keep it.\n");
     utPlatformShowLogAndHalt();
 
     /* Still on the OS terminal (nothing drawn yet): park there. */

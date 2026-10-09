@@ -14,6 +14,7 @@
 typedef struct {
     const char *name;
     int lastFrame;
+    const char *tag; /* five letters at most, for the breakdown table */
 } UtBenchSection;
 
 #ifdef UT_GAME_DELTARUNE
@@ -52,11 +53,11 @@ static const UtJump g_jumps[] = {
 };
 
 static const UtBenchSection g_sections[] = {
-    { "opening text 320x240", 1700 },
-    { "creation screens 320", 2100 },
-    { "town yard 320x240", 2600 },
-    { "field (640x480)", 3050 },
-    { "battle (640x480)", 3600 },
+    { "opening text 320x240", 1700, "text" },
+    { "creation screens 320", 2100, "creat" },
+    { "town yard 320x240", 2600, "yard" },
+    { "field (640x480)", 3050, "field" },
+    { "battle (640x480)", 3600, "battl" },
 };
 /* The audio pack is about 43 MB against Undertale's 134; the read tests use the same offsets, scaled. */
 #define UT_IO_MB(n) ((n) / 3u)
@@ -71,10 +72,10 @@ static const char g_script[] =
 
 /* Sections end on these frames; they follow the script above. */
 static const UtBenchSection g_sections[] = {
-    { "intro, menu, naming", 650 },
-    { "first room 320x240", 1220 },
-    { "Flowey talk 320x240", 2060 },
-    { "Flowey battle (640x480)", 2600 },
+    { "intro, menu, naming", 650, "intro" },
+    { "first room 320x240", 1220, "room" },
+    { "Flowey talk 320x240", 2060, "talk" },
+    { "Flowey battle (640x480)", 2600, "battl" },
 };
 #define UT_IO_MB(n) (n)
 #define UT_IO_ASYNC_MB(i) (110u + 2u * (i))
@@ -89,6 +90,7 @@ static uint64_t g_sectionStart = 0;
 static unsigned g_sectionMs[UT_BENCH_SECTIONS];
 static uint64_t g_flipNanos = 0; /* time inside the display flip this section */
 static unsigned g_sectionFlipMs[UT_BENCH_SECTIONS];
+static UtPerfTotals g_sectionTotals[UT_BENCH_SECTIONS];
 static unsigned g_firstFrameMs = 0;
 
 void utBenchStart(void) {
@@ -234,12 +236,14 @@ void utBenchFrame(void) {
     if (g_frame == 0) {
         g_firstFrameMs = (unsigned) ((now - g_startNanos) / 1000000u);
         g_sectionStart = now;
+        utPerfTakeTotals(NULL); /* loading is not part of the first section */
     }
     g_frame++;
     if (g_frame < g_sections[g_section].lastFrame) return;
 
     g_sectionMs[g_section] = (unsigned) ((now - g_sectionStart) / 1000000u);
     g_sectionFlipMs[g_section] = (unsigned) (g_flipNanos / 1000000u);
+    utPerfTakeTotals(&g_sectionTotals[g_section]);
     g_sectionStart = now;
     g_flipNanos = 0;
     if (++g_section < UT_BENCH_SECTIONS) return;
@@ -273,5 +277,36 @@ void utBenchFrame(void) {
     utLogPrint("work = total minus display flip\n");
     ioReport();
     asyncReport();
+    /* Where each section's time went, in ms per frame. step: game code; draw:
+     * all drawing, of which the next five are sprites, sprite parts and
+     * tiles, text, tiled backgrounds and rectangles (what is left of draw is
+     * none of those: clears, held layers let out by another kind of draw,
+     * the runner's own work); snd: the audio update; out: presenting. The
+     * second table is how many of each kind of draw call a frame makes. */
+    #define TENTHS(nanos, frames) (unsigned) ((nanos) / ((uint64_t) (frames) * 1000000u)), \
+                                  (unsigned) ((nanos) / ((uint64_t) (frames) * 100000u) % 10u)
+    utLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
+    firstFrame = 0;
+    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+        const UtPerfTotals *t = &g_sectionTotals[i];
+        int frames = g_sections[i].lastFrame - firstFrame;
+        utLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", g_sections[i].tag,
+                   TENTHS(t->phaseNanos[UT_PHASE_STEP], frames), TENTHS(t->phaseNanos[UT_PHASE_DRAW], frames),
+                   TENTHS(t->drawNanos[0], frames), TENTHS(t->drawNanos[1], frames), TENTHS(t->drawNanos[2], frames),
+                   TENTHS(t->drawNanos[3], frames), TENTHS(t->drawNanos[4], frames),
+                   TENTHS(t->phaseNanos[UT_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[UT_PHASE_OUT], frames));
+        firstFrame = g_sections[i].lastFrame;
+    }
+    #undef TENTHS
+    utLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
+    firstFrame = 0;
+    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+        const UtPerfTotals *t = &g_sectionTotals[i];
+        uint64_t frames = (uint64_t) (g_sections[i].lastFrame - firstFrame);
+        utLogPrint("%-5s       %5u %5u %5u %5u %5u\n", g_sections[i].tag, (unsigned) (t->drawCalls[0] / frames),
+                   (unsigned) (t->drawCalls[1] / frames), (unsigned) (t->drawCalls[2] / frames),
+                   (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
+        firstFrame = g_sections[i].lastFrame;
+    }
     utDiagHalt("benchmark finished");
 }

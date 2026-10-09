@@ -695,6 +695,12 @@ bool platformHandleEvents(void) {
         showNotice(enable ? "Script times on" : "Script times off");
         logInfo("Debug: script times %s\n", enable ? "on, every 2 s" : "off");
     }
+    if (chording && of_btn_pressed(OF_BTN_Y)) {
+        bool saved = utLogDump();
+        chordUsed = true;
+        showNotice(saved ? "Log saved" : "Log not saved");
+        logInfo("Debug: log %s\n", saved ? "written to the spare save slot; quit from the Analogue menu to keep it" : "could not be written");
+    }
     if (chording) {
         /* One hotkey per frame; it is released on the next. */
         for (size_t i = 0; i < UT_DEBUG_CHORD_COUNT && keyToRelease == 0; i++) {

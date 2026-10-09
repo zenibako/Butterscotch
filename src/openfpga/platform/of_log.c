@@ -28,7 +28,56 @@ void utLogSetConsole(bool enabled) {
     g_console = enabled;
 }
 
+/* The Makefile names these after the game being built. */
+#ifndef UT_GAME_NAME
+#define UT_GAME_NAME "undertale"
+#endif
+#ifndef UT_LOG_SLOT_FILE
+#define UT_LOG_SLOT_FILE "undertale_1.sav"
+#endif
+
+/* Everything logged since start, for utLogDump. When it fills up, the older
+ * half goes and a line says so. */
+#define UT_LOG_HISTORY (160u * 1024u)
+static char g_history[UT_LOG_HISTORY];
+static uint32_t g_historyLen = 0;
+static bool g_historyCut = false;
+
+static void keepHistory(const char *text) {
+    size_t len = strlen(text);
+    if (len >= UT_LOG_HISTORY / 2) return;
+    if (g_historyLen + len > UT_LOG_HISTORY) {
+        /* Drop the older half, from the start of a line. */
+        uint32_t from = UT_LOG_HISTORY / 2;
+        while (from < g_historyLen && g_history[from - 1] != '\n') from++;
+        memmove(g_history, g_history + from, g_historyLen - from);
+        g_historyLen -= from;
+        g_historyCut = true;
+    }
+    memcpy(g_history + g_historyLen, text, len);
+    g_historyLen += (uint32_t) len;
+}
+
+/* Writes the whole log as text to the game's second save slot file
+ * (<game>_1.sav), which the core definition already names and no game uses.
+ * A core can only write to its save slots, and the Pocket copies those back
+ * to the card (Saves/butterscotch/common/) when the core is left through the
+ * Analogue menu: this is how a log gets off the device without a screenshot,
+ * which holds 21 short lines. Returns false if the file could not be written. */
+bool utLogDump(void) {
+    FILE *file = fopen(UT_LOG_SLOT_FILE, "wb");
+    if (file == NULL) return false;
+    static const char cut[] = "(the start of the log no longer fitted and was dropped)\n";
+    bool ok = fputs("Butterscotch log, " UT_GAME_NAME "\n", file) >= 0;
+    if (g_historyCut) ok = ok && fputs(cut, file) >= 0;
+    ok = ok && fwrite(g_history, 1, g_historyLen, file) == g_historyLen;
+    /* Text ends here; whatever the slot held beyond this is cut off by the NUL for a reader that stops at one. */
+    ok = ok && fputc('\0', file) != EOF;
+    return fclose(file) == 0 && ok;
+}
+
 static void keepText(const char *text) {
+    keepHistory(text);
     for (; *text != '\0'; text++) {
         if (*text == '\n') {
             g_lineHead = (g_lineHead + 1) % UT_LOG_LINES;

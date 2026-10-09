@@ -241,6 +241,19 @@ screen) are renamed to the Pocket's buttons in memory after loading; see
 
 ## On-device diagnostics
 
+**The log as a file.** A screenshot of the log overlay holds 21 short
+lines. The whole log, from start-up on, is also written as text to the
+game's second save slot, `undertale_1.sav` or `deltarune_1.sav`: when the
+core halts (the end of a benchmark, a fatal error) and on Select + Y in
+debug mode. A core can only write to its save slots, so that is where it
+goes; the Pocket copies the slot to `Saves/butterscotch/common/` on the
+card when the core is left through the Analogue menu. The text ends at the
+first NUL byte (`strings`, or `tr -d '\0'`, reads it).
+
+The benchmark's report ends with two tables per section: ms per frame by
+phase (game code, drawing and its five kinds of call, sound, presenting)
+and the number of draw calls of each kind per frame.
+
 The boot log stays on screen while loading, and every Butterscotch log line
 is prefixed with seconds since start, so load stages can be timed by eye.
 If the app exits or aborts it halts with the log visible instead of

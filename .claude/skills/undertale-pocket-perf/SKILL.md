@@ -5,6 +5,23 @@ description: Measure and diagnose performance of the Undertale port on the Analo
 
 # Performance work on the Pocket
 
+## Reading the log off the card
+
+Prefer the log file to screenshots: it is the whole log, not the last 21
+lines. It is written to the game's spare save slot when the core halts
+(benchmark end, fatal error) and on Select + Y in debug mode, and reaches
+the card when the user leaves the core through the Analogue menu:
+
+```bash
+tr -d '\0' < /Volumes/Pocket/Saves/butterscotch/common/deltarune_1.sav   # or undertale_1.sav
+```
+
+Check the first line (`Butterscotch log, <game>`) and the timestamps: the
+file stays on the card until the next dump overwrites it, so an old one can
+be mistaken for a new run. A benchmark's report ends with ms-per-frame and
+calls-per-frame tables by section; start there before theorising about
+where a section's time goes.
+
 ## Speed and accuracy
 
 L switches between two settings, and the core starts in **speed** (the

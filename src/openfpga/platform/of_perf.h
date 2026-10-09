@@ -30,6 +30,8 @@ void utPerfScriptReport(const struct Profiler *profiler, int frames);
 const char *utLogLine(int age);
 /* Whether log lines also go to stdout (the OS console). */
 void utLogSetConsole(bool enabled);
+/* Writes everything logged so far to the game's spare save slot; see of_log.c. */
+bool utLogDump(void);
 /* printf to the console and the overlay buffer, without a timestamp. */
 void utLogPrint(const char *format, ...) __attribute__((format(printf, 1, 2)));
 /* "slowest chunks: ..." once data.win has loaded, empty before that. */
@@ -65,6 +67,15 @@ typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOA
 typedef enum { UT_PHASE_OTHER, UT_PHASE_STEP, UT_PHASE_AUDIO, UT_PHASE_DRAW, UT_PHASE_OUT, UT_PHASES } UtPhase;
 #define UT_PERF_SLOW_FRAME_MS 150
 void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);
+/* The same split, added up over every frame since the last call (or since
+ * start), for the benchmark's per-section table. Taking it starts a new sum. */
+typedef struct {
+    uint64_t phaseNanos[UT_PHASES];
+    uint64_t drawNanos[UT_DRAW_KINDS];
+    uint64_t drawCalls[UT_DRAW_KINDS];
+    uint64_t loadNanos[UT_LOAD_KINDS];
+} UtPerfTotals;
+void utPerfTakeTotals(UtPerfTotals *out);
 /* Marks the start of a phase; time since the previous mark goes to the
  * phase that was running. */
 void utPerfPhase(UtPhase phase);

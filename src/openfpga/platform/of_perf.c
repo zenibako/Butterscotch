@@ -35,6 +35,7 @@ static uint64_t g_loadNanos[UT_LOAD_KINDS];
 static uint64_t g_phaseNanos[UT_PHASES];
 static uint64_t g_drawNanos[UT_DRAW_KINDS];
 static unsigned g_drawCalls[UT_DRAW_KINDS];
+static UtPerfTotals g_totals;
 static UtPhase g_phase = UT_PHASE_OTHER;
 static uint64_t g_phaseStart = 0;
 
@@ -82,12 +83,25 @@ static void reportSlowFrame(unsigned workMs) {
         logInfo("  draw: s%u/%u p%u/%u t%u/%u b%u/%u r%u/%u\n", g_drawCalls[0], draw[0], g_drawCalls[1], draw[1],
                 g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4]);
     }
-    for (int i = 0; i < UT_LOAD_KINDS; i++) g_loadNanos[i] = 0;
-    for (int i = 0; i < UT_PHASES; i++) g_phaseNanos[i] = 0;
+    for (int i = 0; i < UT_LOAD_KINDS; i++) {
+        g_totals.loadNanos[i] += g_loadNanos[i];
+        g_loadNanos[i] = 0;
+    }
+    for (int i = 0; i < UT_PHASES; i++) {
+        g_totals.phaseNanos[i] += g_phaseNanos[i];
+        g_phaseNanos[i] = 0;
+    }
     for (int i = 0; i < UT_DRAW_KINDS; i++) {
+        g_totals.drawNanos[i] += g_drawNanos[i];
+        g_totals.drawCalls[i] += g_drawCalls[i];
         g_drawNanos[i] = 0;
         g_drawCalls[i] = 0;
     }
+}
+
+void utPerfTakeTotals(UtPerfTotals *out) {
+    if (out != NULL) *out = g_totals;
+    memset(&g_totals, 0, sizeof(g_totals));
 }
 
 void utPerfToggle(void) {
