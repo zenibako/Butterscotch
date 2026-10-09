@@ -3,7 +3,7 @@
 # mkcompare.sh — add benchmark instances and v0.9 comparison cores to the
 # assembled Pocket tree, so one SD card can run the same benchmark on:
 #
-#   Undertale          this SDK's runtime (v0.7), os25 bitstream
+#   Butterscotch       this SDK's runtime (v0.7), os25 bitstream: Undertale's and Deltarune's benchmarks
 #   Butterscotch09os25   v0.9 runtime, os25 bitstream
 #   Butterscotch09os20   v0.9 runtime, os20 bitstream (dual-issue CPU)
 #
@@ -40,6 +40,17 @@ write_ini undertale_bench.ini undertale.elf --bench os25
 write_instance "$OUT/Assets/butterscotch/zenibako.Butterscotch/Benchmark.json" os.bin undertale_bench.ini undertale.elf
 write_ini undertale_b320.ini undertale.elf --bench-smooth os25
 write_instance "$OUT/Assets/butterscotch/zenibako.Butterscotch/Benchmark 320 smooth.json" os.bin undertale_b320.ini undertale.elf
+
+# The same for Deltarune, when the tree has it: its own benchmark, in each of L's two settings.
+DR_INSTANCE="$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune.json"
+if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
+    write_ini deltarune_bench.ini deltarune.elf --bench os25
+    sed -e 's/"deltarune_os\.ini"/"deltarune_bench.ini"/' "$DR_INSTANCE" \
+        > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark.json"
+    write_ini deltarune_bspd.ini deltarune.elf --bench-smooth os25
+    sed -e 's/"deltarune_os\.ini"/"deltarune_bspd.ini"/' "$DR_INSTANCE" \
+        > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark speed.json"
+fi
 
 cp "$RT09/os.bin" "$COMMON/os09.bin"
 cp "$ELF09" "$COMMON/undertale09.elf"

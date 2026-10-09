@@ -86,6 +86,12 @@ for one quarter of the screen in a single pass and mirrors it
 (`swrMirrorFlush`). In Speed mode it does so for every second pixel each
 way, and sprite draws at 3% opacity or less are left out.
 
+`--bench` works for Deltarune too (`make compare` adds "Deltarune
+Benchmark" entries for both of L's settings): it plays the opening into
+the character creation screens, then jumps to the yard outside Kris's
+house, a Dark World field and the battle there, and reports the time per
+frame for each.
+
 Chapter 1 plays on the desktop build through the opening and a Dark World
 battle. Fog (the hit flash) is not implemented in the software renderer.
 

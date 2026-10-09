@@ -530,6 +530,45 @@ void *platformGetProcAddress(const char *name) {
     return NULL;
 }
 
+/* Room jumps for scripted runs: on a given frame, set some of the game's
+ * globals and go to a room, to reach a scene without playing up to it. The
+ * game's own state is otherwise whatever it was, so this only suits rooms
+ * that set themselves up. */
+static const UtJump *g_jumps = NULL;
+static int g_jumpCount = 0;
+
+void utPlatformSetJumps(const UtJump *jumps, int count) {
+    g_jumps = jumps;
+    g_jumpCount = count;
+}
+
+/* "name=1,other[2]=3": numeric globals, or elements of existing global arrays. */
+static void setGlobals(const char *spec) {
+    VMContext *vm = g_runner->vmContext;
+    for (const char *p = spec; *p != '\0';) {
+        char name[64];
+        size_t n = strcspn(p, "=[");
+        if (n == 0 || n >= sizeof(name)) break;
+        memcpy(name, p, n);
+        name[n] = '\0';
+        int index = p[n] == '[' ? atoi(p + n + 1) : -1;
+        const char *eq = strchr(p, '=');
+        if (eq == NULL) break;
+        RValue value = RValue_makeReal((GMLReal) atof(eq + 1));
+        int32_t id = VM_getOrAllocateVarID(vm, name);
+        if (index < 0) {
+            Instance_setSelfVar(vm->globalScopeInstance, id, value);
+        } else {
+            RValue array = Instance_getSelfVar(vm->globalScopeInstance, id);
+            if (array.type == RVALUE_ARRAY) GMLArray_set(array.array, index, value);
+            else logWarn("Jump: global.%s is not an array\n", name);
+        }
+        const char *comma = strchr(eq, ',');
+        if (comma == NULL) break;
+        p = comma + 1;
+    }
+}
+
 /* Scripted input for repeatable runs (the benchmark, and UT_SCRIPT on
  * desktop):
  *   "300:Z,340:D,341:Z,400:R*90"
@@ -540,6 +579,13 @@ static void runInputScript(void) {
     static int frame = 0;
     const char *script = g_inputScript;
     frame++;
+    if (g_runner != NULL) {
+        for (int i = 0; i < g_jumpCount; i++) {
+            if (g_jumps[i].frame != frame) continue;
+            if (g_jumps[i].set != NULL) setGlobals(g_jumps[i].set);
+            if (g_jumps[i].room >= 0) g_runner->pendingRoom = g_jumps[i].room;
+        }
+    }
 #ifdef OF_PC
     /* UT_GOTO="<frame>:<room index>" jumps to a room, to reach a scene without playing up to it. The game's own
      * state is whatever it was, so this only suits rooms that set themselves up. */
@@ -548,31 +594,8 @@ static void runInputScript(void) {
         g_runner->pendingRoom = atoi(strchr(jump, ':') + 1);
     /* UT_SET="<frame>:name=1,other[2]=3" sets numeric globals (or elements of existing global arrays). */
     const char *set = getenv("UT_SET");
-    if (set != NULL && g_runner != NULL && frame == atoi(set) && strchr(set, ':') != NULL) {
-        VMContext *vm = g_runner->vmContext;
-        for (const char *p = strchr(set, ':') + 1; *p != '\0';) {
-            char name[64];
-            size_t n = strcspn(p, "=[");
-            if (n == 0 || n >= sizeof(name)) break;
-            memcpy(name, p, n);
-            name[n] = '\0';
-            int index = p[n] == '[' ? atoi(p + n + 1) : -1;
-            const char *eq = strchr(p, '=');
-            if (eq == NULL) break;
-            RValue value = RValue_makeReal((GMLReal) atof(eq + 1));
-            int32_t id = VM_getOrAllocateVarID(vm, name);
-            if (index < 0) {
-                Instance_setSelfVar(vm->globalScopeInstance, id, value);
-            } else {
-                RValue array = Instance_getSelfVar(vm->globalScopeInstance, id);
-                if (array.type == RVALUE_ARRAY) GMLArray_set(array.array, index, value);
-                else logWarn("UT_SET: global.%s is not an array\n", name);
-            }
-            const char *comma = strchr(eq, ',');
-            if (comma == NULL) break;
-            p = comma + 1;
-        }
-    }
+    if (set != NULL && g_runner != NULL && frame == atoi(set) && strchr(set, ':') != NULL)
+        setGlobals(strchr(set, ':') + 1);
 #endif
     if (script == NULL || g_runner == NULL) return;
 
