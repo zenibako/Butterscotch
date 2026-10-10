@@ -429,35 +429,49 @@ static bool nextSample(const UtAudioSystem *ut, UtVoice *voice, int32_t *out) {
     return true;
 }
 
-/* Adds `pairs` output samples of one voice into the mono mix buffer. */
+/* Adds `pairs` output samples of one voice into the mono mix buffer.
+ * The resampler and gain state are kept in locals for the length of the
+ * call: mix[] could alias the voice as far as the compiler knows, so working
+ * on the voice itself reloads and stores every field for every sample. */
 static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int pairs) {
+    int32_t sample0 = voice->sample0, sample1 = voice->sample1;
+    uint32_t frac = voice->frac;
+    const uint32_t step = voice->step;
+    int32_t gainNow = voice->gainNow;
+    const int32_t gainTarget = voice->gainTarget, gainStep = voice->gainStepPerPair;
+
     for (int i = 0; i < pairs; i++) {
-        while (voice->frac >= 65536) {
+        while (frac >= 65536) {
             int32_t next;
             if (!nextSample(ut, voice, &next)) {
-                if (!voice->finished) return; /* starved: resume here once refilled */
+                if (!voice->finished) goto out; /* starved: resume here once refilled */
                 next = 0;
-                if (voice->sample1 == 0) {
+                if (sample1 == 0) {
                     voice->active = false;
-                    return;
+                    goto out;
                 }
             }
-            voice->sample0 = voice->sample1;
-            voice->sample1 = next;
-            voice->frac -= 65536;
+            sample0 = sample1;
+            sample1 = next;
+            frac -= 65536;
         }
 
-        int32_t sample = voice->sample0 + (((voice->sample1 - voice->sample0) * (int32_t) (voice->frac >> 4)) >> 12);
-        voice->frac += voice->step;
+        int32_t sample = sample0 + (((sample1 - sample0) * (int32_t) (frac >> 4)) >> 12);
+        frac += step;
 
-        if (voice->gainNow != voice->gainTarget) {
-            int32_t delta = voice->gainTarget - voice->gainNow;
-            if (delta > voice->gainStepPerPair) delta = voice->gainStepPerPair;
-            if (delta < -voice->gainStepPerPair) delta = -voice->gainStepPerPair;
-            voice->gainNow += delta;
+        if (gainNow != gainTarget) {
+            int32_t delta = gainTarget - gainNow;
+            if (delta > gainStep) delta = gainStep;
+            if (delta < -gainStep) delta = -gainStep;
+            gainNow += delta;
         }
-        mix[i] += (sample * (voice->gainNow >> 8)) / UT_GAIN_ONE;
+        mix[i] += (sample * (gainNow >> 8)) / UT_GAIN_ONE;
     }
+out:
+    voice->sample0 = sample0;
+    voice->sample1 = sample1;
+    voice->frac = frac;
+    voice->gainNow = gainNow;
 }
 
 static void mixAndWrite(UtAudioSystem *ut, int pairs) {
@@ -489,7 +503,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
             int32_t sample = mix[i];
             if (sample > 65535) sample = 65535;
             if (sample < -65535) sample = -65535;
-            sample = (sample * master) / UT_GAIN_ONE;
+            if (master != UT_GAIN_ONE) sample = (sample * master) / UT_GAIN_ONE;
             if (sample > 32767) sample = 32767;
             if (sample < -32768) sample = -32768;
             out[i * 2] = (int16_t) sample;
