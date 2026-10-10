@@ -143,6 +143,7 @@ typedef struct {
 
 /* The file idle hook has no user pointer, so the one instance is global. */
 static UtAudioSystem *g_audio = NULL;
+static bool g_muted = false; /* see Muting, below */
 
 /* ===[ Pack lookup ]=== */
 
@@ -605,7 +606,7 @@ static void pumpOutput(UtAudioSystem *ut) {
  * queue is deep (100 ms) leaves a gap in the sound. */
 void platformBusyTick(void) {
     /* A dump follows game time instead of the queue; see updateAudio. */
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL) pumpOutput(g_audio);
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !g_muted) pumpOutput(g_audio);
 }
 
 /* A room change is the one long stretch of work with nowhere to feed the
@@ -613,12 +614,12 @@ void platformBusyTick(void) {
  * log hook calls this when the change starts, to queue enough to cover it.
  * Sounds that start in the next quarter second are heard that much late. */
 void utAudioRoomChange(void) {
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !g_muted) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
 }
 
 #ifndef OF_PC
 static void idleHook(void) {
-    if (g_audio != NULL && g_audio->file != NULL) pumpOutput(g_audio);
+    if (g_audio != NULL && g_audio->file != NULL && !g_muted) pumpOutput(g_audio);
 }
 #endif
 
@@ -768,8 +769,63 @@ static void refillStreams(UtAudioSystem *ut) {
     if (neediest != NULL) refillVoice(ut, neediest);
 }
 
+/* ===[ Muting ]===
+ * With sound muted (a debug switch, to see what sound costs) nothing is
+ * decoded, mixed, read from the card or handed to the OS. Sounds still run
+ * their course, since the game asks whether they are playing and where they
+ * have got to: each frame moves every voice on by the game's time, as a seek
+ * would. A seek cannot carry the decoder's state, so a sound that was playing
+ * when the mute came off is rough for a moment, as after any seek. */
+
+
+static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
+    const UtMusicTrack *track = &ut->tracks[voice->track];
+    uint64_t ahead = (uint64_t) voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
+    uint64_t sample = (uint64_t) voice->samplesDecoded + (ahead >> 16);
+    voice->frac = (uint32_t) (ahead & 0xFFFF) + 65536; /* as after a seek: the next output sample fetches a new one */
+    if (sample >= track->sampleCount) {
+        if (!voice->loop || track->sampleCount == 0) {
+            voice->finished = true;
+            voice->active = false;
+            return;
+        }
+        sample %= track->sampleCount;
+    }
+    sample &= ~(uint64_t) 1;
+    if (voice->streamSlot >= 0) {
+        voice->bufferLen = voice->bufferPos = 0;
+        voice->fileBytePos = (uint32_t) (sample / 2);
+    } else {
+        voice->bufferPos = (uint32_t) (sample / 2);
+    }
+    voice->samplesDecoded = (uint32_t) sample;
+    voice->adpcm.predictor = voice->adpcm.stepIndex = 0;
+    voice->havePendingCode = false;
+    voice->sample0 = voice->sample1 = 0;
+    voice->gainNow = voice->gainTarget;
+}
+
+void utAudioSetMuted(bool muted) {
+    g_muted = muted;
+}
+
+bool utAudioMuted(void) {
+    return g_muted;
+}
+
 static void updateAudio(UtAudioSystem *ut, float deltaTime) {
     if (ut->file == NULL) return;
+
+    if (g_muted && ut->dump == NULL) {
+        int pairs = (int) (deltaTime * (float) OF_AUDIO_RATE + 0.5f);
+        if (pairs > 0 && !ut->allPaused) {
+            for (int v = 0; v < UT_MAX_VOICES; v++) {
+                UtVoice *voice = &ut->voices[v];
+                if (voice->active && !voice->paused) skipVoice(ut, voice, pairs);
+            }
+        }
+        return;
+    }
 
     refillStreams(ut);
 

@@ -11,6 +11,7 @@
 #include "loop.h"
 #include "platform/of_diag.h"
 #include "platform/ut_bench.h"
+#include "platform/of_hooks.h"
 #include "stb_ds.h"
 
 #ifdef OF_PC
@@ -78,6 +79,7 @@ int main(int argc, char **argv) {
             utBenchStart();
         }
         if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugMode(true);
+        if (strcmp(argv[i], "--mute") == 0) utAudioSetMuted(true); /* as Select + Down in debug mode */
         /* Game-script times in the log every 150 frames (see utPerfScriptReport): which scripts a section's
          * "step" and unexplained "draw" time are. Timing every script call slows the run, so a benchmark
          * with this on is for the names, not for its totals. */

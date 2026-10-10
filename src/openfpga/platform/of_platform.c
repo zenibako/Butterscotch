@@ -932,6 +932,13 @@ bool platformHandleEvents(void) {
         chordUsed = true;
         showNotice(scriptProfileOn() ? "Script times on" : "Script times off");
     }
+    if (chording && of_btn_pressed(OF_BTN_DOWN)) {
+        bool mute = !utAudioMuted();
+        utAudioSetMuted(mute);
+        chordUsed = true;
+        showNotice(mute ? "Sound off" : "Sound on");
+        logInfo("Debug: sound %s\n", mute ? "off" : "on; what was playing is rough until it next starts");
+    }
     if (chording && of_btn_pressed(OF_BTN_Y)) {
         bool saved = utLogDump();
         chordUsed = true;
