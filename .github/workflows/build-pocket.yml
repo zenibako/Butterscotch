@@ -22,9 +22,6 @@ env:
   # only the SDK, and the port lives outside it.
   USE_SDK_CONTAINER: "0"
 
-permissions:
-  contents: read
-
 jobs:
   build-pocket:
     name: Build (Analogue Pocket)

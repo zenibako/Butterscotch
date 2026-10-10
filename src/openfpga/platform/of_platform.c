@@ -249,14 +249,13 @@ void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skipp
     Renderer *renderer = g_runner != NULL ? g_runner->renderer : NULL;
     if (renderer != NULL && renderer->dataWin->sprt.count > 0) {
         bool skipped = swrSkipFrame;
-        bool timed = swrDrawTimed; /* as the last frame left it; the renderer reads the clock only when set */
         swrSkipFrame = true;
         start = nowNanos();
         for (int i = 0; i < CALLS; i++) Renderer_drawSprite(renderer, 0, i, 0.0f, 0.0f);
         uint64_t afterDraw = nowNanos();
         *skippedDraw = (unsigned) ((afterDraw - start) / CALLS);
         /* Two clock reads are the renderer's timing of the call; what is left is the call itself. */
-        *skippedDrawUntimed = !timed ? *skippedDraw : *skippedDraw > 2 * *clock ? *skippedDraw - 2 * *clock : 0;
+        *skippedDrawUntimed = *skippedDraw > 2 * *clock ? *skippedDraw - 2 * *clock : 0;
         swrSkipFrame = skipped;
     }
 

@@ -67,6 +67,8 @@ cd butterscotch-pocket/src/openfpga
 cp /path/to/data.win data.win
 ln -s /path/to/folder-with-ogg-files music
 
+export PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$PATH"
+export USE_SDK_CONTAINER=0
 make            # builds the core and its data packs into out/build/pocket/butterscotch/
 make copy       # copies it to a mounted Pocket SD card
 ```
@@ -74,11 +76,6 @@ make copy       # copies it to a mounted Pocket SD card
 On macOS, put Homebrew's GNU sed first on `PATH` and set
 `USE_SDK_CONTAINER=0` first (the SDK's scripts need GNU sed, and this builds
 with the host's `riscv64-elf-gcc` instead of the SDK's Docker image).
-
-```bash
-export PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$PATH"
-export USE_SDK_CONTAINER=0
-```
 
 ```bash
 make            # RISC-V ELF + Pocket SD tree in out/build/pocket/butterscotch/
