@@ -2091,8 +2091,28 @@ static bool swrTiledPassSetUp(SWRenderer* swr, SWTexture* texture, int sx, int s
     return true;
 }
 
+// What the fills being held make of a colour, the last answer kept: a clear
+// and a pass or two leave few colours to ask about.
+typedef struct { uintpixel_t from, to; bool known; } SWFilledMemo;
+
+FORCE_INLINE uintpixel_t swrFilled(SWFilledMemo* memo, int fills, uintpixel_t under)
+{
+    if (memo->known && memo->from == under) return memo->to;
+    uintpixel_t result = under;
+    for (int f = 0; f < fills; f++)
+        result = swrBlendPremultiplied(result, swrFillHeld[f].redBlue, swrFillHeld[f].green, swrFillHeld[f].inverse);
+    memo->from = under;
+    memo->to = result;
+    memo->known = true;
+    return result;
+}
+
 // Draws what the pass puts on row y of the buffer, whose pixels are at dstline.
-FORCE_INLINE void swrTiledPassRow(const SWTiledPass* pass, int y, uintpixel_t* dstline, SWTiledMemo* memo)
+// With `filled`, dstline is a copy of the row as it is without the fills held
+// over the passes, and each pixel written there also goes to `filled` as the
+// fills leave it.
+FORCE_INLINE void swrTiledPassRow(const SWTiledPass* pass, int y, uintpixel_t* dstline, SWTiledMemo* memo,
+                                  uintpixel_t* filled, int fills, SWFilledMemo* filledMemo)
 {
     int fromOrigin = y - pass->originY;
     if (y < pass->minY || y >= pass->maxY || fromOrigin < 0) return;
@@ -2121,8 +2141,11 @@ FORCE_INLINE void swrTiledPassRow(const SWTiledPass* pass, int y, uintpixel_t* d
         if (x1 > pass->maxX) x1 = pass->maxX;
         for (int x = x0; x < x1; x++) {
             const uint8_t* covered = covline != NULL ? &covline[x - left] : NULL;
-            if (covered != NULL ? *covered != 0 : swrIsOpaque(srcline[x - left]))
-                dstline[x] = swrTiledPixelMemo(memo, dstline[x], srcline[x - left], covered, pass->alpha);
+            if (covered != NULL ? *covered != 0 : swrIsOpaque(srcline[x - left])) {
+                uintpixel_t result = swrTiledPixelMemo(memo, dstline[x], srcline[x - left], covered, pass->alpha);
+                dstline[x] = result;
+                if (filled != NULL) filled[x] = swrFilled(filledMemo, fills, result);
+            }
         }
     }
 }
@@ -2143,7 +2166,7 @@ bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy,
     if (!swrTiledPassSetUp(swr, texture, sx, sy, sw, sh, firstX, firstY, tileW, tileH, countX, countY, color, alphaf, &swrTiledNow)) return false;
     SWTiledMemo memo = { 0 };
     for (int y = swrTiledNow.minY; y < swrTiledNow.maxY; y++)
-        swrTiledPassRow(&swrTiledNow, y, &swr->fb[y * swr->fbPitch], &memo);
+        swrTiledPassRow(&swrTiledNow, y, &swr->fb[y * swr->fbPitch], &memo, NULL, 0, NULL);
     return true;
 #endif
 }
@@ -2217,9 +2240,11 @@ void swrFillHeldDrop(void)
 
 // Writes the held clear's colour over the whole main buffer, the tiled passes
 // held over it and the fills held over those, a row at a time. Leaves none
-// held. A row is put together in a buffer of its own and copied out: a pass
-// over another reads what is under it, and so does a fill, and those reads
-// are then of the cache.
+// held. With fills, the buffer's row is filled with what they make of the
+// clear's colour, and the passes work on a copy of the row without the fills
+// (a pass over another reads what is under it), putting each pixel they
+// write into the buffer as the fills leave it: per pixel only where a pass
+// draws, which for a grid of lines is little of the screen.
 void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
 {
 #if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
@@ -2229,31 +2254,22 @@ void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
     swr->tiledHeldCount = 0;
     swrFillHeldCount = 0;
     SWTiledMemo memos[SWR_TILED_HELD_MAX] = { 0 };
-    uintpixel_t row[SWR_HELD_ROW_MAX];
-    bool own = swr->mainWidth <= SWR_HELD_ROW_MAX;
-    uintpixel_t filledFrom = 0, filledTo = 0;
-    bool filledKnown = false;
+    if (fills == 0) {
+        for (int y = 0; y < swr->mainHeight; y++) {
+            uintpixel_t* dstline = &swr->mainFb[y * swr->mainWidth];
+            swrFillPixels(dstline, (size_t) swr->mainWidth, color);
+            for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, dstline, &memos[p], NULL, 0, NULL);
+        }
+        return;
+    }
+    uintpixel_t row[SWR_HELD_ROW_MAX]; // swrFillHold has checked that a row fits
+    SWFilledMemo filledMemo = { 0 };
+    uintpixel_t filledColor = swrFilled(&filledMemo, fills, color);
     for (int y = 0; y < swr->mainHeight; y++) {
         uintpixel_t* dstline = &swr->mainFb[y * swr->mainWidth];
-        uintpixel_t* line = own ? row : dstline;
-        swrFillPixels(line, (size_t) swr->mainWidth, color);
-        for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, line, &memos[p]);
-        if (fills > 0) {
-            // Few colours come out of a clear and a pass or two: the last answer is nearly always the next.
-            for (int x = 0; x < swr->mainWidth; x++) {
-                uintpixel_t under = line[x];
-                if (!filledKnown || under != filledFrom) {
-                    uintpixel_t result = under;
-                    for (int f = 0; f < fills; f++)
-                        result = swrBlendPremultiplied(result, swrFillHeld[f].redBlue, swrFillHeld[f].green, swrFillHeld[f].inverse);
-                    filledFrom = under;
-                    filledTo = result;
-                    filledKnown = true;
-                }
-                line[x] = filledTo;
-            }
-        }
-        if (own) memcpy(dstline, row, (size_t) swr->mainWidth * sizeof(uintpixel_t));
+        swrFillPixels(dstline, (size_t) swr->mainWidth, filledColor);
+        swrFillPixels(row, (size_t) swr->mainWidth, color);
+        for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, row, &memos[p], dstline, fills, &filledMemo);
     }
 #endif
 }
