@@ -43,14 +43,23 @@ device):
 | `UT_SCRIPT="30:Z,700:R*400"` | press keys on given frames; `*N` holds for N frames. Keys: U D L R, Z X C, E (Enter) |
 | `UT_SEED=n` | fix the game's random seed |
 | `UT_UNCAPPED=1` | no frame pacing (runs as fast as the display flip allows) |
-| `UT_SMOOTH=1` | render 640x480 rooms at 320x240 with 2x2 averaging |
+| `UT_SMOOTH=1` | speed mode, as L sets it: 640x480 rooms at 320x240 with 2x2 averaging, faint mirrored layers left out. (Frame skipping needs frame pacing, so it never happens with `UT_UNCAPPED`.) |
+| `UT_SKIP=n` | draw only every nth frame, whatever the mode. A frame captured this way must be identical to one from a run without it: a difference means something drawn on a skipped frame mattered to a later one |
+| `UT_MIRROR_FAINT=a`, `UT_NO_MIRROR=1` | fix the faint-layer threshold (of 256) whatever the mode; draw mirrored layers the ordinary way |
 | `UT_OVERLAY=1` | turn on the frame-time and log overlays |
+| `UT_DEBUG=1` | debug mode, as holding Select for two seconds sets it on the device: the Accuracy/Speed mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
 | `UT_AUDIO_DUMP=f.raw` | write the mixed output, 48 kHz stereo s16le |
 | `UT_AUDIO_LOG=1` | log every sound effect as it starts |
 | `UT_DUMP_STATE=n` | print every instance and its variables at frame n |
 | `UT_DISASM=name` | print that code entry's bytecode at start (`*` for all, about a million lines) |
 | `UT_DUMP_EVERY=n`, `UT_DUMP_DIR=d` | also write every nth frame to `d/f<frame>.ppm` on the way to `UT_DUMP_FRAME` |
 | `UT_NOFLIP=1` | never present to the window; without it a run is capped at the display's 60 fps even with `UT_UNCAPPED` |
+| `UT_RECORD=f.json` | write every key press and release, by frame, when the run ends (Butterscotch's `--record-inputs`) |
+| `UT_PLAYBACK=f.json` | replay a recording (`--playback-inputs`). With `UT_RECORD` as well it replays, then records what follows, so a recording can be extended |
+| `UT_PROFILE=n` | log the heaviest game scripts every n frames; the report Select + X gives on the device (see the perf skill) |
+| `UT_EXIT_FRAME=n` | leave the main loop at frame n, the ordinary way out (a frame dump exits on the spot) |
+| `UT_NO_NATIVE=1` | run every game script in the interpreter, leaving out the native stand-ins of `platform/ut_native.c`; frames must match with and without |
+| `UT_CODEHASH=name` | print a code entry's length and bytecode hash, for a row of the table in `ut_native.c` |
 | `UT_GOTO="frame:room"` | jump to a room index on that frame; the game's own state is left as it was |
 | `UT_SET="frame:name=1,arr[2]=3"` | set numeric globals (or elements of existing global arrays) on that frame |
 
@@ -78,6 +87,34 @@ With that script and seed 7:
 To reach somewhere new, extend a script and look at a few frames; expect
 two or three attempts to get movement distances right.
 
+### Recordings instead of scripts
+
+A script has to be guessed frame by frame. A recording is made by playing:
+anyone at the Mac's own screen can play to the spot once, and the file
+then replays exactly, as often as needed. Use one whenever the scene is
+more than a short walk away, and to reproduce a bug the user can show on
+the desktop build. Ask the user to record it; you cannot play
+interactively.
+
+```bash
+cd src/openfpga
+UT_SEED=7 UT_RECORD=/path/to/ruins.json ./undertale_pc    # play, then close the window
+scripts/ut-frames.sh -e UT_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
+```
+
+- Record and replay with the same seed (ut-frames.sh uses 7) and from the
+  same save state; ut-frames.sh starts from none, so record from none too
+  (delete `undertale_0.sav`, `file0`, `file9`, `undertale.ini` first).
+- A recording is by frame number, so it replays the same uncapped. Checked
+  with flowey.script: recorded through `UT_RECORD`, replayed without the
+  script, frames 1300 and 2400 identical.
+- To go further from the end of one: `UT_PLAYBACK=a.json UT_RECORD=b.json`.
+- Turn a script into a recording by running it once with `UT_RECORD`.
+- It records the game's keys, not Pocket buttons: Select chords, L and R
+  are not in it.
+- A change that alters game logic or timing in frames (not just speed)
+  makes an old recording drift, like a script would.
+
 ## The standard check for a change
 
 1. Before the change, dump reference frames covering the code you are about
@@ -86,7 +123,10 @@ two or three attempts to get movement distances right.
 2. Make the change, rebuild, dump the same frames with a different prefix.
 3. `ppmtool.py cmp` each pair. An optimisation should report `identical`.
    For an intended visual change, look at the PNG and describe what changed.
-4. Report exactly which frames you compared.
+4. For a renderer change, repeat one capture with `-e UT_SKIP=2`: it must
+   match the unskipped one (frame skipping relies on a skipped frame
+   leaving nothing behind that a later frame needs).
+5. Report exactly which frames you compared.
 
 For audio, compare a new `UT_AUDIO_DUMP` against an earlier one. Captures
 can start a few dozen samples apart, so search for the shift that makes
@@ -110,6 +150,19 @@ that only shows on the Mac's own screen; run it under a watchdog. Use
 `stb_ds.h:1132`, a left shift in the vendored hash function. A function
 Butterscotch calls into the port needs its prototype in
 `platform/of_hooks.h`, or lint reports it.
+
+## Looking inside the game
+
+When behaviour is wrong rather than slow, Butterscotch's own tracing is
+there on the desktop build. Already wired: `UT_DUMP_STATE` (every instance
+and variable at a frame) and `UT_DISASM` (a code entry's bytecode). The
+rest of its `--trace-*` family (variable reads and writes, function calls,
+alarms, events, collisions, instance creation, tiles, opcodes, stack) is
+not wired to a variable, but each is one line in `main.c` next to
+`UT_DISASM`: put the name to trace (or `*`) in the matching
+`args.*ToBeTraced` map, as `src/cli/args.c` does. Add the one the bug
+needs rather than all of them; `*` on a running game prints thousands of
+lines a frame.
 
 ## Traps that have cost time
 

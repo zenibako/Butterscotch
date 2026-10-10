@@ -300,6 +300,54 @@ static size_t readPack(UtAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint3
     return got;
 }
 
+/* Reads a file stored in the pack (see UT_MUSIC_RAW_FILE) by its base name. The caller frees *outData, which
+ * is NUL terminated past its size so that text can be used directly. Main loop only: this blocks. */
+static const UtMusicTrack *findPackFile(const char *path) {
+    UtAudioSystem *ut = g_audio;
+    if (ut == NULL || ut->file == NULL || path == NULL) return NULL;
+
+    const char *base = path;
+    for (const char *p = path; *p != '\0'; p++) {
+        if (*p == '/' || *p == '\\') base = p + 1;
+    }
+    char name[UT_MUSIC_NAME_LEN] = {0};
+    size_t len = strlen(base);
+    if (len == 0 || len >= UT_MUSIC_NAME_LEN) return NULL;
+    for (size_t i = 0; i < len; i++) name[i] = (char) tolower((unsigned char) base[i]);
+
+    for (uint32_t i = 0; i < ut->trackCount; i++) {
+        if (ut->tracks[i].sampleRate == UT_MUSIC_RAW_FILE && strncmp(name, ut->tracks[i].name, UT_MUSIC_NAME_LEN) == 0)
+            return &ut->tracks[i];
+    }
+    return NULL;
+}
+
+bool utAudioHasPackFile(const char *path) {
+    return findPackFile(path) != NULL;
+}
+
+bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize) {
+    UtAudioSystem *ut = g_audio;
+    const UtMusicTrack *track = findPackFile(path);
+    if (track == NULL) return false;
+
+    uint32_t size = track->sampleCount;
+    uint8_t *data = malloc((size_t) size + 1);
+    if (data == NULL) return false;
+    for (uint32_t done = 0; done < size;) {
+        uint32_t want = size - done < UT_READ_PIECE ? size - done : UT_READ_PIECE;
+        if (readPack(ut, track->offset + done, data + done, want) != want) {
+            free(data);
+            return false;
+        }
+        done += want;
+    }
+    data[size] = '\0';
+    *outData = data;
+    *outSize = size;
+    return true;
+}
+
 /* Tops up a voice's read-ahead from the pack. Main loop only: this blocks. */
 static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
     if (voice->streamSlot < 0) return;

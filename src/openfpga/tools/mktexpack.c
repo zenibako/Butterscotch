@@ -115,12 +115,19 @@ int main(int argc, char **argv) {
     }
     const uint8_t *txtrEnd = txtr + txtrLen;
 
-    /* WAD 16 layout: count, then pointers to { uint32 scaled; uint32 blobOffset; }. */
+    /* Count, then pointers to entries whose last field is the blob offset. An entry is
+     * { uint32 scaled; uint32 blobOffset; } in WAD 16 and grows in later GameMaker versions (up to 28 bytes in
+     * 2022.9+), so its size is taken from the spacing of the first two. */
     uint32_t count = readU32(txtr);
+    uint32_t entrySize = count >= 2 ? readU32(txtr + 8) - readU32(txtr + 4) : 8;
+    if (entrySize < 8 || entrySize > 64) {
+        fprintf(stderr, "%s: unexpected TXTR entry size %u\n", argv[1], (unsigned) entrySize);
+        return 1;
+    }
     uint32_t *blobOffsets = calloc(count, sizeof(uint32_t));
     for (uint32_t i = 0; i < count; i++) {
         uint32_t entry = readU32(txtr + 4 + 4 * i);
-        blobOffsets[i] = readU32(data + entry + 4);
+        blobOffsets[i] = readU32(data + entry + entrySize - 4);
     }
 
     /* First pass: decode and convert every page, and count the tiles. */
@@ -140,7 +147,12 @@ int main(int argc, char **argv) {
         }
 
         int w, h;
-        uint8_t *rgba = ImageDecoder_decodeToRgba(blob, (size_t) (blobEnd - blob), false, &w, &h);
+        /* Compressed pages written by GameMaker 2022.5+ carry one more header field. The entry size says the
+         * file is that new from 28 bytes up; a 16-byte entry could be either, so both are tried. */
+        bool newer = entrySize >= 16;
+        uint8_t *rgba = ImageDecoder_decodeToRgba(blob, (size_t) (blobEnd - blob), newer, &w, &h);
+        if (rgba == NULL && entrySize == 16)
+            rgba = ImageDecoder_decodeToRgba(blob, (size_t) (blobEnd - blob), !newer, &w, &h);
         if (!rgba) {
             fprintf(stderr, "page %u: decode failed\n", i);
             return 1;

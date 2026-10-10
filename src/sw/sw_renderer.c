@@ -15,6 +15,74 @@
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
 static void swrFlushPendingClear(SWRenderer* swr);
+static int swrPendingCount; // tile pictures being held (see the tile run cache)
+
+// ===[ Call notes ]===
+// See sw_call_notes.h.
+#include "sw_call_notes.h"
+bool swrCallNotes = false;
+#ifdef SW_DRAW_PROFILE
+#include "gettime.h"
+#define SWR_NOTE_MAX 192
+static SWCallNote swrNotes[SWR_NOTE_MAX];
+static uint32_t swrNoteHashes[SWR_NOTE_MAX]; // of the descriptions, to find one without comparing them all
+static int swrNoteCount = 0;
+static uint32_t swrNoteMissed = 0;
+
+static void swrNote(uint64_t nanos, const char* what)
+{
+    uint32_t hash = 2166136261u;
+    for (int c = 0; what[c] != '\0' && c < (int) sizeof(swrNotes[0].what) - 1; c++) hash = (hash ^ (uint8_t) what[c]) * 16777619u;
+    for (int i = 0; i < swrNoteCount; i++) {
+        if (swrNoteHashes[i] != hash || strncmp(swrNotes[i].what, what, sizeof(swrNotes[i].what) - 1) != 0) continue;
+        swrNotes[i].calls++;
+        swrNotes[i].nanos += nanos;
+        return;
+    }
+    int slot = swrNoteCount;
+    if (swrNoteCount == SWR_NOTE_MAX) {
+        // Full: the description with the least time makes way, so that ones
+        // seen once (a bar a pixel longer every frame) do not crowd out the rest.
+        slot = 0;
+        for (int i = 1; i < SWR_NOTE_MAX; i++) if (swrNotes[i].nanos < swrNotes[slot].nanos) slot = i;
+        swrNoteMissed += swrNotes[slot].calls;
+    } else {
+        swrNoteCount++;
+    }
+    swrNoteHashes[slot] = hash;
+    SWCallNote* note = &swrNotes[slot];
+    snprintf(note->what, sizeof(note->what), "%s", what);
+    note->calls = 1;
+    note->nanos = nanos;
+}
+
+int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
+{
+    int taken = 0;
+    while (taken < max) {
+        int heaviest = -1;
+        for (int i = 0; i < swrNoteCount; i++) {
+            if (swrNotes[i].calls != 0 && (heaviest < 0 || swrNotes[i].nanos > swrNotes[heaviest].nanos)) heaviest = i;
+        }
+        if (heaviest < 0) break;
+        out[taken++] = swrNotes[heaviest];
+        swrNotes[heaviest].calls = 0;
+    }
+    if (missed != NULL) *missed = swrNoteMissed;
+    swrNoteCount = 0;
+    swrNoteMissed = 0;
+    return taken;
+}
+// Times a statement that is part of some call, under a name of its own.
+#define SWR_NOTED(what, statement) do { \
+        uint64_t noteStart_ = swrCallNotes ? nowNanos() : 0; \
+        statement; \
+        if (swrCallNotes) swrNote(nowNanos() - noteStart_, what); \
+    } while (0)
+#else
+int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed) { (void) out; (void) max; if (missed != NULL) *missed = 0; return 0; }
+#define SWR_NOTED(what, statement) do { statement; } while (0)
+#endif
 
 #ifdef SW_PLATFORM_FRAMEBUFFER
 // Optional: lets the platform hand out the buffer each frame is drawn into
@@ -179,6 +247,7 @@ static void SWRenderer_endFrameEnd(Renderer* renderer)
 #endif
     
     // Nothing cleared the frame itself: do it now rather than present stale pixels.
+    if (swrSkipFrame) swr->pendingClear = false;
     swrFlushPendingClear(swr);
     
     platformSetNextFramebuffer(swr->fb, swr->width, swr->height, PIXEL_SIZE);
@@ -189,7 +258,7 @@ static void SWRenderer_endFrameEnd(Renderer* renderer)
 static void SWRenderer_beginView(Renderer* renderer, int32_t viewX, int32_t viewY, int32_t viewW, int32_t viewH,
                                  int32_t portX, int32_t portY, int32_t portW, int32_t portH, float viewAngle)
 {
-    swrOverlayFlush((SWRenderer*) renderer);
+    swrOverlayFlushForState((SWRenderer*) renderer);
     (void)renderer; (void)viewX; (void)viewY; (void)viewW; (void)viewH;
     (void)portX; (void)portY; (void)portW; (void)portH; (void)viewAngle;
     UNIMP2();
@@ -305,6 +374,7 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
                                   float originX, float originY, float xscale, float yscale,
                                   float angleDeg, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dwin = renderer->dataWin;
 
@@ -366,6 +436,7 @@ static void SWRenderer_drawSpritePart(Renderer* renderer, int32_t tpagIndex,
                                       float x, float y, float xscale, float yscale, float angleDeg,
                                       float pivotX, float pivotY, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     // The interface allows fractional source rectangles; this renderer samples whole texels.
     int32_t srcOffX = (int32_t) srcOffXf, srcOffY = (int32_t) srcOffYf, srcW = (int32_t) srcWf, srcH = (int32_t) srcHf;
     swrOverlayFlush((SWRenderer*) renderer);
@@ -423,6 +494,7 @@ static void SWRenderer_drawSpritePos(Renderer* renderer, int32_t tpagIndex,
                                      float x1, float y1, float x2, float y2,
                                      float x3, float y3, float x4, float y4, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     // TODO: Implement this properly.  (I won't in this PR)
     //
@@ -460,19 +532,47 @@ static void SWRenderer_drawSpritePos(Renderer* renderer, int32_t tpagIndex,
 static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2,
                                      uint32_t color, float alpha, bool outline)
 {
-    swrOverlayFlush((SWRenderer*) renderer);
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
+    SWRenderer* swr = (SWRenderer*) renderer;
+#if PIXEL_SIZE == 16
+    // Nothing comes of a rectangle this faint (alphaBlend skips it), so it is no reason to let out what is held.
+    if (swr->blendMode == bm_normal && swrIntAlpha(alpha) < 4) return;
+#endif
     uintpixel_t pxcolor = swrConvertPixel(color);
+#ifdef SW_HAS_PREMUL_BLEND
+    // An opaque fill of the whole screen: the grid and tile pictures still held would not show under it.
+    if (!outline && swrFillCoversMain(swr, x1, y1, x2, y2, alpha)) swrHeldUnderDiscard(swr);
+    // A fill over a held stack of mirrored layers may join it instead of letting it out.
+    if (!outline && swrMirrorHoldFill(renderer, x1, y1, x2, y2, pxcolor, alpha)) return;
+#endif
+    
+    // Still one colour if the flush has nothing to draw; a fill with that colour is then redundant.
+    bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
+    bool kept = swr->uniformValid && nothingHeld;
+    // A clear still held is handed to the fill, which replaces it if it covers as much.
+    bool clearTaken = kept && !outline && swr->clearHeld;
+    if (clearTaken) swr->clearHeld = false;
+    swrOverlayFlush(swr);
     
     if (outline)
         swrDrawRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
-    else
+    else {
+        swr->clearHeldForFill = clearTaken;
+        swr->uniformKept = kept;
         swrFillRectangle(renderer, x1, y1, x2, y2, pxcolor, alpha);
+        swr->uniformKept = false;
+    }
 }
 
 static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1, float x2, float y2,
                                           uint32_t color1, uint32_t color2, uint32_t color3, uint32_t color4,
                                           float alpha, bool outline)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
+#if PIXEL_SIZE == 16
+    // As in SWRenderer_drawRectangle: too faint to draw, so nothing held is let out for it.
+    if (((SWRenderer*) renderer)->blendMode == bm_normal && swrIntAlpha(alpha) < 4) return;
+#endif
     swrOverlayFlush((SWRenderer*) renderer);
     uintpixel_t pxcolor1 = swrConvertPixel(color1);
     uintpixel_t pxcolor2 = swrConvertPixel(color2);
@@ -488,6 +588,7 @@ static void SWRenderer_drawRectangleColor(Renderer* renderer, float x1, float y1
 static void SWRenderer_drawLine(Renderer* renderer, float x1, float y1, float x2, float y2,
                                 float width, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     (void)renderer; (void)x1; (void)y1; (void)x2; (void)y2;
     (void)width; (void)color; (void)alpha;
@@ -504,6 +605,7 @@ static void SWRenderer_drawTriangle(Renderer* renderer,
                                     uint32_t color1, uint32_t color2, uint32_t color3,
                                     float alpha, bool outline)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     if (outline)
     {
@@ -523,6 +625,7 @@ static void SWRenderer_drawTriangle(Renderer* renderer,
 static void SWRenderer_drawLineColor(Renderer* renderer, float x1, float y1, float x2, float y2,
                                      float width, uint32_t color1, uint32_t color2, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     swrDrawLine(renderer, x1, y1, x2, y2, width, swrConvertPixel(color1), swrConvertPixel(color2), alpha, SWR_LINE_ALIGN_CENTER);
 }
@@ -530,6 +633,7 @@ static void SWRenderer_drawLineColor(Renderer* renderer, float x1, float y1, flo
 static void SWRenderer_drawText(Renderer* renderer, const char* text, float x, float y,
                                 float xscale, float yscale, float angleDeg, float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     swrDrawText(swr, text, x, y, xscale, yscale, angleDeg, renderer->drawColor, renderer->drawAlpha, lineSeparation);
@@ -540,6 +644,7 @@ static void SWRenderer_drawTextColor(Renderer* renderer, const char* text, float
                                      int32_t c1, int32_t c2, int32_t c3, int32_t c4, MAYBE_UNUSED float alpha,
                                      float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     
@@ -556,6 +661,7 @@ static void SWRenderer_drawTextUI(Renderer* renderer, const char* text, float x,
                                   int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
                                   float lineSeparation)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     
@@ -575,8 +681,12 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
                                        float xscale, float yscale, bool tileX, bool tileY,
                                        float roomW, float roomH, uint32_t color, float alpha)
 {
-    swrOverlayFlush((SWRenderer*) renderer);
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     SWRenderer* swr = (SWRenderer*) renderer;
+    // A clear of the whole main buffer still held, with nothing over it but
+    // tiled passes held already: this one can be held with them.
+    bool canHold = swr->clearHeld && swr->fb == swr->mainFb && swrPendingCount == 0 && !swrGridHeld() &&
+                   swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
     DataWin* dwin = renderer->dataWin;
 
     if (0 > tpagIndex || dwin->tpag.count <= (uint32_t) tpagIndex) return;
@@ -625,17 +735,46 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
     int sx1 = xscale * localX1;
     int sy1 = yscale * localY1;
 
+    // The room rectangle the port shows, with a pixel to spare. A small sprite
+    // tiled over a big room is hundreds of copies, nearly all of them
+    // somewhere else; those are stepped over below without a draw call.
+    bool cull = swr->scaleX > 0.0f && swr->scaleY > 0.0f;
+    int viewLeft = swr->viewX - 1, viewTop = swr->viewY - 1;
+    int viewRight = cull ? swr->viewX + (int) ((float) (swr->maxX - swr->portX) / swr->scaleX) + 2 : 0;
+    int viewBottom = cull ? swr->viewY + (int) ((float) (swr->maxY - swr->portY) / swr->scaleY) + 2 : 0;
+    
+    // Unscaled copies a whole number of pixels apart go down in one pass over the screen's rows.
+    if (xscale == 1.0f && yscale == 1.0f && tileW == (float) (int) tileW && tileH == (float) (int) tileH)
+    {
+        int countX = 0, countY = 0;
+        for (int dx = startX; endX > dx; dx += tileW) countX++;
+        for (int dy = startY; endY > dy; dy += tileH) countY++;
+        int firstX = (int) startX + (int) originX + sx0, firstY = (int) startY + (int) originY + sy0;
+        if (canHold && swrTiledHold(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha)) {
+            swr->uniformValid = false; // one colour no longer, though nothing is written yet
+            return;
+        }
+        swrOverlayFlush(swr);
+        bool drawn;
+        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha));
+        if (drawn) return;
+    } else {
+        swrOverlayFlush(swr);
+    }
+    
     for (int dy = startY; endY > dy; dy += tileH) {
         int cy = dy + (int)(originY * ayScale);
         int vy0 = cy + sy0;
         int vy1 = cy + sy1;
         int dh = vy1 - vy0;
+        if (cull && ((vy0 < viewTop && vy1 < viewTop) || (vy0 > viewBottom && vy1 > viewBottom))) continue;
 
         for (int dx = startX; endX > dx; dx += tileW) {
             int cx = dx + (int)(originX * axScale);
             int vx0 = cx + sx0;
             int vx1 = cx + sx1;
             int dw = vx1 - vx0;
+            if (cull && ((vx0 < viewLeft && vx1 < viewLeft) || (vx0 > viewRight && vx1 > viewRight))) continue;
 
             swrDrawSprite(renderer, vx0, vy0, dw, dh, texture, sx, sy, sw, sh, color, alpha);
         }
@@ -644,6 +783,7 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
 
 static void SWRenderer_drawSurfaceTiled(Renderer* renderer, int32_t surfaceID, float x, float y, float xscale, float yscale, float roomW, float roomH, uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
 
@@ -715,10 +855,34 @@ static void swrFlushPendingClear(SWRenderer* swr)
     swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->pendingClearColor);
 }
 
+// A clear of the whole main buffer is held back as well: a room's tiles
+// usually come next and cover most of it, and held tile pictures take the
+// clear with them (swrTileRunsFlush), writing the colour only where they
+// leave a gap. Anything else that draws performs it first (swrOverlayFlush).
+void swrClearSettle(SWRenderer* swr)
+{
+    if (!swr->clearHeld) return;
+    swr->clearHeld = false;
+    if (!swr->mainFb) { swr->tiledHeldCount = 0; return; }
+    if (swr->tiledHeldCount > 0) {
+        SWR_NOTED("  of which: held clear and tiled written", swrTiledHeldWrite(swr, swr->clearHeldColor));
+        return;
+    }
+    SWR_NOTED("  of which: held clear written", swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->clearHeldColor));
+}
+
 static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
 {
-    swrOverlayFlush((SWRenderer*) renderer);
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     SWRenderer* swr = (SWRenderer*) renderer;
+    bool wholeMain = swr->fb == swr->mainFb && swr->fbPitch == swr->width &&
+                     swr->width == swr->mainWidth && swr->height == swr->mainHeight;
+    if (wholeMain) {
+        // This one covers them.
+        swrHeldUnderDiscard(swr);
+        swr->clearHeld = false;
+    }
+    swrOverlayFlush(swr);
     
     // A clear of the whole main buffer makes the pending one redundant.
     if (swr->fb == swr->mainFb && swr->fbPitch == swr->width)
@@ -749,8 +913,19 @@ static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alp
         color = PXL_TRANSPARENT;
 #endif
     
+    if (wholeMain) {
+        swr->clearHeld = true;
+        swr->clearHeldColor = (uintpixel_t) color;
+        swr->uniformValid = true;
+        swr->uniformColor = (uintpixel_t) color;
+        return;
+    }
     for (int y = 0; y < swr->height; y++) {
         swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->width, (uintpixel_t) color);
+    }
+    if (swr->fb == swr->mainFb && swr->fbPitch == swr->width) {
+        swr->uniformValid = true;
+        swr->uniformColor = (uintpixel_t) color;
     }
 }
 
@@ -987,9 +1162,17 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
                                    float x, float y, float xscale, float yscale, float angleDeg,
                                    uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
     SWTexture* surface, localSurface;
+    localSurface.halfBuffer = NULL;
+    localSurface.rowBounds = NULL;
+    localSurface.halfRowBounds = NULL;
+    localSurface.immutable = false;
+    localSurface.halfCoverage = NULL;
+    localSurface.solid = localSurface.halfSolid = 0;
+    localSurface.halfPhaseX = localSurface.halfPhaseY = 0;
     if (surfaceID == APPLICATION_SURFACE_ID) {
         localSurface.buffer = swr->drawingToSurface ? swr->mainFb : swr->fb;
         localSurface.width = swr->drawingToSurface ? swr->mainWidth : swr->width;
@@ -1323,6 +1506,7 @@ static void SWRenderer_drawTiledPart(Renderer* renderer, int32_t tpagIndex,
                                      float dstX, float dstY, float dstW, float dstH,
                                      uint32_t color, float alpha)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     UNIMP();
     (void)renderer; (void)tpagIndex;
@@ -1623,6 +1807,7 @@ static void SWRenderer_drawVertex(Renderer* renderer, float x, float y, float z,
 
 static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer, int32_t primitive, int32_t texture, int32_t offset, int32_t count)
 {
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     swrOverlayFlush((SWRenderer*) renderer);
     // TODO
     
@@ -1635,6 +1820,147 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
     
     UNIMP();
 }
+// Draw-call timing (SW_DRAW_PROFILE): each kind of call is timed and the
+// totals handed to the platform, which can then say what a frame was spent
+// drawing. A timed call made inside another is taken off the outer one's
+// time, so no time is counted twice: swrProfInner is the time already
+// accounted for by calls that ended since some outer call began.
+#ifdef SW_DRAW_PROFILE
+#include "gettime.h"
+void platformDrawProfile(int kind, uint64_t nanos);
+enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
+static uint64_t swrProfInner = 0;
+static uint64_t swrProfLast = 0; // what the SWR_PROFILED that ended last was charged
+#define SWR_PROFILED(kind, call) do { \
+        uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
+        call; \
+        uint64_t span_ = nowNanos() - start_; \
+        swrProfLast = span_ - (swrProfInner - inner_); \
+        platformDrawProfile(kind, swrProfLast); \
+        swrProfInner = inner_ + span_; \
+    } while (0)
+#else
+#define SWR_PROFILED(kind, call) do { call; } while (0)
+#endif
+
+// ===[ Held sprite grid ]===
+// A game can floor a room with a grid of sprites and then, in a battle, paint
+// the whole screen over it. A grid given in one call (drawSpriteGrid) is held
+// back like a clear and the tile pictures are: it lies over a held clear and
+// under held tile pictures, is drawn when anything else draws, and is dropped
+// with them if an opaque fill of the whole screen comes first
+// (swrHeldUnderDiscard). Drawing it is the same sprite draws, one per cell.
+// While it is held nothing is held over it but tile pictures, so that those
+// draws find nothing of their own kind half-built.
+#define SWR_GRID_MAX_CELLS 4096
+#define SWR_GRID_MAX 16
+
+static struct {
+    int count;              // grids held, in the order they were given; 0 for none
+    bool above;             // the grids lie over the tile pictures being held, not under them
+    int cells;              // of subimgs in use
+    SWRenderer* owner;
+    struct {
+        int32_t sprite, cols, rows, first; // first: where its images start in subimgs
+        float x, y, stepX, stepY, alpha;
+    } grids[SWR_GRID_MAX];
+    int32_t subimgs[SWR_GRID_MAX_CELLS];
+} swrGrid;
+
+static int swrPendingCount; // tile pictures being held (see the tile run cache below)
+
+bool swrGridHeld(void) { return swrGrid.count > 0; }
+
+// Draws the held grids and leaves none held.
+static void swrGridReplay(SWRenderer* swr)
+{
+    Renderer* renderer = (Renderer*) swr;
+    float alpha = renderer->drawAlpha;
+    int count = swrGrid.count;
+    swrGrid.count = 0;
+    swrGrid.cells = 0;
+    for (int g = 0; g < count; g++) {
+        renderer->drawAlpha = swrGrid.grids[g].alpha;
+        const int32_t* subimgs = &swrGrid.subimgs[swrGrid.grids[g].first];
+        int32_t cols = swrGrid.grids[g].cols, rows = swrGrid.grids[g].rows;
+        // A cell whose sprite cannot reach the view is left out here: most of a
+        // room's floor is somewhere else, and a sprite draw is a long way
+        // round to find that out. The sprite's own box, with a pixel to spare.
+        int32_t spriteIndex = swrGrid.grids[g].sprite;
+        bool cull = spriteIndex >= 0 && (uint32_t) spriteIndex < renderer->dataWin->sprt.count && swr->scaleX > 0.0f && swr->scaleY > 0.0f;
+        float boxLeft = 0, boxTop = 0, boxRight = 0, boxBottom = 0, viewLeft = 0, viewTop = 0, viewRight = 0, viewBottom = 0;
+        if (cull) {
+            const Sprite* sprite = &renderer->dataWin->sprt.sprites[spriteIndex];
+            boxLeft = -(float) sprite->originX - 1.0f; boxRight = (float) sprite->width - (float) sprite->originX + 1.0f;
+            boxTop = -(float) sprite->originY - 1.0f; boxBottom = (float) sprite->height - (float) sprite->originY + 1.0f;
+            viewLeft = (float) swr->viewX; viewTop = (float) swr->viewY;
+            viewRight = viewLeft + (float) (swr->maxX - swr->portX) / swr->scaleX;
+            viewBottom = viewTop + (float) (swr->maxY - swr->portY) / swr->scaleY;
+            if (sprite->nineSliceEnabled) cull = false;
+        }
+        for (int32_t i = 0; i < cols; i++) {
+            float cellX = swrGrid.grids[g].x + swrGrid.grids[g].stepX * (float) i;
+            if (cull && (cellX + boxRight < viewLeft || cellX + boxLeft > viewRight)) continue;
+            for (int32_t j = 0; j < rows; j++) {
+                float cellY = swrGrid.grids[g].y + swrGrid.grids[g].stepY * (float) j;
+                if (cull && (cellY + boxBottom < viewTop || cellY + boxTop > viewBottom)) continue;
+                Renderer_drawSprite(renderer, spriteIndex, subimgs[i * rows + j], cellX, cellY);
+            }
+        }
+    }
+    renderer->drawAlpha = alpha;
+    swrOverlayFlush(swr); // a cell held back as an overlay goes out with the rest
+}
+
+void swrGridFlush(SWRenderer* swr)
+{
+    if (swrGrid.count == 0) return;
+    if (swr == NULL) swr = swrGrid.owner;
+    swrClearSettle(swr);
+    swrGridReplay(swr);
+}
+
+static bool SWRenderer_drawSpriteGrid(Renderer* renderer, int32_t spriteIndex, const int32_t* subimgs, int32_t cols, int32_t rows,
+                                      float x, float y, float stepX, float stepY)
+{
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
+    SWRenderer* swr = (SWRenderer*) renderer;
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND
+    (void) swr; (void) spriteIndex; (void) subimgs; (void) cols; (void) rows; (void) x; (void) y; (void) stepX; (void) stepY;
+    return false;
+#else
+    if (cols <= 0 || rows <= 0) return true;
+    if (cols > SWR_GRID_MAX_CELLS || rows > SWR_GRID_MAX_CELLS || cols * rows > SWR_GRID_MAX_CELLS) return false;
+    if (swr->drawingToSurface) return false;
+    
+    // A grid joins the ones held if nothing has been drawn or held since:
+    // only tile pictures can have been, over grids that lie under them.
+    bool joins = swrGrid.count > 0 && (swrGrid.above || swrPendingCount == 0) && swrGrid.count < SWR_GRID_MAX &&
+                 swrGrid.cells + cols * rows <= SWR_GRID_MAX_CELLS;
+    if (!joins) {
+        // The first grid goes over the tile pictures being held, if any, and
+        // a held clear; whatever else is held goes out.
+        if (swrGrid.count > 0) swrOverlayFlush(swr);
+        swr->tileRunEntering = true;
+        swrOverlayFlush(swr);
+        swr->tileRunEntering = false;
+        if (swrPendingCount == 0) swrOverlayFlushForState(swr);
+        swrGrid.above = swrPendingCount > 0;
+    }
+    swrGrid.owner = swr;
+    int g = swrGrid.count++;
+    swrGrid.grids[g].sprite = spriteIndex;
+    swrGrid.grids[g].cols = cols; swrGrid.grids[g].rows = rows;
+    swrGrid.grids[g].first = swrGrid.cells;
+    swrGrid.grids[g].x = x; swrGrid.grids[g].y = y;
+    swrGrid.grids[g].stepX = stepX; swrGrid.grids[g].stepY = stepY;
+    swrGrid.grids[g].alpha = renderer->drawAlpha;
+    memcpy(&swrGrid.subimgs[swrGrid.cells], subimgs, (size_t) (cols * rows) * sizeof(int32_t));
+    swrGrid.cells += cols * rows;
+    return true;
+#endif
+}
+
 // ===[ Tile run cache ]===
 // A room's tiles are hundreds of small draws that come out the same every
 // frame. A run of them that nothing else is drawn between is composed once
@@ -1644,29 +1970,58 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
 // game that moves, adds, hides or recolours tiles just gets a new picture.
 #define SWR_TILE_RUN_ENTRIES 4
 #define SWR_TILE_RUN_MIN_TILES 16
-#define SWR_TILE_RUN_MAX_PIXELS (1024 * 1024)
+#define SWR_TILE_RUN_MAX_PIXELS (2 * 1024 * 1024)
 #define SWR_TILE_RUN_MAX_SIDE 4096
 #define SWR_TILE_RUN_IDLE_FRAMES 300
 
+// The picture is drawn block by block: a layer of decoration is mostly
+// nothing, and a layer of ground mostly has no holes, so each block is
+// marked empty (skipped), solid (copied a row at a time) or mixed.
+#define SWR_TILE_RUN_BLOCK 16
+enum { SWR_BLOCK_EMPTY, SWR_BLOCK_SOLID, SWR_BLOCK_MIXED };
+
+// A picture is in the pixels the room is drawn in: room pixels, or every
+// second one (shift 1) when the room is drawn at half size. Its place and
+// size are in those units, and it starts on a block boundary of them.
 typedef struct {
     uint64_t key;
     uintpixel_t* pixels;    // NULL when the entry is free
+    uint8_t* blocks;        // one SWR_BLOCK_* per block, row by row; lives in the same allocation as pixels
     int x, y, width, height;
+    int shift;
     uint32_t lastUsedFrame;
 } SWTileRun;
 
 static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 
-bool swrTileRunsFree(void)
+// Pictures waiting to be drawn, bottom first. A room has several tile layers
+// one over the other, and drawing each in turn fills most of the screen once
+// per layer. Pictures that follow one another with nothing else drawn between
+// are held and drawn together (swrTileRunsFlush): for each block of the
+// screen, drawing starts at the topmost picture that is solid there, since
+// nothing under it can show.
+static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES];
+static int swrPendingCount = 0;
+static SWRenderer* swrPendingOwner = NULL;
+
+// The same pictures held together frame after frame are flattened into one,
+// so that the screen is gone over once and not once per layer. An entry with
+// a key and no pixels is a set seen once, to be flattened if it comes again.
+#define SWR_TILE_FLAT_ENTRIES 2
+#define SWR_TILE_FLAT_RECENT 8 // frames; more than one, since a skipped frame draws nothing
+static SWTileRun swrFlatRuns[SWR_TILE_FLAT_ENTRIES];
+
+static int swrFloorToStep(int v, int step)
 {
-    bool freed = false;
-    for (int e = 0; e < SWR_TILE_RUN_ENTRIES; e++) {
-        if (swrTileRuns[e].pixels == NULL) continue;
-        free(swrTileRuns[e].pixels);
-        swrTileRuns[e].pixels = NULL;
-        freed = true;
-    }
-    return freed;
+    int r = v % step;
+    return r < 0 ? v - r - step : v - r;
+}
+
+static uint8_t swrRunBlockKind(const SWTileRun* run, int unitX, int unitY)
+{
+    int bx = (unitX - run->x) / SWR_TILE_RUN_BLOCK, by = (unitY - run->y) / SWR_TILE_RUN_BLOCK;
+    if (unitX < run->x || unitY < run->y || unitX >= run->x + run->width || unitY >= run->y + run->height) return SWR_BLOCK_EMPTY;
+    return run->blocks[by * ((run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK) + bx];
 }
 
 static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
@@ -1676,43 +2031,282 @@ static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
     return hash;
 }
 
-static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+// Marks each block of a picture empty, solid or mixed.
+static void swrRunClassify(SWTileRun* run)
+{
+    int blocksX = (run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (run->height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    for (int by = 0; by < blocksY; by++) {
+        for (int bx = 0; bx < blocksX; bx++) {
+            int x1 = bx * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK, y1 = by * SWR_TILE_RUN_BLOCK + SWR_TILE_RUN_BLOCK;
+            if (x1 > run->width) x1 = run->width;
+            if (y1 > run->height) y1 = run->height;
+            int opaque = 0, total = 0;
+            for (int y = by * SWR_TILE_RUN_BLOCK; y < y1; y++) {
+                const uintpixel_t* row = &run->pixels[y * run->width];
+                for (int x = bx * SWR_TILE_RUN_BLOCK; x < x1; x++, total++) opaque += swrIsOpaque(row[x]) ? 1 : 0;
+            }
+            // Solid means the whole block: one cut short by the picture's edge is not.
+            bool whole = total == SWR_TILE_RUN_BLOCK * SWR_TILE_RUN_BLOCK;
+            run->blocks[by * blocksX + bx] = opaque == 0 ? SWR_BLOCK_EMPTY : (opaque == total && whole) ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
+        }
+    }
+}
+
+// Allocates a picture's pixels (cleared) and block marks in one piece.
+static bool swrRunAllocate(SWTileRun* run, int width, int height)
+{
+    int blocksX = (width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK, blocksY = (height + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    size_t pixelBytes = (size_t) width * height * sizeof(uintpixel_t);
+    uintpixel_t* pixels = (uintpixel_t*) calloc(pixelBytes + (size_t) blocksX * blocksY, 1);
+    if (pixels == NULL) return false;
+    run->pixels = pixels;
+    run->blocks = (uint8_t*) pixels + pixelBytes;
+    run->width = width; run->height = height;
+    return true;
+}
+
+// Draws pictures, bottom first, onto pixels whose top left is at (left, top)
+// in the pictures' units and that are width by height, block by block. With
+// a colour to go under them, the pixels are first cleared to it wherever no
+// picture is solid.
+static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixels, int pitch, int left, int top, int width, int height, const uintpixel_t* under, bool underOnly)
+{
+    int right = left + width, bottom = top + height;
+    for (int by = swrFloorToStep(top, SWR_TILE_RUN_BLOCK); by < bottom; by += SWR_TILE_RUN_BLOCK)
+    {
+        for (int bx = swrFloorToStep(left, SWR_TILE_RUN_BLOCK); bx < right; bx += SWR_TILE_RUN_BLOCK)
+        {
+            int first = 0;
+            bool covered = false;
+            for (int i = count - 1; i >= 0; i--) {
+                if (swrRunBlockKind(runs[i], bx, by) == SWR_BLOCK_SOLID) { first = i; covered = true; break; }
+            }
+            // The block, cut to the target.
+            int tx0 = bx < left ? left : bx, tx1 = bx + SWR_TILE_RUN_BLOCK > right ? right : bx + SWR_TILE_RUN_BLOCK;
+            int ty0 = by < top ? top : by, ty1 = by + SWR_TILE_RUN_BLOCK > bottom ? bottom : by + SWR_TILE_RUN_BLOCK;
+            if (under != NULL && !covered) {
+                for (int y = ty0; y < ty1; y++)
+                    swrFillPixels(&pixels[(y - top) * pitch + (tx0 - left)], (size_t) (tx1 - tx0), *under);
+            }
+            if (underOnly) continue; // the pictures themselves come in a second pass
+            for (int i = first; i < count; i++)
+            {
+                const SWTileRun* run = runs[i];
+                uint8_t kind = swrRunBlockKind(run, bx, by);
+                if (kind == SWR_BLOCK_EMPTY) continue;
+                
+                // And to the picture.
+                int x0 = tx0, x1 = tx1, y0 = ty0, y1 = ty1;
+                if (x1 > run->x + run->width) x1 = run->x + run->width;
+                if (y1 > run->y + run->height) y1 = run->y + run->height;
+                if (x0 >= x1 || y0 >= y1) continue;
+                
+                for (int y = y0; y < y1; y++)
+                {
+                    const uintpixel_t* src = &run->pixels[(y - run->y) * run->width + (x0 - run->x)];
+                    uintpixel_t* dst = &pixels[(y - top) * pitch + (x0 - left)];
+                    if (kind == SWR_BLOCK_SOLID)
+                        memcpy(dst, src, (size_t) (x1 - x0) * sizeof(uintpixel_t));
+                    else for (int x = 0; x < x1 - x0; x++) {
+                        uintpixel_t pixel = src[x];
+                        if (swrIsOpaque(pixel)) dst[x] = pixel;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The pictures being held flattened into one, or NULL: when they have not
+// been held together before, are too big together, or there is no room.
+static SWTileRun* swrPendingFlattened(SWRenderer* swr)
+{
+    uint64_t key = 14695981039346656037ull;
+    int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
+    for (int i = 0; i < swrPendingCount; i++) {
+        const SWTileRun* run = swrPendingRuns[i];
+        key = swrTileRunHash(key, &run->key, sizeof(run->key));
+        if (run->x < left) left = run->x;
+        if (run->y < top) top = run->y;
+        if (run->x + run->width > right) right = run->x + run->width;
+        if (run->y + run->height > bottom) bottom = run->y + run->height;
+    }
+    int width = right - left, height = bottom - top;
+    if (width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE || width * height > SWR_TILE_RUN_MAX_PIXELS) return NULL;
+    
+    SWTileRun* spare = NULL;
+    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++)
+    {
+        SWTileRun* entry = &swrFlatRuns[e];
+        bool recent = swr->frameCounter - entry->lastUsedFrame <= SWR_TILE_FLAT_RECENT;
+        if (entry->key == key && (entry->pixels != NULL || recent))
+        {
+            entry->lastUsedFrame = swr->frameCounter;
+            if (entry->pixels != NULL) return entry;
+            // Seen a moment ago too: worth a picture of its own.
+            if (!swrRunAllocate(entry, width, height)) return NULL;
+            entry->x = left; entry->y = top;
+            entry->shift = swrPendingRuns[0]->shift;
+            swrRunsDrawOnto(swrPendingRuns, swrPendingCount, entry->pixels, width, left, top, width, height, NULL, false);
+            swrRunClassify(entry);
+            return entry;
+        }
+        // One not used for a while can be given to this set.
+        if (!recent && (spare == NULL || entry->lastUsedFrame < spare->lastUsedFrame)) spare = entry;
+    }
+    if (spare != NULL) {
+        free(spare->pixels);
+        spare->pixels = NULL;
+        spare->key = key;
+        spare->lastUsedFrame = swr->frameCounter;
+    }
+    return NULL;
+}
+
+static void swrTileRunsDrawPending(SWRenderer* swr)
+{
+    // The top left of the port in the pictures' units: the view's corner, or
+    // at half size the unit that a room position of zero lands a whole number
+    // of pixels from (positions are floored, and a picture starts on an even one).
+    int shift = swrPendingRuns[0]->shift;
+    int32_t viewX = (int32_t) swr->viewX, viewY = (int32_t) swr->viewY;
+    int left = shift == 0 ? viewX : (viewX + 1) >> 1, top = shift == 0 ? viewY : (viewY + 1) >> 1;
+    if (swr->tiledHeldCount > 0) swrClearSettle(swr); // a clear with tiled passes over it is written as it is, not worked in below
+    uintpixel_t* target = &swr->fb[swr->portY * swr->fbPitch + swr->portX];
+    int width = swr->maxX - swr->portX, height = swr->maxY - swr->portY;
+    
+    // A clear still held goes under the pictures if they are drawn over the
+    // whole of what it clears; they then write its colour only in their gaps.
+    const uintpixel_t* under = NULL;
+    if (swr->clearHeld) {
+        if (swr->fb == swr->mainFb && swr->fbPitch == swr->mainWidth && swr->portX == 0 && swr->portY == 0 &&
+            width == swr->mainWidth && height == swr->mainHeight) {
+            under = &swr->clearHeldColor;
+            swr->clearHeld = false;
+        } else {
+            swrClearSettle(swr);
+        }
+    }
+    
+    // A grid still held goes between the clear and the pictures: the clear's
+    // colour first, where no picture is solid, then the grid's sprites.
+    if (swrGrid.count > 0 && !swrGrid.above) {
+        if (under != NULL) swrRunsDrawOnto(swrPendingRuns, swrPendingCount, target, swr->fbPitch, left, top, width, height, under, true);
+        under = NULL;
+        int count = swrPendingCount;
+        swrPendingCount = 0; // the sprites flush what is held, and the pictures are not theirs to let out
+        swrGridReplay(swr);
+        swrPendingCount = count;
+    }
+    
+    SWTileRun* flat = swrPendingCount > 1 ? swrPendingFlattened(swr) : NULL;
+    if (flat != NULL) {
+        SWTileRun* const one[1] = { flat };
+        swrRunsDrawOnto(one, 1, target, swr->fbPitch, left, top, width, height, under, false);
+    } else {
+        swrRunsDrawOnto(swrPendingRuns, swrPendingCount, target, swr->fbPitch, left, top, width, height, under, false);
+    }
+    
+    // Grids held over the pictures come last.
+    if (swrGrid.count > 0) {
+        swrPendingCount = 0; // drawn; the grid's sprites must not let them out again
+        swrGridReplay(swr);
+    }
+}
+
+// Draws the pictures being held, if any. Everything that draws comes through
+// swrOverlayFlush first, which calls this, so nothing is drawn under them
+// that should have been drawn over.
+void swrTileRunsFlush(SWRenderer* swr)
+{
+    if (swrPendingCount == 0) return;
+    if (swr == NULL) swr = swrPendingOwner;
+    SWR_PROFILED(SWR_PROF_PART, swrTileRunsDrawPending(swr));
+    swrPendingCount = 0;
+}
+
+// Forgets the grid and tile pictures still held: the caller is about to paint
+// the whole screen. A held clear is the caller's to deal with, since what it
+// paints may be worked out from the clear's colour.
+void swrHeldUnderDiscard(SWRenderer* swr)
+{
+    // Tiled passes held over the clear go, and that clear with them: it is no longer one colour to work from.
+    if (swr->tiledHeldCount > 0) {
+        swr->tiledHeldCount = 0;
+        swr->clearHeld = false;
+    }
+    swrPendingCount = 0;
+    swrGrid.count = 0;
+    swrGrid.cells = 0;
+}
+
+bool swrTileRunsFree(void)
+{
+    swrTileRunsFlush(NULL); // a held picture must be drawn before it goes
+    swrGridFlush(NULL);
+    bool freed = false;
+    for (int e = 0; e < SWR_TILE_RUN_ENTRIES + SWR_TILE_FLAT_ENTRIES; e++) {
+        SWTileRun* entry = e < SWR_TILE_RUN_ENTRIES ? &swrTileRuns[e] : &swrFlatRuns[e - SWR_TILE_RUN_ENTRIES];
+        if (entry->pixels == NULL) continue;
+        free(entry->pixels);
+        entry->pixels = NULL;
+        freed = true;
+    }
+    return freed;
+}
+
+// Draws the run from its cached picture, building it first if need be. Returns false if the run cannot be drawn that way.
+static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
-    swrOverlayFlush(swr);
-    
 #if PIXEL_SIZE != 16
-    (void) tiles; (void) offsets; (void) count;
+    (void) swr; (void) tiles; (void) offsets; (void) count;
     return false;
 #else
-    // The picture is in room pixels and holds no partial coverage, so it can
-    // only stand in for tiles drawn unscaled, opaque and with normal blending.
+    // The picture holds no partial coverage, so it can only stand in for
+    // tiles drawn opaque and with normal blending, and at the room's own
+    // size or at half of it.
     if (count < SWR_TILE_RUN_MIN_TILES) return false;
     if (swr->drawingToSurface || swr->blendMode != bm_normal) return false;
-    if (swr->scaleX != 1.0f || swr->scaleY != 1.0f) return false;
+    int shift;
+    if (swr->scaleX == 1.0f && swr->scaleY == 1.0f) shift = 0;
+    else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f) shift = 1;
+    else return false;
     
     uint64_t key = 14695981039346656037ull;
+    int32_t mode[2] = { shift, swrFavorSpeed ? 1 : 0 };
+    key = swrTileRunHash(key, mode, sizeof(mode));
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
     for (int32_t t = 0; t < count; t++)
     {
         const RoomTile* tile = tiles[t];
         if (tile->scaleX != 1.0f || tile->scaleY != 1.0f || tile->alpha < 1.0f) return false;
         
-        int tileLeft = swrFloor((float) tile->x + offsets[t * 2]);
-        int tileTop = swrFloor((float) tile->y + offsets[t * 2 + 1]);
+        float exactLeft = (float) tile->x + offsets[t * 2], exactTop = (float) tile->y + offsets[t * 2 + 1];
+        int tileLeft = swrFloor(exactLeft);
+        int tileTop = swrFloor(exactTop);
+        // At half size a tile lands where it would on the screen only from an
+        // even position: from an odd one it moves a pixel as the view scrolls.
+        if (shift != 0 && ((float) tileLeft != exactLeft || (float) tileTop != exactTop || ((tileLeft | tileTop) & 1) != 0)) return false;
         if (tileLeft < left) left = tileLeft;
         if (tileTop < top) top = tileTop;
         if (tileLeft + (int) tile->width > right) right = tileLeft + (int) tile->width;
         if (tileTop + (int) tile->height > bottom) bottom = tileTop + (int) tile->height;
         
-        int32_t ints[7] = { tile->x, tile->y, tile->useSpriteDefinition, tile->backgroundDefinition, tile->sourceX, tile->sourceY, (int32_t) tile->color };
-        uint32_t size[2] = { tile->width, tile->height };
-        key = swrTileRunHash(key, ints, sizeof(ints));
-        key = swrTileRunHash(key, size, sizeof(size));
-        key = swrTileRunHash(key, &offsets[t * 2], 2 * sizeof(float));
+        // Everything that decides what the tile looks like, a word at a time:
+        // this runs for every tile of the layer on every frame.
+        uint32_t words[11] = {
+            (uint32_t) tile->x, (uint32_t) tile->y, (uint32_t) tile->useSpriteDefinition, (uint32_t) tile->backgroundDefinition,
+            (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height, 0, 0,
+        };
+        memcpy(&words[9], &offsets[t * 2], 2 * sizeof(float));
+        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * 1099511628211ull;
     }
     
-    int width = right - left, height = bottom - top;
+    // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
+    left = swrFloorToStep(left, SWR_TILE_RUN_BLOCK << shift);
+    top = swrFloorToStep(top, SWR_TILE_RUN_BLOCK << shift);
+    int width = (right - left + shift) >> shift, height = (bottom - top + shift) >> shift;
     if (width <= 0 || height <= 0 || width > SWR_TILE_RUN_MAX_SIDE || height > SWR_TILE_RUN_MAX_SIDE) return false;
     if (width * height > SWR_TILE_RUN_MAX_PIXELS) return false;
     
@@ -1733,21 +2327,36 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
             spare = entry;
         }
     }
+    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++) {
+        SWTileRun* entry = &swrFlatRuns[e];
+        if (entry->pixels != NULL && swr->frameCounter - entry->lastUsedFrame > SWR_TILE_RUN_IDLE_FRAMES) {
+            free(entry->pixels);
+            entry->pixels = NULL;
+        }
+    }
     
     if (run == NULL)
     {
         // An entry used this frame belongs to another run of the room being drawn; leave it be.
         if (spare->pixels != NULL && spare->lastUsedFrame == swr->frameCounter) return false;
+        
+        // Pictures being held belong on the screen, and would come out into the
+        // new one once the tiles below start drawing: let them out first. That
+        // also has to happen before one of them is given up for it.
+        swrTileRunsFlush(swr);
+        swrGridFlush(swr);
         free(spare->pixels);
         spare->pixels = NULL;
-        
-        uintpixel_t* pixels = (uintpixel_t*) calloc((size_t) width * height, sizeof(uintpixel_t));
-        if (pixels == NULL) return false;
+        if (!swrRunAllocate(spare, width, height)) return false;
+        run = spare;
+        run->key = key;
+        run->x = left >> shift; run->y = top >> shift;
+        run->shift = shift;
         
         // Point the renderer at the picture, with a view that maps the run's
         // bounding box onto it, and draw the tiles the ordinary way.
         SWRenderer saved = *swr;
-        swr->fb = pixels;
+        swr->fb = run->pixels;
         swr->fbPitch = (uint16_t) width;
         swr->viewX = left; swr->viewY = top;
         swr->portX = 0; swr->portY = 0;
@@ -1763,22 +2372,199 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
         swr->portW = saved.portW; swr->portH = saved.portH;
         swr->maxX = saved.maxX; swr->maxY = saved.maxY;
         
-        run = spare;
-        run->key = key;
-        run->pixels = pixels;
-        run->x = left; run->y = top;
-        run->width = width; run->height = height;
+        swrRunClassify(run);
     }
     run->lastUsedFrame = swr->frameCounter;
     
-    SWTexture picture;
-    picture.buffer = run->pixels;
-    picture.width = (uint16_t) run->width;
-    picture.height = (uint16_t) run->height;
-    picture.originX = picture.originY = 0;
-    picture.lastUsedFrame = swr->frameCounter;
-    swrDrawSprite(renderer, (float) run->x, (float) run->y, (float) run->width, (float) run->height,
-                  &picture, 0, 0, run->width, run->height, 0xFFFFFF, 1.0f);
+    // Held, to be drawn together with the pictures that follow it directly.
+    if (swrPendingCount == SWR_TILE_RUN_ENTRIES || (swrPendingCount > 0 && swrPendingRuns[0]->shift != shift)) swrTileRunsFlush(swr);
+    swrPendingRuns[swrPendingCount++] = run;
+    swrPendingOwner = swr;
+    return true;
+#endif
+}
+
+// A run that cannot be drawn from a picture (too big, scaled, translucent, a
+// few tiles only) is drawn tile by tile, leaving out the tiles that cannot
+// reach the port: a room's tiles are mostly somewhere else, and each one
+// costs a whole sprite draw to find that out further down.
+static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
+{
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
+    SWRenderer* swr = (SWRenderer*) renderer;
+    // Whatever else is held goes first; pictures already held stay, for this
+    // run to join, unless a grid is held over them.
+    if (swrGridHeld() && swrGrid.above) swrOverlayFlush(swr);
+    swr->tileRunEntering = true;
+    swrOverlayFlush(swr);
+    swr->tileRunEntering = false;
+    if (swrDrawTileRunCached(renderer, tiles, offsets, count)) return true;
+    swrTileRunsFlush(swr);
+    swrGridFlush(swr);
+    swrClearSettle(swr);
+    
+    for (int32_t t = 0; t < count; t++)
+    {
+        const RoomTile* tile = tiles[t];
+        // Where the tile lands in the buffer, whichever way its scale points, with a pixel to spare.
+        float x = ((float) tile->x + offsets[t * 2] - (float) swr->viewX) * swr->scaleX + (float) swr->portX;
+        float y = ((float) tile->y + offsets[t * 2 + 1] - (float) swr->viewY) * swr->scaleY + (float) swr->portY;
+        float w = (float) tile->width * tile->scaleX * swr->scaleX, h = (float) tile->height * tile->scaleY * swr->scaleY;
+        float left = w < 0.0f ? x + w : x, right = w < 0.0f ? x : x + w;
+        float top = h < 0.0f ? y + h : y, bottom = h < 0.0f ? y : y + h;
+        if (right < (float) swr->portX - 1.0f || left > (float) swr->maxX + 1.0f) continue;
+        if (bottom < (float) swr->portY - 1.0f || top > (float) swr->maxY + 1.0f) continue;
+        Renderer_drawTile(renderer, tiles[t], offsets[t * 2], offsets[t * 2 + 1]);
+    }
+    return true;
+}
+
+// ===[ Tile layers ]===
+// A GMS2 room is built from tile layers: a grid of cells, each naming a tile
+// of one tileset. Drawn cell by cell through drawSpritePart, a layer costs a
+// sprite draw for every cell of the room on every frame, in view or not.
+// Here only the cells in view are drawn, and a cell that is neither mirrored,
+// flipped nor rotated is copied straight from the tileset: a row at a time
+// when the tile has no transparent pixels, not at all when it has nothing
+// but. What comes out is what the cell-by-cell draws would have produced.
+#define SWR_TILESETS 8
+enum { SWR_TILE_UNKNOWN, SWR_TILE_EMPTY, SWR_TILE_SOLID, SWR_TILE_MIXED };
+
+typedef struct {
+    int32_t tpagIndex;
+    uint32_t count;
+    uint8_t* kinds;     // one SWR_TILE_* per tile index; NULL when the entry is free
+    uint32_t lastUsedFrame;
+} SWTileset;
+
+static SWTileset swrTilesets[SWR_TILESETS];
+bool swrTileLayerFast = true;
+
+static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
+{
+    SWTileset* spare = &swrTilesets[0];
+    for (int e = 0; e < SWR_TILESETS; e++) {
+        SWTileset* entry = &swrTilesets[e];
+        if (entry->kinds != NULL && entry->tpagIndex == tpagIndex && entry->count == count) {
+            entry->lastUsedFrame = swr->frameCounter;
+            return entry->kinds;
+        }
+        if (entry->kinds == NULL) {
+            if (spare->kinds != NULL) spare = entry;
+        } else if (spare->kinds != NULL && entry->lastUsedFrame < spare->lastUsedFrame)
+            spare = entry;
+    }
+    uint8_t* kinds = (uint8_t*) calloc((size_t) count + 1, 1);
+    if (kinds == NULL) return NULL;
+    free(spare->kinds);
+    spare->kinds = kinds;
+    spare->tpagIndex = tpagIndex;
+    spare->count = count;
+    spare->lastUsedFrame = swr->frameCounter;
+    return kinds;
+}
+
+static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, const uint32_t* cells,
+                                     uint32_t tilesX, uint32_t tilesY, float offsetX, float offsetY)
+{
+    if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
+    SWRenderer* swr = (SWRenderer*) renderer;
+#if PIXEL_SIZE != 16
+    (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
+    return false;
+#else
+    DataWin* dwin = renderer->dataWin;
+    int32_t tpagIndex = tileset->tpagIndex;
+    if (!swrTileLayerFast || tpagIndex < 0 || (uint32_t) tpagIndex >= dwin->tpag.count) return false;
+    if (swr->scaleX <= 0.0f || swr->scaleY <= 0.0f || tilesX == 0 || tilesY == 0) return false;
+    swrOverlayFlush(swr);
+    
+    int tileW = (int) tileset->gms2TileWidth, tileH = (int) tileset->gms2TileHeight;
+    int borderX = (int) tileset->gms2OutputBorderX, borderY = (int) tileset->gms2OutputBorderY;
+    uint32_t columns = tileset->gms2TileColumns;
+    
+    // The cells that can reach the port, with one to spare each way for a rotated tile.
+    float viewLeft = (float) swr->viewX - offsetX, viewTop = (float) swr->viewY - offsetY;
+    float viewRight = viewLeft + (float) swr->portW / swr->scaleX, viewBottom = viewTop + (float) swr->portH / swr->scaleY;
+    int firstX = swrFloor(viewLeft / (float) tileW) - 1, lastX = swrFloor(viewRight / (float) tileW) + 1;
+    int firstY = swrFloor(viewTop / (float) tileH) - 1, lastY = swrFloor(viewBottom / (float) tileH) + 1;
+    if (firstX < 0) firstX = 0;
+    if (firstY < 0) firstY = 0;
+    if (lastX > (int) tilesX - 1) lastX = (int) tilesX - 1;
+    if (lastY > (int) tilesY - 1) lastY = (int) tilesY - 1;
+    
+    // A copy stands in for a draw only at full size, with normal blending, of an item stored at the size it is drawn.
+    TexturePageItem* tpag = &dwin->tpag.items[tpagIndex];
+    bool direct = swr->scaleX == 1.0f && swr->scaleY == 1.0f && swr->blendMode == bm_normal &&
+                  tpag->sourceWidth == tpag->targetWidth && tpag->sourceHeight == tpag->targetHeight;
+    uint8_t* kinds = direct ? swrTileKinds(swr, tpagIndex, tileset->gms2TileCount) : NULL;
+    SWTexture* texture = kinds != NULL ? swrTextureForItem(swr, tpagIndex) : NULL;
+    
+    for (int ty = firstY; ty <= lastY; ty++)
+    {
+        for (int tx = firstX; tx <= lastX; tx++)
+        {
+            uint32_t cell = cells[(uint32_t) ty * tilesX + (uint32_t) tx];
+            uint32_t tileIndex = cell & 0x0007FFFF;
+            if (tileIndex == 0 || tileIndex > tileset->gms2TileCount) continue;
+            
+            int srcX = (int) (tileIndex % columns) * (tileW + 2 * borderX) + borderX;
+            int srcY = (int) (tileIndex / columns) * (tileH + 2 * borderY) + borderY;
+            bool mirror = (cell & 0x10000000) != 0, flip = (cell & 0x20000000) != 0, rotate = (cell & 0x40000000) != 0;
+            
+            if (texture != NULL && !mirror && !flip && !rotate)
+            {
+                int sx = tpag->sourceX + srcX - texture->originX;
+                int sy = tpag->sourceY + srcY - texture->originY;
+                if (sx >= 0 && sy >= 0 && sx + tileW <= texture->width && sy + tileH <= texture->height)
+                {
+                    uint8_t kind = kinds[tileIndex];
+                    if (kind == SWR_TILE_UNKNOWN)
+                    {
+                        int opaque = 0;
+                        for (int y = 0; y < tileH; y++) {
+                            const uintpixel_t* src = &texture->buffer[(sy + y) * texture->width + sx];
+                            for (int x = 0; x < tileW; x++) opaque += swrIsOpaque(src[x]) ? 1 : 0;
+                        }
+                        kind = opaque == 0 ? SWR_TILE_EMPTY : opaque == tileW * tileH ? SWR_TILE_SOLID : SWR_TILE_MIXED;
+                        kinds[tileIndex] = kind;
+                    }
+                    if (kind == SWR_TILE_EMPTY) continue;
+                    
+                    float fx = (float) (tx * tileW) + offsetX, fy = (float) (ty * tileH) + offsetY;
+                    swrTransformPosIfNeeded(swr, &fx, &fy);
+                    int dx = swrFloor(fx), dy = swrFloor(fy);
+                    int x0 = dx < swr->portX ? swr->portX : dx, x1 = dx + tileW > swr->maxX ? swr->maxX : dx + tileW;
+                    int y0 = dy < swr->portY ? swr->portY : dy, y1 = dy + tileH > swr->maxY ? swr->maxY : dy + tileH;
+                    if (x0 >= x1 || y0 >= y1) continue;
+                    
+                    int width = x1 - x0;
+                    for (int y = y0; y < y1; y++)
+                    {
+                        const uintpixel_t* src = &texture->buffer[(sy + (y - dy)) * texture->width + sx + (x0 - dx)];
+                        uintpixel_t* dst = &swr->fb[y * swr->fbPitch + x0];
+                        if (kind == SWR_TILE_SOLID)
+                            memcpy(dst, src, (size_t) width * sizeof(uintpixel_t));
+                        else for (int x = 0; x < width; x++) {
+                            uintpixel_t pixel = src[x];
+                            if (swrIsOpaque(pixel)) dst[x] = pixel;
+                        }
+                    }
+                    continue;
+                }
+            }
+            
+            // Anything else is drawn the way the runner would have drawn it.
+            float angleDeg = rotate ? 90.0f : 0.0f;
+            float pivotX = (float) (tx * tileW) + offsetX + (float) tileW / 2.0f;
+            float pivotY = (float) (ty * tileH) + offsetY + (float) tileH / 2.0f;
+            float dstX = (float) (tx * tileW) + offsetX + (mirror ? (float) tileW : 0.0f);
+            float dstY = (float) (ty * tileH) + offsetY + (flip ? (float) tileH : 0.0f);
+            SWRenderer_drawSpritePart(renderer, tpagIndex, (float) srcX, (float) srcY, (float) tileW, (float) tileH, dstX, dstY,
+                                      mirror ? -1.0f : 1.0f, flip ? -1.0f : 1.0f, angleDeg, pivotX, pivotY, 0xFFFFFF, 1.0f);
+            if (texture != NULL) texture = swrTextureForItem(swr, tpagIndex); // the draw may have moved it
+        }
+    }
     return true;
 #endif
 }
@@ -1786,13 +2572,18 @@ static bool SWRenderer_drawTileRun(Renderer* renderer, RoomTile** tiles, const f
 #ifdef SW_DRAW_PROFILE
 // Times each kind of draw call and hands the totals to the platform, which
 // can then say what a slow frame was spent drawing.
-void platformDrawProfile(int kind, uint64_t nanos);
-enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
-#define SWR_PROFILED(kind, call) do { uint64_t start_ = nowNanos(); call; platformDrawProfile(kind, nowNanos() - start_); } while (0)
 
 static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
+    if (swrCallNotes && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
+        const TexturePageItem* tpag = &renderer->dataWin->tpag.items[tpagIndex];
+        char what[56];
+        snprintf(what, sizeof(what), "sprite %ux%u x%d.%d a%d%s%s", (unsigned) tpag->targetWidth, (unsigned) tpag->targetHeight,
+                 (int) xscale, (int) (fabsf(xscale) * 10.0f) % 10, (int) (alpha * 100.0f), angleDeg != 0.0f ? " turned" : "",
+                 (color & 0xFFFFFF) != 0xFFFFFF ? " tinted" : "");
+        swrNote(swrProfLast, what);
+    }
 }
 
 static void SWRenderer_profDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha)
@@ -1813,6 +2604,11 @@ static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, f
 static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
+    if (swrCallNotes) {
+        char what[56];
+        snprintf(what, sizeof(what), "tiled tpag %d a%d", (int) tpagIndex, (int) (alpha * 100.0f));
+        swrNote(swrProfLast, what);
+    }
 }
 
 static bool SWRenderer_profDrawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
@@ -1822,9 +2618,24 @@ static bool SWRenderer_profDrawTileRun(Renderer* renderer, RoomTile** tiles, con
     return drawn;
 }
 
+static bool SWRenderer_profDrawTileLayer(Renderer* renderer, Background* tileset, const uint32_t* cells, uint32_t tilesX, uint32_t tilesY, float offsetX, float offsetY)
+{
+    bool drawn;
+    SWR_PROFILED(SWR_PROF_PART, drawn = SWRenderer_drawTileLayer(renderer, tileset, cells, tilesX, tilesY, offsetX, offsetY));
+    return drawn;
+}
+
 static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
 {
     SWR_PROFILED(SWR_PROF_RECT, SWRenderer_drawRectangle(renderer, x1, y1, x2, y2, color, alpha, outline));
+    if (swrCallNotes) {
+        // Where it is on the screen, not in the room, so that a scrolling view does not make each frame's a new one.
+        const SWRenderer* swr = (const SWRenderer*) renderer;
+        char what[56];
+        snprintf(what, sizeof(what), "rect %d,%d %dx%d a%d c%06x%s", (int) x1 - swr->viewX, (int) y1 - swr->viewY, (int) (x2 - x1), (int) (y2 - y1),
+                 (int) (alpha * 100.0f), (unsigned) (color & 0xFFFFFF), outline ? " outline" : "");
+        swrNote(swrProfLast, what);
+    }
 }
 #endif
 
@@ -1911,9 +2722,14 @@ Renderer* SWRenderer_create(void)
     swrVtable.drawSpriteTiled          = SWRenderer_profDrawSpriteTiled;
     swrVtable.drawRectangle            = SWRenderer_profDrawRectangle;
 #endif
+    swrVtable.drawSpriteGrid           = SWRenderer_drawSpriteGrid;
     swrVtable.drawTileRun              = SWRenderer_drawTileRun;
 #ifdef SW_DRAW_PROFILE
     swrVtable.drawTileRun              = SWRenderer_profDrawTileRun;
+#endif
+    swrVtable.drawTileLayer            = SWRenderer_drawTileLayer;
+#ifdef SW_DRAW_PROFILE
+    swrVtable.drawTileLayer            = SWRenderer_profDrawTileLayer;
 #endif
     
     swrVtable.drawTile                 = NULL;

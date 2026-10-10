@@ -9,6 +9,7 @@
 // the next draw. Returns false if there were none.
 bool swrTileRunsFree(void);
 
+
 // Unimplemented Functions
 #define UNIMP() do { logWarn("NYI %s\n", __func__); } while (0)
 //#define UNIMP() do { } while (0)
@@ -29,6 +30,26 @@ typedef struct
     // starts at that part's corner, so page coordinates minus this index it.
     uint16_t originX, originY;
     uint32_t lastUsedFrame; // SWRenderer.frameCounter when last drawn, for cache eviction
+    // A copy at half the size each way, made the first time the texture is
+    // drawn at half scale with swrFavorSpeed set (see swrHalfTexture), so
+    // that such draws need no averaging. Only for a texture whose pixels never
+    // change (immutable: one loaded from the game's data, not a surface).
+    uintpixel_t* halfBuffer;
+    uint8_t* halfCoverage;  // how many of its four texels each copied one stands for, 0..4; NULL when every one is 0 or 4
+    bool immutable;
+    uint8_t halfPhaseX, halfPhaseY; // 0 or 1: where the 2x2 blocks start (see swrHalfTexture)
+    // Whether every texel is opaque, so that an opaque draw can copy rows
+    // without looking at them: 0 not looked at yet, 1 yes, 2 no. Looked at
+    // only for an immutable texture; halfSolid is the same for the half-size copy.
+    uint8_t solid, halfSolid;
+    // For each row, the first column that has an opaque texel and the one
+    // after the last (both 0 for an empty row), so that a draw can leave out
+    // the transparent ends of the row without looking at them: most of a row
+    // when the texture is a few thin lines. Made on first need, for an
+    // immutable texture only (swrRowBounds); the half-size copy's are made
+    // with it and live in its allocation.
+    uint16_t* rowBounds;
+    uint16_t* halfRowBounds;
 }
 SWTexture;
 
@@ -51,6 +72,24 @@ typedef struct {
     float x, y;
     uintpixel_t color;
 } SWVertex;
+
+// The arguments of one swrDrawSpriteInternal call, kept so it can be issued later.
+#define SW_MIRROR_MAX_LAYERS 12
+typedef struct {
+    int dx, dy, dw, dh;
+    SWTexture* texture;
+    int sx, sy, sw, sh;
+    uintpixel_t tintColor;
+    int alpha;
+} SWSpriteCall;
+
+// One layer of a mirrored stack: a sprite drawn as four quarters, or a solid
+// fill of the whole mirrored area that followed them.
+typedef struct {
+    SWSpriteCall calls[4];      // the quarters as asked for; a fill uses calls[0]'s tintColor and alpha
+    int sx, sy, xstep, ystep;   // how the unflipped quarter samples its texture, after clipping
+    bool solid;
+} SWMirrorLayer;
 
 typedef struct
 {
@@ -82,6 +121,12 @@ typedef struct
     uint32_t frameCounter;
     bool pendingClear;      // clearFrameBuffer was requested but not done yet (see swrFlushPendingClear)
     uintpixel_t pendingClearColor;
+    bool clearHeld;         // a clear of the whole main buffer is still to be done (see swrClearSettle)
+    uintpixel_t clearHeldColor;
+    // Tiled passes held over the held clear, to be written with it row by row
+    // (see swrTiledHold); only ever non-zero while clearHeld is set.
+    int tiledHeldCount;
+    bool clearHeldForFill;  // SWRenderer_drawRectangle took the held clear for the swrFillRectangle call it is making
     bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
     
     // A solid-colour sprite draw that has been held back so that identical
@@ -95,6 +140,27 @@ typedef struct
     int overlayFirstAlpha;
     float overlayKeep;              // share of the destination that still shows through
     float overlayRed, overlayGreen, overlayBlue; // accumulated colour, 5-bit channel * 256
+    
+    // Translucent layers drawn as four mirrored quarters, held back so that one
+    // quarter can be blended and copied to the other three (see swrMirrorFlush).
+    bool mirrorReplaying;       // held draws are being issued; hold nothing
+    int mirrorLayers;           // complete layers held
+    int mirrorStage;            // quarters of the next layer seen so far, 0..3
+    uintpixel_t* mirrorFb;
+    int mirrorPitch;
+    int mirrorPort[6];          // portX, portY, portW, portH, maxX, maxY when the first quarter was held
+    int mirrorCx, mirrorCy, mirrorW, mirrorH; // the unflipped quarter's clipped rectangle
+    bool mirrorUnderKnown;      // everything under the stack was one colour when it was started
+    uintpixel_t mirrorUnder;
+    SWMirrorLayer mirrorStack[SW_MIRROR_MAX_LAYERS + 1];
+    
+    // The whole main buffer holds one colour: set by a full clear or fill,
+    // dropped by the next thing drawn. Lets a repeated fill be skipped and a
+    // mirrored stack be worked out without reading the buffer back.
+    bool uniformValid;
+    uintpixel_t uniformColor;
+    bool uniformKept;           // for the one swrFillRectangle call SWRenderer_drawRectangle is making
+    bool tileRunEntering;       // SWRenderer_drawTileRun is flushing: leave held tile pictures held
     size_t textureCount;
     size_t surfaceCount;
     size_t totalTextureCount;

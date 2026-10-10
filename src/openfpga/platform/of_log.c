@@ -7,6 +7,7 @@
 #include "gettime.h"
 #include "of_hooks.h"
 #include "of_perf.h"
+#include "ut_save_format.h"
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -28,7 +29,135 @@ void utLogSetConsole(bool enabled) {
     g_console = enabled;
 }
 
+/* The Makefile names these after the game being built. */
+#ifndef UT_GAME_NAME
+#define UT_GAME_NAME "undertale"
+#endif
+#ifndef UT_LOG_SLOT_FILE
+#define UT_LOG_SLOT_FILE "undertale_1.sav"
+#endif
+
+/* Everything logged since start, for utLogDump. When it fills up, the older
+ * half goes and a line says so. */
+#define UT_LOG_HISTORY (160u * 1024u)
+static char g_history[UT_LOG_HISTORY];
+static uint32_t g_historyLen = 0;
+static bool g_historyCut = false;
+
+static void keepHistory(const char *text) {
+    size_t len = strlen(text);
+    if (len >= UT_LOG_HISTORY / 2) return;
+    if (g_historyLen + len > UT_LOG_HISTORY) {
+        /* Drop the older half, from the start of a line. */
+        uint32_t from = UT_LOG_HISTORY / 2;
+        while (from < g_historyLen && g_history[from - 1] != '\n') from++;
+        memmove(g_history, g_history + from, g_historyLen - from);
+        g_historyLen -= from;
+        g_historyCut = true;
+    }
+    memcpy(g_history + g_historyLen, text, len);
+    g_historyLen += (uint32_t) len;
+}
+
+/* Writes the whole log as text to the game's second save slot file
+ * (<game>_1.sav), which the core definition already names and no game uses.
+ * A core can only write to its save slots, and the Pocket copies those back
+ * to the card (Saves/butterscotch/common/) when the core is left through the
+ * Analogue menu: this is how a log gets off the device without a screenshot,
+ * which holds 21 short lines.
+ *
+ * What the file held from earlier runs is kept in front of this run's log:
+ * every benchmark report whole (they are what a run is made for, and small),
+ * then as much of the file's end as fits. Each run's own log starts with a
+ * "Butterscotch log" line.
+ * Returns false if the file could not be written. */
+#define UT_LOG_REPORTS (24u * 1024u)
+#define UT_LOG_EARLIER (48u * 1024u)
+#define UT_LOG_HEADER "Butterscotch log, " UT_GAME_NAME "\n"
+
+bool utLogDump(void) {
+    /* Read the earlier runs once; later dumps in this run replace only this run's part. */
+    static char *earlier = NULL;
+    static uint32_t earlierLen = 0;
+    static bool earlierRead = false;
+    if (!earlierRead) {
+        earlierRead = true;
+        FILE *old = fopen(UT_LOG_SLOT_FILE, "rb");
+        char *text = old != NULL ? malloc(UT_SAVE_SLOT_BYTES) : NULL;
+        if (text != NULL) {
+            /* In pieces: one read for more than the slot holds came back empty on the device. */
+            size_t got = 0;
+            while (got < UT_SAVE_SLOT_BYTES - 1) {
+                size_t want = UT_SAVE_SLOT_BYTES - 1 - got;
+                size_t piece = fread(text + got, 1, want < 4096 ? want : 4096, old);
+                if (piece == 0) break;
+                got += piece;
+            }
+            text[got] = '\0';
+            size_t len = strlen(text); /* the text ends at the first NUL */
+            /* A slot never written, or holding something else, reads as anything at all. */
+            if (len > 0 && strncmp(text, "Butterscotch log, ", 18) == 0) {
+                /* Kept: every benchmark report in the file, whole (a run's log is half the slot, so only
+                 * the last one or two would survive otherwise), then as much of the file's end as fits. */
+                char *kept = malloc(UT_LOG_REPORTS + UT_LOG_EARLIER + 64);
+                size_t keptLen = 0;
+                if (kept != NULL) {
+                    for (char *at = text; (at = strstr(at, "=== ")) != NULL; at += 4) {
+                        if (at != text && at[-1] != '\n') continue;
+                        char *end = strstr(at, "--- end of report ---");
+                        char *next = strstr(at + 4, "\n=== ");
+                        if (end == NULL || (next != NULL && next < end)) continue; /* not a whole report */
+                        end = strchr(end, '\n');
+                        size_t blockLen = end != NULL ? (size_t) (end - at) + 1 : strlen(at);
+                        /* The same report may be in the file twice: kept by an earlier dump, and in the log it came from. */
+                        bool seen = false;
+                        for (size_t k = 0; k + blockLen <= keptLen && !seen; k++)
+                            seen = memcmp(kept + k, at, blockLen) == 0;
+                        if (seen || blockLen > UT_LOG_REPORTS) continue;
+                        if (keptLen + blockLen > UT_LOG_REPORTS) { /* drop the oldest half to make room */
+                            size_t drop = keptLen / 2;
+                            while (drop < keptLen && kept[drop - 1] != '\n') drop++;
+                            memmove(kept, kept + drop, keptLen - drop);
+                            keptLen -= drop;
+                            if (keptLen + blockLen > UT_LOG_REPORTS) keptLen = 0; /* still too big: keep only this one */
+                        }
+                        memcpy(kept + keptLen, at, blockLen);
+                        keptLen += blockLen;
+                    }
+                    if (keptLen > 0) kept[keptLen++] = '\n';
+                    size_t from = len > UT_LOG_EARLIER ? len - UT_LOG_EARLIER : 0;
+                    while (from > 0 && from < len && text[from - 1] != '\n') from++;
+                    memcpy(kept + keptLen, text + from, len - from);
+                    keptLen += len - from;
+                    earlier = kept;
+                    earlierLen = (uint32_t) keptLen;
+                }
+            }
+            free(text);
+        }
+        if (old != NULL) fclose(old);
+    }
+
+    FILE *file = fopen(UT_LOG_SLOT_FILE, "wb");
+    if (file == NULL) return false;
+    static const char cut[] = "(the start of this run's log no longer fitted and was dropped)\n";
+    /* The file always starts with this line: it is how the next run knows the slot holds a log. */
+    bool ok = fputs("Butterscotch log, file for " UT_GAME_NAME ": reports from earlier runs, the end of the last log, then this run\n\n", file) >= 0;
+    if (earlier != NULL) {
+        ok = fwrite(earlier, 1, earlierLen, file) == earlierLen;
+        if (earlierLen > 0 && earlier[earlierLen - 1] != '\n') ok = ok && fputc('\n', file) != EOF;
+        ok = ok && fputs("\n", file) >= 0;
+    }
+    ok = ok && fputs(UT_LOG_HEADER, file) >= 0;
+    if (g_historyCut) ok = ok && fputs(cut, file) >= 0;
+    ok = ok && fwrite(g_history, 1, g_historyLen, file) == g_historyLen;
+    /* Text ends here; whatever the slot held beyond this is cut off by the NUL for a reader that stops at one. */
+    ok = ok && fputc('\0', file) != EOF;
+    return fclose(file) == 0 && ok;
+}
+
 static void keepText(const char *text) {
+    keepHistory(text);
     for (; *text != '\0'; text++) {
         if (*text == '\n') {
             g_lineHead = (g_lineHead + 1) % UT_LOG_LINES;

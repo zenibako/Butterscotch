@@ -21,6 +21,132 @@ FORCE_INLINE void swrPlotPixel_(Renderer* renderer, int x, int y, uintpixel_t co
 // platform turns it on when it renders a room below its native resolution.
 bool swrSmoothMinify = false;
 
+// Mirrored layers (see swrMirrorFlush). Layers fainter than swrMirrorFaintAlpha
+// (of 256) are left out: at 16-bit colour they move a channel by one step at most.
+bool swrMirrorMerge = true;
+
+// See sw_drawing.h.
+bool swrSkipFrame = false;
+int swrMirrorFaintAlpha = 8;
+
+// Trades accuracy for speed where the two can be told apart only by looking
+// closely: a mirrored stack is worked out for every second pixel each way, and
+// sprite draws at 8/256 opacity or less (the outer passes of glowing text) are
+// left out. The platform sets it from the player's speed/accuracy choice.
+bool swrFavorSpeed = false;
+
+// Half-size copies. Drawing a texture at half size with swrSmoothMinify set
+// averages the opaque texels of each 2x2 block and blends the result by how
+// many of the four there were, for every pixel of every such draw. A texture
+// that is never written to can have that worked out once: its half-size copy
+// holds each block's average, and where some blocks are only partly opaque
+// (the edge of small text, a thin line) a second array holds their coverage,
+// 0..4. A draw from the copy then gives, texel for texel, what the averaging
+// draw would have.
+//
+// The blocks start where the draw's source rectangle starts, which for a
+// tileset with a one-texel border around each tile is an odd position. So a
+// copy is made for one phase (0 or 1 each way), that of the first draw to
+// need it; a draw at the other phase keeps the averaging path. A block cut
+// by the texture's edge is whatever part of it there is. Full-size texel x
+// belongs to half-size texel (x + phase) / 2.
+static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
+{
+#if PIXEL_SIZE != 16
+    (void) texture; (void) wantX; (void) wantY;
+    return false;
+#else
+    if (texture->halfBuffer != NULL) return true;
+    int phaseX = wantX & 1, phaseY = wantY & 1;
+    int halfW = (texture->width + phaseX + 1) / 2, halfH = (texture->height + phaseY + 1) / 2;
+    size_t texels = (size_t) halfW * halfH;
+    // One allocation: the texels, each row's bounds, then room for the coverage should it be needed.
+    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + (size_t) halfH * 2 * sizeof(uint16_t) + texels);
+    if (half == NULL) return false; // may fit another time
+    uint16_t* bounds = (uint16_t*) (half + texels);
+    uint8_t* coverage = (uint8_t*) (bounds + (size_t) halfH * 2);
+    bool partial = false;
+    
+    for (int hy = 0; hy < halfH; hy++)
+    {
+        int y0 = hy * 2 - phaseY, y1 = y0 + 1;
+        const uintpixel_t* row0 = (y0 >= 0) ? &texture->buffer[y0 * texture->width] : NULL;
+        const uintpixel_t* row1 = (y1 < texture->height) ? &texture->buffer[y1 * texture->width] : NULL;
+        for (int hx = 0; hx < halfW; hx++)
+        {
+            int x0 = hx * 2 - phaseX, x1 = x0 + 1;
+            // Texels outside the texture count as transparent, as they do to the averaging draw at a sprite's edge.
+            uintpixel_t texels4[4] = {
+                (row0 && x0 >= 0) ? row0[x0] : 0, (row0 && x1 < texture->width) ? row0[x1] : 0,
+                (row1 && x0 >= 0) ? row1[x0] : 0, (row1 && x1 < texture->width) ? row1[x1] : 0,
+            };
+            uint32_t red = 0, green = 0, blue = 0, covered = 0;
+            for (int i = 0; i < 4; i++) {
+                if (!swrIsOpaque(texels4[i])) continue;
+                red += (texels4[i] >> 10) & 0x1F; green += (texels4[i] >> 5) & 0x1F; blue += texels4[i] & 0x1F;
+                covered++;
+            }
+            uintpixel_t out = 0;
+            if (covered == 4 && texels4[0] == texels4[1] && texels4[0] == texels4[2] && texels4[0] == texels4[3]) {
+                out = texels4[0];
+            } else if (covered > 0) {
+                // The averaging draw's arithmetic: x * (65536 / n + 1) >> 16 in place of a divide.
+                static const uint32_t reciprocal[5] = { 0, 65536, 32768, 21846, 16384 };
+                uint32_t scale = reciprocal[covered];
+                out = (uintpixel_t) (0x8000 | (((red * scale) >> 16) << 10) | (((green * scale) >> 16) << 5) | ((blue * scale) >> 16));
+            }
+            half[hy * halfW + hx] = out;
+            coverage[hy * halfW + hx] = (uint8_t) covered;
+            if (covered != 0 && covered != 4) partial = true;
+        }
+    }
+    for (int hy = 0; hy < halfH; hy++) {
+        int first = 0, end = 0;
+        for (int hx = 0; hx < halfW; hx++) {
+            if (coverage[hy * halfW + hx] == 0) continue;
+            if (end == 0) first = hx;
+            end = hx + 1;
+        }
+        bounds[hy * 2] = (uint16_t) first;
+        bounds[hy * 2 + 1] = (uint16_t) end;
+    }
+    texture->halfBuffer = half;
+    texture->halfRowBounds = bounds;
+    texture->halfCoverage = partial ? coverage : NULL;
+    texture->halfSolid = 2;
+    if (!partial) {
+        size_t opaque = 0;
+        for (size_t i = 0; i < texels; i++) opaque += coverage[i] == 4;
+        if (opaque == texels) texture->halfSolid = 1;
+    }
+    texture->halfPhaseX = (uint8_t) phaseX;
+    texture->halfPhaseY = (uint8_t) phaseY;
+    return true;
+#endif
+}
+
+// The row bounds of an immutable texture (see SWTexture), or NULL.
+static const uint16_t* swrRowBounds(SWTexture* texture)
+{
+    if (texture->rowBounds != NULL) return texture->rowBounds;
+    if (!texture->immutable) return NULL;
+    uint16_t* bounds = (uint16_t*) malloc((size_t) texture->height * 2 * sizeof(uint16_t));
+    if (bounds == NULL) return NULL;
+    for (int y = 0; y < texture->height; y++) {
+        const uintpixel_t* row = &texture->buffer[y * texture->width];
+        int first = 0, end = 0;
+        for (int x = 0; x < texture->width; x++) {
+            if (!swrIsOpaque(row[x])) continue;
+            if (end == 0) first = x;
+            end = x + 1;
+        }
+        bounds[y * 2] = (uint16_t) first;
+        bounds[y * 2 + 1] = (uint16_t) end;
+    }
+    texture->rowBounds = bounds;
+    return bounds;
+}
+
 static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixel_t color, UNUSED uintpixel_t color2, int alpha)
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -42,8 +168,20 @@ static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixe
             uint32_t srcRedBlue = swrSpreadRedBlue(color) * alpha;
             uint32_t srcGreen = swrGreen(color) * alpha;
             uint32_t dstalpha = 256 - alpha;
-            for (int i = 0; i < dw; i++)
-                line[i] = swrBlendPremultiplied(line[i], srcRedBlue, srcGreen, dstalpha);
+            // One colour over the row: the result depends only on the pixel
+            // under it, so it is worked out again only when that changes, and
+            // written only when it differs. A fade to black over a screen
+            // that is mostly black already then mostly just reads.
+            uintpixel_t lastUnder = line[0];
+            uintpixel_t lastResult = swrBlendPremultiplied(lastUnder, srcRedBlue, srcGreen, dstalpha);
+            for (int i = 0; i < dw; i++) {
+                uintpixel_t under = line[i];
+                if (under != lastUnder) {
+                    lastUnder = under;
+                    lastResult = swrBlendPremultiplied(under, srcRedBlue, srcGreen, dstalpha);
+                }
+                if (lastResult != under) line[i] = lastResult;
+            }
             return;
         }
 #endif
@@ -283,11 +421,13 @@ FORCE_INLINE void swrCalculateAlphaBlending(
 // draw is held back, and draws of the same area that follow it directly are
 // folded into it. A draw nothing follows comes out exactly as it did before;
 // a folded stack is rounded once instead of once per layer.
-void swrOverlayFlush(SWRenderer* swr)
+static void swrOverlayFlushHeld(SWRenderer* swr)
 {
 #ifdef SW_HAS_PREMUL_BLEND
     int count = swr->overlayCount;
     if (count == 0) return;
+    swrTileRunsFlush(swr); // tile pictures and a clear still held are older than the stack
+    swrClearSettle(swr);
     swr->overlayCount = 0;
     
     uint32_t dstalpha, srcRedBlue, srcGreen;
@@ -341,6 +481,7 @@ void swrOverlayFlush(SWRenderer* swr)
 static bool swrOverlayHold(SWRenderer* swr, int dx, int dy, int dw, int dh, SWTexture* texture,
                            int sx, int sy, int lastCol, int lastRow, uintpixel_t tintColor, int alpha)
 {
+    if (swrGridHeld()) return false; // nothing is held over a held grid (see SWRenderer_drawSpriteGrid)
     if (lastCol >= texture->width || lastRow >= texture->height) return false;
     if ((lastCol - sx + 1) * (lastRow - sy + 1) > SW_OVERLAY_MAX_SOURCE_TEXELS) return false;
     
@@ -388,9 +529,362 @@ static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
     uintpixel_t tintColor, int alpha
+);
+
+#ifdef SW_HAS_PREMUL_BLEND
+#define SW_MIRROR_MIN_PIXELS 4096
+
+static void swrMirrorReplay(SWRenderer* swr, const SWSpriteCall* call)
+{
+    swrDrawSpriteInternal((Renderer*) swr, call->dx, call->dy, call->dw, call->dh, call->texture,
+                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha);
+}
+
+static void swrMirrorFillRows(SWRenderer* swr, int x, int y, int w, int h, uintpixel_t color, int alpha)
+{
+    for (int row = 0; row < h; row++)
+        swrDrawHLineInt((Renderer*) swr, x, y + row, w, color, color, alpha);
+}
+
+// Works a whole stack out for the unflipped quarter in one pass and writes
+// each pixel to all four quarters. Layer by layer it does the arithmetic the
+// ordinary draws would have done. What lies under the stack is either one
+// known colour, so the buffer is not read at all, or (readUnder) the same in
+// all four quarters and read from the unflipped one. `step` is 1, or 2 to work
+// out every second pixel each way and repeat it (swrFavorSpeed).
+static void swrMirrorCompose(SWRenderer* swr, int layers, int step, bool readUnder)
+{
+    typedef struct {
+        const uintpixel_t* buffer;
+        const uintpixel_t* srcline;
+        int texWidth, sx, sy, xstep, ystep;
+        uintpixel_t tintColor;
+        uint32_t alpha, dstalpha, srcRedBlue, srcGreen, lastPixel;
+        bool solid;
+    } Active;
+    Active active[SW_MIRROR_MAX_LAYERS];
+    int count = 0;
+    
+    for (int layer = 0; layer < layers; layer++)
+    {
+        const SWMirrorLayer* held = &swr->mirrorStack[layer];
+        const SWSpriteCall* call = &held->calls[0];
+        Active* a = &active[count];
+        a->solid = held->solid;
+        a->alpha = (uint32_t) call->alpha;
+        a->dstalpha = 256 - a->alpha;
+        a->tintColor = call->tintColor;
+        if (held->solid) {
+            a->srcRedBlue = swrSpreadRedBlue(call->tintColor) * a->alpha;
+            a->srcGreen = swrGreen(call->tintColor) * a->alpha;
+        } else {
+            if (call->alpha < swrMirrorFaintAlpha) continue;
+            a->buffer = call->texture->buffer;
+            a->texWidth = call->texture->width;
+            a->sx = held->sx; a->sy = held->sy;
+            a->xstep = held->xstep; a->ystep = held->ystep;
+            a->lastPixel = 0xFFFFFFFF;
+            a->srcRedBlue = a->srcGreen = 0;
+        }
+        count++;
+    }
+    
+    const int fp_prec = 14;
+    int cx = swr->mirrorCx, cy = swr->mirrorCy, w = swr->mirrorW, h = swr->mirrorH;
+    uintpixel_t under = swr->mirrorUnder;
+    
+    for (int y = 0; y < h; y += step)
+    {
+        for (int i = 0; i < count; i++) {
+            Active* a = &active[i];
+            if (!a->solid)
+                a->srcline = &a->buffer[(a->sy + (int) (((int32_t) y * a->ystep) >> fp_prec)) * a->texWidth + a->sx];
+        }
+        uintpixel_t* below = &swr->fb[(cy + y) * swr->fbPitch + cx];
+        uintpixel_t* above = &swr->fb[(cy - 1 - y) * swr->fbPitch + cx];
+        bool second = step == 2 && y + 1 < h;
+        uintpixel_t* below2 = below + swr->fbPitch;
+        uintpixel_t* above2 = above - swr->fbPitch;
+        
+        for (int x = 0; x < w; x += step)
+        {
+            uintpixel_t color = readUnder ? below[x] : under;
+            for (int i = 0; i < count; i++)
+            {
+                Active* a = &active[i];
+                if (!a->solid) {
+                    uintpixel_t pixel = a->srcline[(int) (((int32_t) x * a->xstep) >> fp_prec)];
+                    if (!swrIsOpaque(pixel)) continue;
+                    if (pixel != a->lastPixel) {
+                        uintpixel_t tinted = tint(a->tintColor, pixel);
+                        a->srcRedBlue = swrSpreadRedBlue(tinted) * a->alpha;
+                        a->srcGreen = swrGreen(tinted) * a->alpha;
+                        a->lastPixel = pixel;
+                    }
+                }
+                color = swrBlendPremultiplied(color, a->srcRedBlue, a->srcGreen, a->dstalpha);
+            }
+            
+            below[x] = color; below[-1 - x] = color;
+            above[x] = color; above[-1 - x] = color;
+            if (step == 2) {
+                bool wide = x + 1 < w;
+                if (wide) {
+                    below[x + 1] = color; below[-2 - x] = color;
+                    above[x + 1] = color; above[-2 - x] = color;
+                }
+                if (second) {
+                    below2[x] = color; below2[-1 - x] = color;
+                    above2[x] = color; above2[-1 - x] = color;
+                    if (wide) {
+                        below2[x + 1] = color; below2[-2 - x] = color;
+                        above2[x + 1] = color; above2[-2 - x] = color;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Mirrored layers. Deltarune's character creation screens draw a small image
+// stretched over each quarter of the screen, flipped so that the four meet in
+// the middle, at low opacity, six layers deep, and then darken the lot with a
+// translucent fill: seven screens of blending per frame. Where the picture
+// underneath is itself the same in all four quarters (there, a cleared screen),
+// each layer's quarters come out as mirror images of one another, so one
+// quarter is worked out and the other three are copies of it. The layers are
+// held back until something else is drawn; if the picture underneath turns out
+// not to be symmetric they are drawn the ordinary way.
+static void swrMirrorFlush(SWRenderer* swr)
+{
+    int layers = swr->mirrorLayers, stage = swr->mirrorStage;
+    if (layers == 0 && stage == 0) return;
+    swrTileRunsFlush(swr); // tile pictures and a clear still held are older than the layers
+    swrClearSettle(swr);
+    swr->mirrorLayers = 0;
+    swr->mirrorStage = 0;
+    swr->mirrorReplaying = true;
+    
+    // The held draws belong to the target and port they were made for.
+    uintpixel_t* fb = swr->fb;
+    uint16_t pitch = swr->fbPitch;
+    int port[6] = { swr->portX, swr->portY, swr->portW, swr->portH, swr->maxX, swr->maxY };
+    int blendMode = swr->blendMode;
+    swr->fb = swr->mirrorFb;
+    swr->fbPitch = (uint16_t) swr->mirrorPitch;
+    swr->portX = swr->mirrorPort[0]; swr->portY = swr->mirrorPort[1];
+    swr->portW = swr->mirrorPort[2]; swr->portH = swr->mirrorPort[3];
+    swr->maxX = swr->mirrorPort[4]; swr->maxY = swr->mirrorPort[5];
+    swr->blendMode = bm_normal;
+    
+    int cx = swr->mirrorCx, cy = swr->mirrorCy, w = swr->mirrorW, h = swr->mirrorH;
+    if (layers > 0 && swr->mirrorUnderKnown)
+    {
+        swrMirrorCompose(swr, layers, swrFavorSpeed ? 2 : 1, false);
+    }
+    else if (layers > 0)
+    {
+        swrOverlayFlushHeld(swr); // anything held before the layers lies under them
+        
+        bool symmetric = true;
+        for (int y = 0; y < h && symmetric; y++)
+        {
+            const uintpixel_t* below = &swr->fb[(cy + y) * swr->fbPitch + cx];
+            const uintpixel_t* above = &swr->fb[(cy - 1 - y) * swr->fbPitch + cx];
+            for (int x = 0; x < w; x++)
+            {
+                uintpixel_t pixel = below[x];
+                if (below[-1 - x] != pixel || above[x] != pixel || above[-1 - x] != pixel) { symmetric = false; break; }
+            }
+        }
+        
+        if (symmetric)
+            swrMirrorCompose(swr, layers, swrFavorSpeed ? 2 : 1, true);
+        else for (int layer = 0; layer < layers; layer++)
+        {
+            const SWMirrorLayer* held = &swr->mirrorStack[layer];
+            if (held->solid) {
+                swrMirrorFillRows(swr, cx - w, cy - h, 2 * w, 2 * h, held->calls[0].tintColor, held->calls[0].alpha);
+                continue;
+            }
+            if (held->calls[0].alpha < swrMirrorFaintAlpha) continue;
+            for (int quarter = 0; quarter < 4; quarter++)
+                swrMirrorReplay(swr, &held->calls[quarter]);
+            swrOverlayFlushHeld(swr);
+        }
+    }
+    
+    // Quarters of a layer that was never completed are ordinary draws.
+    for (int quarter = 0; quarter < stage; quarter++)
+        swrMirrorReplay(swr, &swr->mirrorStack[layers].calls[quarter]);
+    swrOverlayFlushHeld(swr);
+    
+    swr->fb = fb;
+    swr->fbPitch = pitch;
+    swr->portX = port[0]; swr->portY = port[1]; swr->portW = port[2]; swr->portH = port[3];
+    swr->maxX = port[4]; swr->maxY = port[5];
+    swr->blendMode = blendMode;
+    swr->mirrorReplaying = false;
+    swr->uniformValid = false;
+}
+
+// Holds the draw back if it can be a quarter of a mirrored layer. Takes the
+// draw as it was asked for (call) and as it came out of clipping. Returns
+// false if the caller has to draw it; nothing is held then.
+static bool swrMirrorHold(SWRenderer* swr, const SWSpriteCall* call, int dx, int dy, int dw, int dh,
+                          bool flipX, bool flipY, int sx, int sy, int xstep, int ystep, int unit)
+{
+    if (swrGridHeld()) return false; // nothing is held over a held grid (see SWRenderer_drawSpriteGrid)
+    bool eligible = swrMirrorMerge && swr->blendMode == bm_normal && swrIsPartialAlpha(call->alpha) &&
+                    dw * dh >= SW_MIRROR_MIN_PIXELS && xstep <= unit && ystep <= unit;
+    if (!eligible) {
+        // A draw too faint to change anything (alphaBlend skips it) is no reason to let a stack out.
+        bool invisible = swr->blendMode == bm_normal && call->alpha < 4;
+        if (invisible && (swr->mirrorLayers > 0 || swr->mirrorStage > 0)) return true;
+        swrMirrorFlush(swr);
+        return false;
+    }
+    
+    int stage = swr->mirrorStage;
+    if (stage > 0)
+    {
+        // The quarters follow the unflipped one anticlockwise: left, above left, above.
+        SWMirrorLayer* held = &swr->mirrorStack[swr->mirrorLayers];
+        const SWSpriteCall* first = &held->calls[0];
+        int wantX = (stage == 3) ? swr->mirrorCx : swr->mirrorCx - swr->mirrorW;
+        int wantY = (stage == 1) ? swr->mirrorCy : swr->mirrorCy - swr->mirrorH;
+        bool match = swr->fb == swr->mirrorFb && swr->fbPitch == swr->mirrorPitch &&
+                     flipX == (stage != 3) && flipY == (stage != 1) &&
+                     dx == wantX && dy == wantY && dw == swr->mirrorW && dh == swr->mirrorH &&
+                     call->texture == first->texture && call->alpha == first->alpha &&
+                     call->tintColor == first->tintColor &&
+                     sx == held->sx && sy == held->sy && xstep == held->xstep && ystep == held->ystep;
+        if (match) {
+            held->calls[stage] = *call;
+            if (stage == 3) {
+                swr->mirrorLayers++;
+                swr->mirrorStage = 0;
+            } else
+                swr->mirrorStage = stage + 1;
+            return true;
+        }
+        swrMirrorFlush(swr); // not a mirrored layer after all; this draw may start one
+    }
+    
+    if (flipX || flipY) {
+        swrMirrorFlush(swr);
+        return false;
+    }
+    
+    bool sameQuad = swr->mirrorLayers > 0 && swr->fb == swr->mirrorFb && swr->fbPitch == swr->mirrorPitch &&
+                    dx == swr->mirrorCx && dy == swr->mirrorCy && dw == swr->mirrorW && dh == swr->mirrorH;
+    if (!sameQuad || swr->mirrorLayers >= SW_MIRROR_MAX_LAYERS)
+        swrMirrorFlush(swr);
+    if (swr->mirrorLayers == 0) {
+        swr->mirrorFb = swr->fb;
+        swr->mirrorPitch = swr->fbPitch;
+        swr->mirrorPort[0] = swr->portX; swr->mirrorPort[1] = swr->portY;
+        swr->mirrorPort[2] = swr->portW; swr->mirrorPort[3] = swr->portH;
+        swr->mirrorPort[4] = swr->maxX; swr->mirrorPort[5] = swr->maxY;
+        swr->mirrorCx = dx; swr->mirrorCy = dy; swr->mirrorW = dw; swr->mirrorH = dh;
+        // Known only if nothing is waiting to be drawn underneath.
+        swr->mirrorUnderKnown = swr->uniformValid && swr->fb == swr->mainFb && swr->overlayCount == 0;
+        swr->mirrorUnder = swr->uniformColor;
+    }
+    SWMirrorLayer* held = &swr->mirrorStack[swr->mirrorLayers];
+    held->solid = false;
+    held->sx = sx; held->sy = sy;
+    held->xstep = xstep; held->ystep = ystep;
+    held->calls[0] = *call;
+    swr->mirrorStage = 1;
+    return true;
+}
+
+// A translucent fill of exactly the area a held stack covers joins the stack
+// as one more layer. Takes swrFillRectangle's arguments; returns false if the
+// fill has to be drawn.
+bool swrMirrorHoldFill(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t pxcolor, float alpha)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    if (swr->mirrorLayers == 0 || swr->mirrorStage != 0 || swr->mirrorLayers >= SW_MIRROR_MAX_LAYERS) return false;
+    if (swr->fb != swr->mirrorFb || swr->fbPitch != swr->mirrorPitch || swr->blendMode != bm_normal) return false;
+    int alphaInt = swrIntAlpha(alpha);
+    if (!swrIsPartialAlpha(alphaInt)) return false;
+    
+    // The area swrFillRectangle would cover, clipped as swrDrawHLineInt clips it.
+    swrTransformPosIfNeeded(swr, &x1, &y1);
+    swrTransformPosIfNeeded(swr, &x2, &y2);
+    int x1i = swrFloor(x1), x2i = swrCeiling(x2), y1i = swrFloor(y1), y2i = swrCeiling(y2);
+    int xd = x2i - x1i, yd = y2i - y1i;
+    if (xd < 0) { x1i = x2i; xd = -xd; }
+    if (yd < 0) { y1i = y2i; yd = -yd; }
+    if (xd <= 0 || yd <= 0) return false;
+    int left = x1i < swr->portX ? swr->portX : x1i;
+    int right = x1i + xd >= swr->maxX ? swr->maxX : x1i + xd;
+    int top = y1i < swr->portY ? swr->portY : y1i;
+    int bottom = y1i + yd + 1 > swr->maxY ? swr->maxY : y1i + yd + 1;
+    
+    if (left != swr->mirrorCx - swr->mirrorW || right != swr->mirrorCx + swr->mirrorW ||
+        top != swr->mirrorCy - swr->mirrorH || bottom != swr->mirrorCy + swr->mirrorH)
+        return false;
+    
+    SWMirrorLayer* held = &swr->mirrorStack[swr->mirrorLayers++];
+    held->solid = true;
+    held->calls[0].tintColor = pxcolor;
+    held->calls[0].alpha = alphaInt;
+    return true;
+}
+#endif
+
+// For a change of state that draws nothing itself (a new view): a clear
+// still held, with nothing held over it, can stay that way.
+void swrOverlayFlushForState(SWRenderer* swr)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    swrTileRunsFlush(swr); // takes the clear along if there were pictures
+    if (swr->clearHeld && !swrGridHeld() && swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0) {
+        bool uniform = swr->uniformValid;
+        swr->clearHeld = false;
+        swrOverlayFlush(swr);
+        swr->clearHeld = true;
+        swr->uniformValid = uniform; // nothing was drawn
+        return;
+    }
+#endif
+    swrOverlayFlush(swr);
+}
+
+void swrOverlayFlush(SWRenderer* swr)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    // Held tile pictures are older than anything else held, so they go first,
+    // and a held clear is older still: the pictures take it with them, and
+    // it stays held for a run of tiles coming in to do the same.
+    // A held grid lies between the two. With anything else held as well, all of it goes.
+    bool othersHeld = swr->mirrorLayers != 0 || swr->mirrorStage != 0 || swr->overlayCount != 0;
+    if (!swr->tileRunEntering || othersHeld) {
+        swrTileRunsFlush(swr);
+        swrGridFlush(swr);
+        swrClearSettle(swr);
+    }
+    if (!swr->mirrorReplaying) swrMirrorFlush(swr);
+#else
+    swrClearSettle(swr);
+#endif
+    swrOverlayFlushHeld(swr);
+    swr->uniformValid = false; // every caller is about to draw
+}
+
+static void swrDrawSpriteInternal(
+    Renderer* renderer, int dx, int dy, int dw, int dh,
+    SWTexture* texture, int sx, int sy, int sw, int sh,
+    uintpixel_t tintColor, int alpha
 )
 {
     SWRenderer *swr = (SWRenderer*) renderer;
+#ifdef SW_HAS_PREMUL_BLEND
+    const SWSpriteCall asked = { dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha };
+#endif
     
     bool flipX = false, flipY = false;
     if (dw < 0) { dx += dw; dw = -dw; flipX = true; }
@@ -438,6 +932,75 @@ static void swrDrawSpriteInternal(
     if (sy + sh >= texture->height) { sh = texture->height - sy; }
     if (sw <= 0 || sh <= 0) return;
     
+#ifdef SW_HAS_PREMUL_BLEND
+    // Drawn at half size with speed favoured: take the texels from the
+    // texture's half-size copy, one for one, instead of averaging four of the
+    // full-size ones for every pixel of every such draw. Everything below
+    // then sees an unscaled draw of a smaller texture.
+    SWTexture halved;
+    bool fromHalf = false;
+    // The draw has to start on a block of the copy. One that needs coverage
+    // is drawn right here, on the averaging draw's terms (normal blending,
+    // not flipped, not too faint to show); the rest carry on below as a plain
+    // unscaled draw.
+    bool halfScale = (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1);
+    if (swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
+        ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0 &&
+        (texture->halfCoverage == NULL || (swr->blendMode == bm_normal && !flipX && !flipY && alpha >= 4)))
+    {
+        int halfW = (texture->width + texture->halfPhaseX + 1) / 2, halfH = (texture->height + texture->halfPhaseY + 1) / 2;
+        const uint8_t* coverage = texture->halfCoverage;
+        halved = *texture;
+        halved.solid = texture->halfSolid;
+        halved.buffer = texture->halfBuffer;
+        halved.width = (uint16_t) halfW;
+        halved.height = (uint16_t) halfH;
+        sx = (sx + texture->halfPhaseX) / 2;
+        sy = (sy + texture->halfPhaseY) / 2;
+        texture = &halved;
+        if (sx + dw > halfW) dw = halfW - sx;
+        if (sy + dh > halfH) dh = halfH - sy;
+        if (dw <= 0 || dh <= 0) return;
+        sw = dw; sh = dh;
+        osw = odw; osh = odh;
+        fromHalf = true;
+        
+        if (coverage != NULL)
+        {
+            swrOverlayFlush(swr);
+            uint32_t lastColor = 0xFFFFFFFF;
+            uintpixel_t lastTinted = 0;
+            for (int y = 0; y < dh; y++)
+            {
+                uintpixel_t* dstline = &swr->fb[(dy + y) * swr->fbPitch + dx];
+                const uintpixel_t* srcline = &halved.buffer[(sy + y) * halfW + sx];
+                const uint8_t* covline = &coverage[(sy + y) * halfW + sx];
+                // Only the stretch of the row that has anything in it.
+                int from = (int) halved.halfRowBounds[(sy + y) * 2] - sx, to = (int) halved.halfRowBounds[(sy + y) * 2 + 1] - sx;
+                if (from < 0) from = 0;
+                if (to > dw) to = dw;
+                for (int x = from; x < to; x++)
+                {
+                    uint32_t covered = covline[x];
+                    if (covered == 0) continue;
+                    uintpixel_t color = srcline[x];
+                    if (color != lastColor) {
+                        lastTinted = tint(tintColor, color);
+                        lastColor = color;
+                    }
+                    int coverageAlpha = covered == 4 ? alpha : (alpha * (int) covered) >> 2;
+                    if (coverageAlpha > 253)
+                        dstline[x] = lastTinted;
+                    else if (coverageAlpha >= 4)
+                        dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(lastTinted) * coverageAlpha,
+                                                           swrGreen(lastTinted) * coverageAlpha, 256 - coverageAlpha);
+                }
+            }
+            return;
+        }
+    }
+#endif
+    
     //okay, now we can finally get on with rendering
     
     int ixs = 0, oxs = 1, iys = 0, oys = 1;
@@ -456,6 +1019,21 @@ static void swrDrawSpriteInternal(
     fixedp_t iys2 = iys * ystep;
     
     int blendmode = swr->blendMode;
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    // Nothing comes of a draw this faint: alphaBlend skips it, and a 16-bit texel is opaque or absent.
+    // Leaving here keeps what is held, and what is known about the buffer, as it was.
+    if (blendmode == bm_normal && alpha < 4) return;
+    
+    // A quarter of a mirrored layer is held back; anything else lets held layers out first.
+    // (A draw from a half-size copy is not offered: a held layer is worked out from the texture it names.)
+    if (!swr->mirrorReplaying && !fromHalf &&
+        swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
+        return;
+    swr->uniformValid = false;
+    swrClearSettle(swr);
+    if (swrFavorSpeed && alpha <= 8 && blendmode == bm_normal) return; // too faint to miss; see swrFavorSpeed
+#endif
     
 #ifdef SW_HAS_PREMUL_BLEND
     // Solid overlays drawn at full size or enlarged may be held back and merged.
@@ -547,6 +1125,9 @@ static void swrDrawSpriteInternal(
     // colour and reuse it while consecutive source pixels are the same.
     if (blendmode == bm_normal && swrIsPartialAlpha(alpha))
     {
+        const uint16_t* rowBounds = NULL;
+        if (!flipX && xstep == (1 << fp_prec) && dh == sh)
+            rowBounds = texture->buffer == texture->halfBuffer ? texture->halfRowBounds : swrRowBounds(texture); // the half-size copy stands in as a texture of its own
         uint32_t dstalpha = 256 - alpha;
         uint32_t lastPixel = 0xFFFFFFFF;
         uint32_t srcRedBlue = 0, srcGreen = 0;
@@ -562,7 +1143,17 @@ static void swrDrawSpriteInternal(
                 srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
             
             fixedp_t xs2 = ixs2;
-            for (int x = 0; x < dw; x++, xs2 += oxs2)
+            int from = 0, to = dw;
+            if (rowBounds != NULL) {
+                // Unscaled and not mirrored: only the stretch of the row that has anything in it.
+                int row = sy + ys;
+                from = (int) rowBounds[row * 2] - sx;
+                to = (int) rowBounds[row * 2 + 1] - sx;
+                if (from < 0) from = 0;
+                if (to > dw) to = dw;
+                xs2 += (fixedp_t) from * oxs2;
+            }
+            for (int x = from; x < to; x++, xs2 += oxs2)
             {
                 uintpixel_t pixel = srcline[(int)(xs2 >> fp_prec)];
                 if (!swrIsOpaque(pixel))
@@ -591,6 +1182,17 @@ static void swrDrawSpriteInternal(
         uint32_t lastPixel = 0xFFFFFFFF;
         uintpixel_t lastTinted = 0;
         
+        // An immutable texture is looked over once to learn whether it has any transparent texel.
+        if (texture->solid == 0 && texture->immutable && untinted && !flipX && xstep == (1 << fp_prec)) {
+            size_t count = (size_t) texture->width * texture->height, opaque = 0;
+            for (size_t i = 0; i < count; i++) opaque += swrIsOpaque(texture->buffer[i]) ? 1 : 0;
+            texture->solid = opaque == count ? 1 : 2;
+        }
+        bool solid = texture->solid == 1;
+        const uint16_t* rowBounds = NULL;
+        if (!solid && untinted && !flipX && xstep == (1 << fp_prec) && dh == sh)
+            rowBounds = texture->buffer == texture->halfBuffer ? texture->halfRowBounds : swrRowBounds(texture); // the half-size copy stands in as a texture of its own
+        
         fixedp_t ys2 = iys2;
         for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
         {
@@ -602,10 +1204,24 @@ static void swrDrawSpriteInternal(
                 srcline = &texture->buffer[(sy + (int)(ys2 >> fp_prec)) * texture->width + sx];
             
             fixedp_t xs2 = ixs2;
-            if (untinted && !flipX && xstep == (1 << fp_prec))
+            if (untinted && !flipX && xstep == (1 << fp_prec) && solid)
             {
-                // Unscaled: no stepping through the source needed.
-                for (int x = 0; x < dw; x++)
+                // Nothing transparent anywhere in the texture: the row goes over as it is.
+                memcpy(dstline, srcline, (size_t) dw * sizeof(uintpixel_t));
+            }
+            else if (untinted && !flipX && xstep == (1 << fp_prec))
+            {
+                // Unscaled: no stepping through the source needed, and only
+                // the stretch of the row that has anything in it looked at.
+                int from = 0, to = dw;
+                if (rowBounds != NULL) {
+                    int row = sy + ys;
+                    from = (int) rowBounds[row * 2] - sx;
+                    to = (int) rowBounds[row * 2 + 1] - sx;
+                    if (from < 0) from = 0;
+                    if (to > dw) to = dw;
+                }
+                for (int x = from; x < to; x++)
                 {
                     uintpixel_t pixel = srcline[x];
                     if (swrIsOpaque(pixel))
@@ -1134,6 +1750,23 @@ void swrDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
     swrDrawLine(renderer, x2i, y1i, x2i, y2i, 1.0f, color2, color4, alpha, SWR_LINE_ALIGN_M1);
 }
 
+// Whether swrFillRectangle with these arguments would paint every pixel of
+// the main buffer opaquely: nothing drawn there before it can then show.
+bool swrFillCoversMain(SWRenderer* swr, float x1, float y1, float x2, float y2, float alpha)
+{
+    if (swr->fb != swr->mainFb || swr->blendMode != bm_normal || swrIntAlpha(alpha) <= 253) return false;
+    if (swr->portX != 0 || swr->portY != 0 || swr->maxX < swr->mainWidth || swr->maxY < swr->mainHeight) return false;
+    swrTransformPosIfNeeded(swr, &x1, &y1);
+    swrTransformPosIfNeeded(swr, &x2, &y2);
+    int x1i = swrFloor(x1), x2i = swrCeiling(x2), y1i = swrFloor(y1), y2i = swrCeiling(y2);
+    int xd = x2i - x1i;
+    int yd = y2i - y1i;
+    if (xd < 0) { x1i = x2i; xd = -xd; }
+    if (yd < 0) { y1i = y2i; yd = -yd; }
+    if (xd <= 0 || yd <= 0) return false;
+    return x1i <= 0 && y1i <= 0 && x1i + xd >= swr->mainWidth && y1i + yd + 1 >= swr->mainHeight;
+}
+
 void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uintpixel_t pxcolor, float alpha)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
@@ -1146,10 +1779,66 @@ void swrFillRectangle(Renderer* renderer, float x1, float y1, float x2, float y2
     int yd = y2i - y1i;
     if (xd < 0) { x1i = x2i; xd = -xd; }
     if (yd < 0) { y1i = y2i; yd = -yd; }
-    if (xd <= 0 || yd <= 0) return;
+    bool clearTaken = swr->clearHeldForFill;
+    swr->clearHeldForFill = false;
+    if (xd <= 0 || yd <= 0) {
+        swr->clearHeld = clearTaken; // nothing drawn: held as before
+        return;
+    }
+    
+    // A fill of the whole main buffer. While the buffer is known to hold one
+    // colour, the fill turns it into one other colour that can be worked out
+    // without touching it: the fill's own if opaque, the blend of the two if
+    // translucent. Nothing is written when that is the colour already there
+    // (a game darkening a black screen, or clearing one twice), and one plain
+    // fill replaces a read-blend-write of every pixel otherwise.
+    bool wholeBuffer = swr->fb == swr->mainFb && swr->blendMode == bm_normal && alphaInt >= 4 &&
+                       swr->portX == 0 && swr->portY == 0 && swr->maxX >= swr->mainWidth && swr->maxY >= swr->mainHeight &&
+                       x1i <= 0 && y1i <= 0 && x1i + xd >= swr->mainWidth && y1i + yd + 1 >= swr->mainHeight;
+    bool opaque = alphaInt > 253;
+    // The result is itself held back as a clear (swrClearSettle) when the
+    // buffer is exactly what a clear covers: a room's tiles tend to follow.
+    bool holdable = swr->fbPitch == swr->mainWidth;
+    if (clearTaken && !holdable) {
+        swr->clearHeld = true;
+        swrClearSettle(swr);
+        clearTaken = false;
+    }
+#ifdef SW_HAS_PREMUL_BLEND
+    if (wholeBuffer && swr->uniformKept) {
+        uintpixel_t result = opaque ? pxcolor
+            : swrBlendPremultiplied(swr->uniformColor, swrSpreadRedBlue(pxcolor) * (uint32_t) alphaInt,
+                                    swrGreen(pxcolor) * (uint32_t) alphaInt, (uint32_t) (256 - alphaInt));
+        if (holdable && (clearTaken || result != swr->uniformColor)) {
+            swr->clearHeld = true;
+            swr->clearHeldColor = result;
+        } else if (result != swr->uniformColor) {
+            for (int y = 0; y < swr->mainHeight; y++)
+                swrFillPixels(&swr->fb[y * swr->fbPitch], (size_t) swr->mainWidth, result);
+        }
+        swr->uniformColor = result;
+        swr->uniformValid = true;
+        return;
+    }
+#endif
+    if (clearTaken) {
+        swr->clearHeld = true;
+        swrClearSettle(swr);
+    }
+    if (wholeBuffer && opaque && holdable) {
+        swr->clearHeld = true;
+        swr->clearHeldColor = pxcolor;
+        swr->uniformValid = true;
+        swr->uniformColor = pxcolor;
+        return;
+    }
     
     for (int y = 0; y <= yd; y++) {
         swrDrawHLineInt(renderer, x1i, y1i + y, xd, pxcolor, pxcolor, alphaInt);
+    }
+    if (wholeBuffer && opaque) {
+        swr->uniformValid = true;
+        swr->uniformColor = pxcolor;
     }
 }
 
@@ -1250,6 +1939,257 @@ void swrDrawSprite(
         swrConvertPixel(tintColor),
         swrIntAlpha(alpha)
     );
+}
+
+// ===[ Tiled sprites ]===
+// A sprite tiled over the room, unscaled, is drawn in passes over the
+// screen's rows, not as a sprite draw for every copy in view (hundreds for a
+// small tile, most of what each costs being getting started). Every screen
+// row takes its stretch of the tile's row (see SWTexture.rowBounds) once per
+// copy. The pixels come out as those draws leave them: the same texels, from
+// the half-size copy when the room is drawn at half size with speed favoured,
+// put down with the same arithmetic.
+//
+// Measured on the Pocket, a pass of a tile of thin lines cost 6 ms for about
+// 6,000 pixels whatever was done about reading the buffer or about the
+// blend's arithmetic: each pixel is on a cache line of its own, and a store
+// to a line that is not in the cache costs about a microsecond. So a pass
+// drawn straight after a clear of the whole buffer is held with the clear
+// (swrTiledHold), and the two are written together, a row at a time: the
+// row is filled, and the pass's pixels go onto lines that the fill has just
+// brought in.
+#if PIXEL_SIZE == 16 && defined SW_HAS_PREMUL_BLEND && !defined SW_DITHERED_BLENDING
+#define SWR_TILED_OWN_SIDE 64   // the largest tile a held pass keeps a copy of
+#define SWR_TILED_HELD_MAX 2
+
+typedef struct {
+    const uintpixel_t* texels;  // rows of `pitch`, the copy's top left at [0]
+    const uint8_t* coverage;    // the same for a half-size copy's coverage, or NULL
+    const uint16_t* bounds;     // each row's first opaque column and the one after the last, counted from `boundsBase`
+    int pitch, boundsBase;
+    int width, height, stepX, stepY, originX, originY, countX, countY, alpha;
+    int minX, minY, maxX, maxY;
+    // A held pass outlives the draw call, and the texture might not: it keeps its own copy of the tile.
+    uintpixel_t ownTexels[SWR_TILED_OWN_SIDE * SWR_TILED_OWN_SIDE];
+    uint8_t ownCoverage[SWR_TILED_OWN_SIDE * SWR_TILED_OWN_SIDE];
+    uint16_t ownBounds[SWR_TILED_OWN_SIDE * 2];
+} SWTiledPass;
+
+static SWTiledPass swrTiledHeld[SWR_TILED_HELD_MAX];
+static SWTiledPass swrTiledNow; // the pass being drawn or offered for holding
+
+// What one pixel of a copy leaves where `under` was: the tile's texel (with
+// its coverage, for a half-size copy) put down at `alpha`, as the sprite
+// draws do it. Returns `under` where the tile has nothing.
+FORCE_INLINE uintpixel_t swrTiledPixel(uintpixel_t under, uintpixel_t pixel, const uint8_t* covered, int alpha)
+{
+    if (covered != NULL) {
+        uint32_t count = *covered;
+        if (count == 0) return under;
+        int coverageAlpha = count == 4 ? alpha : (alpha * (int) count) >> 2;
+        if (coverageAlpha > 253) return pixel;
+        if (coverageAlpha < 4) return under;
+        return swrBlendPremultiplied(under, swrSpreadRedBlue(pixel) * coverageAlpha, swrGreen(pixel) * coverageAlpha, 256 - coverageAlpha);
+    }
+    if (!swrIsOpaque(pixel)) return under;
+    if (alpha > 253) return pixel;
+    return swrBlendPremultiplied(under, swrSpreadRedBlue(pixel) * (uint32_t) alpha, swrGreen(pixel) * (uint32_t) alpha, (uint32_t) (256 - alpha));
+}
+
+// swrTiledPixel with the last answer kept: a tile of lines is one colour at
+// one or two coverages over one colour.
+typedef struct {
+    bool filled;
+    uintpixel_t under, pixel, result;
+    uint8_t covered;
+} SWTiledMemo;
+
+FORCE_INLINE uintpixel_t swrTiledPixelMemo(SWTiledMemo* memo, uintpixel_t under, uintpixel_t pixel, const uint8_t* covered, int alpha)
+{
+    uint8_t count = covered != NULL ? *covered : 0;
+    if (memo->filled && memo->under == under && memo->pixel == pixel && memo->covered == count) return memo->result;
+    memo->filled = true;
+    memo->under = under; memo->pixel = pixel; memo->covered = count;
+    memo->result = swrTiledPixel(under, pixel, covered, alpha);
+    return memo->result;
+}
+
+// Works out the pass for these arguments (see swrDrawSpriteTiledRows).
+// Returns false when the draws would not be that simple.
+static bool swrTiledPassSetUp(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
+                              int firstX, int firstY, int tileW, int tileH, int countX, int countY,
+                              uint32_t color, float alphaf, SWTiledPass* pass)
+{
+    int alpha = swrIntAlpha(alphaf);
+    if (swr->blendMode != bm_normal || alpha <= 8 || !texture->immutable) return false;
+    if ((swrConvertPixel(color) & 0x7FFF) != 0x7FFF) return false; // tinted
+    if (sw <= 0 || sh <= 0 || tileW <= 0 || tileH <= 0 || countX <= 0 || countY <= 0) return false;
+    if (sx < 0 || sy < 0 || sx + sw > texture->width || sy + sh > texture->height) return false;
+    
+    // What a copy is drawn from, and how far apart the copies land on the screen.
+    const uintpixel_t* buffer;
+    const uint16_t* bounds;
+    const uint8_t* coverage = NULL;
+    int pitch, srcX, srcY, width, height, stepX, stepY;
+    if (swr->scaleX == 1.0f && swr->scaleY == 1.0f) {
+        bounds = swrRowBounds(texture);
+        buffer = texture->buffer;
+        pitch = texture->width;
+        srcX = sx; srcY = sy; width = sw; height = sh;
+        stepX = tileW; stepY = tileH;
+    } else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f && swrFavorSpeed) {
+        // Even sizes only: each copy then starts on a whole pixel, the same part of one as the last.
+        if (((sw | sh | tileW | tileH) & 1) != 0) return false;
+        if (!swrHalfTexture(texture, sx, sy)) return false;
+        if (((sx + texture->halfPhaseX) & 1) != 0 || ((sy + texture->halfPhaseY) & 1) != 0) return false;
+        int halfW = (texture->width + texture->halfPhaseX + 1) / 2, halfH = (texture->height + texture->halfPhaseY + 1) / 2;
+        bounds = texture->halfRowBounds;
+        buffer = texture->halfBuffer;
+        coverage = texture->halfCoverage;
+        pitch = halfW;
+        srcX = (sx + texture->halfPhaseX) / 2; srcY = (sy + texture->halfPhaseY) / 2;
+        width = sw / 2; height = sh / 2;
+        if (srcX + width > halfW) width = halfW - srcX;
+        if (srcY + height > halfH) height = halfH - srcY;
+        stepX = tileW / 2; stepY = tileH / 2;
+    } else {
+        return false;
+    }
+    if (bounds == NULL || width <= 0 || height <= 0 || width > stepX || height > stepY) return false;
+    
+    // Where the first copy lands, as swrDrawSprite places it.
+    float fx = (float) firstX, fy = (float) firstY;
+    swrTransformPosIfNeeded(swr, &fx, &fy);
+    pass->originX = swrFloor(fx); pass->originY = swrFloor(fy);
+    pass->minX = swr->portX; pass->minY = swr->portY;
+    pass->maxX = swr->portX + swr->portW; pass->maxY = swr->portY + swr->portH;
+    if (pass->maxX > swr->maxX) pass->maxX = swr->maxX;
+    if (pass->maxY > swr->maxY) pass->maxY = swr->maxY;
+    
+    pass->texels = &buffer[srcY * pitch + srcX];
+    pass->coverage = coverage != NULL ? &coverage[srcY * pitch + srcX] : NULL;
+    pass->bounds = &bounds[srcY * 2];
+    pass->pitch = pitch;
+    pass->boundsBase = srcX;
+    pass->width = width; pass->height = height;
+    pass->stepX = stepX; pass->stepY = stepY;
+    pass->countX = countX; pass->countY = countY;
+    pass->alpha = alpha;
+    return true;
+}
+
+// Draws what the pass puts on row y of the buffer, whose pixels are at dstline.
+FORCE_INLINE void swrTiledPassRow(const SWTiledPass* pass, int y, uintpixel_t* dstline, SWTiledMemo* memo)
+{
+    int fromOrigin = y - pass->originY;
+    if (y < pass->minY || y >= pass->maxY || fromOrigin < 0) return;
+    int copyY = fromOrigin / pass->stepY, row = fromOrigin - copyY * pass->stepY;
+    if (copyY >= pass->countY || row >= pass->height) return;
+    
+    // The stretch of this row of the tile that has anything in it, in columns of the copy.
+    int from = (int) pass->bounds[row * 2] - pass->boundsBase, to = (int) pass->bounds[row * 2 + 1] - pass->boundsBase;
+    if (from < 0) from = 0;
+    if (to > pass->width) to = pass->width;
+    if (from >= to) return;
+    
+    const uintpixel_t* srcline = &pass->texels[row * pass->pitch];
+    const uint8_t* covline = pass->coverage != NULL ? &pass->coverage[row * pass->pitch] : NULL;
+    // Start at the first copy whose stretch reaches the port: in a wide room most lie to its left.
+    int copyX = 0, left = pass->originX;
+    if (left + to <= pass->minX) {
+        copyX = (pass->minX - to - left) / pass->stepX + 1;
+        left += copyX * pass->stepX;
+    }
+    for (; copyX < pass->countX && left + from < pass->maxX; copyX++, left += pass->stepX)
+    {
+        int x0 = left + from, x1 = left + to;
+        if (x1 <= pass->minX) continue;
+        if (x0 < pass->minX) x0 = pass->minX;
+        if (x1 > pass->maxX) x1 = pass->maxX;
+        for (int x = x0; x < x1; x++) {
+            const uint8_t* covered = covline != NULL ? &covline[x - left] : NULL;
+            if (covered != NULL ? *covered != 0 : swrIsOpaque(srcline[x - left]))
+                dstline[x] = swrTiledPixelMemo(memo, dstline[x], srcline[x - left], covered, pass->alpha);
+        }
+    }
+}
+#endif
+
+// Draws the texture's part (sx, sy, sw, sh) at (firstX, firstY) in the room
+// and again every tileW and tileH, countX by countY times. Returns false,
+// having drawn nothing, when the draws would not be that simple.
+bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
+                            int firstX, int firstY, int tileW, int tileH, int countX, int countY,
+                            uint32_t color, float alphaf)
+{
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
+    (void) swr; (void) texture; (void) sx; (void) sy; (void) sw; (void) sh; (void) firstX; (void) firstY;
+    (void) tileW; (void) tileH; (void) countX; (void) countY; (void) color; (void) alphaf;
+    return false;
+#else
+    if (!swrTiledPassSetUp(swr, texture, sx, sy, sw, sh, firstX, firstY, tileW, tileH, countX, countY, color, alphaf, &swrTiledNow)) return false;
+    SWTiledMemo memo = { 0 };
+    for (int y = swrTiledNow.minY; y < swrTiledNow.maxY; y++)
+        swrTiledPassRow(&swrTiledNow, y, &swr->fb[y * swr->fbPitch], &memo);
+    return true;
+#endif
+}
+
+// The same draw held back, to be written together with the clear of the
+// whole main buffer that is being held (the caller has checked that one is,
+// with nothing over it but earlier passes). Returns false, holding nothing,
+// when the pass cannot be held: the caller then draws it.
+bool swrTiledHold(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
+                  int firstX, int firstY, int tileW, int tileH, int countX, int countY,
+                  uint32_t color, float alphaf)
+{
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
+    (void) swr; (void) texture; (void) sx; (void) sy; (void) sw; (void) sh; (void) firstX; (void) firstY;
+    (void) tileW; (void) tileH; (void) countX; (void) countY; (void) color; (void) alphaf;
+    return false;
+#else
+    if (swr->tiledHeldCount >= SWR_TILED_HELD_MAX || swr->fb != swr->mainFb || swr->fbPitch != swr->mainWidth) return false;
+    SWTiledPass* pass = &swrTiledHeld[swr->tiledHeldCount];
+    if (!swrTiledPassSetUp(swr, texture, sx, sy, sw, sh, firstX, firstY, tileW, tileH, countX, countY, color, alphaf, pass)) return false;
+    if (pass->width > SWR_TILED_OWN_SIDE || pass->height > SWR_TILED_OWN_SIDE) return false;
+    
+    // Its own copy of the tile, rows of `width`, with bounds counted from column 0.
+    for (int row = 0; row < pass->height; row++) {
+        memcpy(&pass->ownTexels[row * pass->width], &pass->texels[row * pass->pitch], (size_t) pass->width * sizeof(uintpixel_t));
+        if (pass->coverage != NULL) memcpy(&pass->ownCoverage[row * pass->width], &pass->coverage[row * pass->pitch], (size_t) pass->width);
+        int from = (int) pass->bounds[row * 2] - pass->boundsBase, to = (int) pass->bounds[row * 2 + 1] - pass->boundsBase;
+        if (from < 0) from = 0;
+        if (to > pass->width) to = pass->width;
+        if (to < from) to = from;
+        pass->ownBounds[row * 2] = (uint16_t) from;
+        pass->ownBounds[row * 2 + 1] = (uint16_t) to;
+    }
+    pass->texels = pass->ownTexels;
+    if (pass->coverage != NULL) pass->coverage = pass->ownCoverage;
+    pass->bounds = pass->ownBounds;
+    pass->pitch = pass->width;
+    pass->boundsBase = 0;
+    swr->tiledHeldCount++;
+    return true;
+#endif
+}
+
+// Writes the held clear's colour over the whole main buffer, and the tiled
+// passes held over it, a row at a time. Leaves no pass held.
+void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
+{
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
+    swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, color);
+#else
+    int count = swr->tiledHeldCount;
+    swr->tiledHeldCount = 0;
+    SWTiledMemo memos[SWR_TILED_HELD_MAX] = { 0 };
+    for (int y = 0; y < swr->mainHeight; y++) {
+        uintpixel_t* dstline = &swr->mainFb[y * swr->mainWidth];
+        swrFillPixels(dstline, (size_t) swr->mainWidth, color);
+        for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, dstline, &memos[p]);
+    }
+#endif
 }
 
 void swrDrawSpriteRotated(

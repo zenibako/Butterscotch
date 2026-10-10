@@ -20,7 +20,7 @@ undertale-pocket/                 not a git repo; holds the pieces below
 │       ├── data.win, music/      the user's own game data (gitignored)
 │       ├── textures.bin, music.bin   generated packs (gitignored)
 │       └── out/                  everything the build writes (gitignored):
-│           └── build/pocket/undertale/   assembled SD card tree
+│           └── build/pocket/butterscotch/   assembled SD card tree
 ├── openfpgaSDK/                  the openfpgaOS SDK, read only; SDK_ROOT points here by default
 ├── Diablo/                       reference port; also the source of the v0.9 SDK + runtime
 └── screenshots/                  captures sent to the user
@@ -46,21 +46,46 @@ make -C src/openfpga compare        # the above + Benchmark entries + v0.9 cores
 `riscv64-elf-gcc` instead of the SDK's Docker image, which cannot be built
 here because Docker's keychain access fails in non-interactive sessions.
 
-The Makefile does not track header or flag changes. After editing a header,
-or changing `-D` flags, remove the affected objects first:
+A change to any header under `src/`, `src/*/` or `platform/` empties the
+object directories a run builds into (the Makefile keeps a checksum of the
+headers in each one's `.headers`), so objects are never left built against an
+old struct layout: that links without complaint and crashes on the device,
+which happened twice before the check existed. Flag changes are still not
+tracked. After changing `-D` flags, remove the affected objects first
+(`<game>` is `undertale` or `deltarune`):
 
 ```bash
-rm -rf src/openfpga/out/.obj/undertale-pc                    # desktop
-rm -rf src/openfpga/out/.obj/undertale src/openfpga/out/.obj/undertale-v09   # device
+rm -rf src/openfpga/out/.obj/<game>-pc                              # desktop
+rm -rf src/openfpga/out/.obj/<game> src/openfpga/out/.obj/<game>-v09   # device
 ```
 
 `make compare` output should end with `Comparison cores added: ...`. A build
 that prints nothing after that line succeeded; filter the noise with
 `| grep -E " error|undefined reference|Comparison|\*\*\*"`.
 
+## Two games, one core
+
+The core is `zenibako.Butterscotch`, platform `butterscotch`, with one
+entry per game on the Pocket. `GAME=deltarune` on any make target builds
+Deltarune's program instead of Undertale's (WAD 17, data in
+`games/deltarune/`, binary `deltarune_pc`); run
+`tools/deltarune-setup.sh <game Resources folder> [chapter]` once first.
+Every device build ends by reassembling the one SD tree from all games
+built so far (`tools/mkcard.sh`), so a full card is `make && make
+GAME=deltarune`. `compare` adds Undertale benchmark entries and v0.9
+cores to that same tree.
+
+Until 2026-10-08 the platform folder was `undertale`. A card set up before
+then has `Assets/undertale/`, `Saves/undertale/` and possibly
+`Cores/zenibako.Deltarune` with `Assets/deltarune/`; the save belongs in
+`Saves/butterscotch/common/` now. Before the first launch of the new
+core, copy the save files under `Saves/undertale/` there, or the game
+starts as if nothing had been saved. Don't copy over a file that is
+already there and newer: that one is progress made since.
+
 ## The cardinal rule: don't rebuild under a copy
 
-`make` and `make compare` delete and recreate `src/openfpga/out/build/pocket/undertale/`. The
+`make` and `make compare` delete and recreate `src/openfpga/out/build/pocket/butterscotch/`. The
 user often copies that tree to the SD card from another machine with rsync,
 which takes a minute or more. Rebuilding mid-copy hands them a mixed tree.
 
@@ -85,14 +110,19 @@ Three routes, in order of preference:
    a Terminal on that Mac:
 
    ```bash
-   rsync -rc --exclude '._*' --exclude '.DS_Store' <user>@<build-mac>:<path to>/butterscotch-pocket/src/openfpga/out/build/pocket/undertale/ /Volumes/Pocket/
-   dot_clean -m /Volumes/Pocket/Assets/undertale /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
-   diskutil eject /Volumes/Pocket
+   rsync -rc --exclude '._*' --exclude '.DS_Store' <user>@<build-mac>:<path to>/butterscotch-pocket/src/openfpga/out/build/pocket/butterscotch/ /Volumes/Pocket/
+   dot_clean -m /Volumes/Pocket/Assets/butterscotch /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
+   diskutil unmount /Volumes/Pocket
    ```
-3. **Manual:** `cp -R src/openfpga/out/build/pocket/undertale/{Cores,Assets,Platforms} /Volumes/Pocket/`
+3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} /Volumes/Pocket/`
 
 Plain `copy` after a `compare-copy` leaves stale v0.9 cores on the card; use
 `compare-copy` again if those cores should stay current.
+
+Unmount, never eject (`diskutil unmount`, as `sdcopy.sh` does): after an
+eject this Mac does not see the card again until it is reseated, and
+sometimes not then, and the user asked on 2026-10-09 for unmount to be
+used so the card is found next time.
 
 A card reader on an idle, headless Mac can fail to notice a card inserted
 while the machine is idle. `sdcopy.sh` declares user activity to
@@ -100,15 +130,16 @@ wake it; if no disk appears at all, the card needs reseating.
 
 ## What is on the card
 
-| File (Assets/undertale/common) | Slot | Source |
+| File (Assets/butterscotch/common) | Slot | Source |
 |---|---|---|
 | `os.bin`, `undertale_os.ini`, `undertale.elf` | 1, 2, 3 | SDK runtime, dist, build |
 | `data.win` | 4 | the user's copy (`game.ios` on macOS, renamed) |
+| `deltarune.elf`, `deltarune_os.ini`, `deltarune.win`, `dr_textures.bin`, `dr_music.bin` | 3, 2, 4, 5, 6 | the same for the Deltarune entry |
 | `textures.bin` | 5 | `tools/mktexpack` from data.win |
 | `music.bin` | 6 | `tools/mkmusic` from data.win + `music/*.ogg` |
 | `undertale_0.sav` | 10 | written by the game (save archive) |
 
-`undertale_0.sav` lives under `Saves/undertale/common/` on the card and is
+`undertale_0.sav` lives under `Saves/butterscotch/common/` on the card and is
 never part of the build tree. `make import-save SAVE_DIR=<desktop save
 folder>` builds one from a desktop save (`tools/mksave`); copying it to the
 card replaces the Pocket's own progress, so only do that when asked.

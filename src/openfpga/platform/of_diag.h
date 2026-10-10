@@ -13,8 +13,10 @@ void utDiagHalt(const char *why);
 #include <stdio.h>
 #include <stdlib.h>
 bool utPlatformShowLogAndHalt(void);
+bool utLogDump(void);
 static inline void utDiagHalt(const char *why) {
     printf("[undertale] %s\n", why);
+    utLogDump(); /* as on the device, so the file can be looked at here */
     utPlatformShowLogAndHalt();
     exit(0);
 }

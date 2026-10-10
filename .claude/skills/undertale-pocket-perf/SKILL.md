@@ -5,6 +5,37 @@ description: Measure and diagnose performance of the Undertale port on the Analo
 
 # Performance work on the Pocket
 
+## Reading the log off the card
+
+Prefer the log file to screenshots: it is the whole log, not the last 21
+lines. It is written to the game's spare save slot when the core halts
+(benchmark end, fatal error) and on Select + Y in debug mode, and reaches
+the card when the user leaves the core through the Analogue menu:
+
+```bash
+tr -d '\0' < /Volumes/Pocket/Saves/butterscotch/common/deltarune_1.sav   # or undertale_1.sav
+```
+
+Check the first line (`Butterscotch log, <game>`) and the timestamps: the
+file stays on the card until the next dump overwrites it, so an old one can
+be mistaken for a new run. A benchmark's report ends with ms-per-frame and
+calls-per-frame tables by section; start there before theorising about
+where a section's time goes.
+
+## Speed and accuracy
+
+L switches between two settings, and the core starts in **speed** (the
+desktop build starts in accuracy, because frame comparisons are made against
+what the game asks for; `UT_SMOOTH=1` gives it speed). The user's rule,
+2026-10-09: accuracy is the target. A shortcut that changes the picture or
+drops frames belongs under speed only, and whenever an optimisation brings
+accuracy up to speed's frame rate in some domain, remove speed's shortcut
+there so the two settings stop differing in it. Before adding a new
+speed-only shortcut, look for an exact optimisation first; after an exact
+one lands, check which speed shortcuts it has made unnecessary. `--bench`
+measures accuracy and `--bench-smooth` speed, so the pair shows where the
+two have reached parity.
+
 ## Measure first; this project has paid for guessing
 
 During the port, three confident explanations for a slow load were each
@@ -79,6 +110,67 @@ Texture page loads take about 1.3 s for a 1024x2048 page: a cold read of
 the run-length-encoded page plus the decode. That is the "brief freeze"
 when a dialogue box or new room first appears.
 
+### Reads and multiplies both cost; the compiler does not help (2026-10-09)
+
+*Measured:* a full-screen translucent fill at 320x240 takes 15 to 19 ms even
+when it only reads each pixel and compares it with the last (no arithmetic,
+no write): about 245 ns a pixel just to read the framebuffer. A fill that
+only writes is about 2 ms. Copying a cached tile picture to the screen costs
+about 110 ns a pixel. `-O3` and LTO changed nothing (within 2%).
+
+*Measured, and it overturned two conclusions in a row:* a tiled pass that
+put down about 6,000 scattered pixels (one per row per copy of a tile of
+thin lines) took 6 ms. Taking the buffer reads out of it (the colour under
+each pixel known) left it at 6.4 ms. Taking the blend's arithmetic out of it
+as well (the last answer kept) left it at 5.9 ms. Two divisions a pixel, by
+contrast, made it 15 ms, so divisions are dear. *Inferred, not yet confirmed
+on the device:* what is left is the store itself: each pixel is on a cache
+line of its own, and a store to a line not in the cache costs about a
+microsecond, where a fill of consecutive pixels costs about 27 ns each. The
+change made on that inference writes such a pass together with the clear
+under it, row by row, so that its pixels land on lines the fill has just
+brought in (`swrTiledHold`).
+
+*Measured:* with the drawing left out altogether (`--draw-every 100000`,
+the "no drawing" benchmark entry) a Deltarune battle frame still takes 46 to
+50 ms: draw-event scripts about 24 to 30, step 7 to 21, sound 6 to 12. So
+battles cannot reach full speed by drawing less or skipping frames; the
+field (24 ms undrawn) can. Making the code smaller does not help: `-Os` (768 KB of
+code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower.
+That does not settle whether fetching code from SDRAM is what holds the
+scripts back: `-Os` also inlines less, and neither build moved the hot code
+out of SDRAM. The direct test was the interpreter's loop (8.9 KB) in the
+app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`).
+*Measured:* 2 to 4% of an undrawn frame in every section (battle rows 46.7,
+47.2, 47.5 became 45.3, 46.2, 46.4). Kept as the default, but it shows the
+loop itself is not where a script operation's time goes; the desktop
+profile, which put more than half in the loop, does not carry over.
+A pool for script call frames in place of calloc and free
+gained 0.2 to 0.3 ms, within noise, and was dropped. With the script
+profiler on and nothing drawn, scripts are 35 to 39 ms of a battle frame;
+plain scripts run at about 1.9 microseconds an instruction and `scr_charbox`
+at 4.8, about 10 ms a frame, so its time is not all interpretation. The
+profiler now times built-in functions under their own names, with calls per
+frame, to say what the rest is.
+*Measured the same day:* the collision-threshold fix took 3.4 ms off the
+dodging section's step time; the other three double-precision fixes showed
+nothing.
+
+*Found by reading the device build's disassembly, effect not yet measured:*
+places that fall into software double precision on this single-precision
+FPU. `riscv64-elf-objdump -dlr` on an object built with `-g`, looking for
+calls to `__*df*` and `__*di*` helpers, names the source lines. The ones on
+a per-frame path were the collision thresholds (three compares for every
+pixel a precise test looks at), the image_index sum for instances that are
+not animating, double constants pushed by scripts, and `div`.
+
+So, before optimising a draw, find out which it is. The benchmark report's
+"costliest draws" list (`sw_call_notes.h`) names the calls and times parts
+of them; three guesses at the tiled background were wrong before that list
+existed, and one after. What has worked: not drawing at all (held layers
+dropped under an opaque full-screen fill), fewer passes over the screen, and
+no division per pixel where a running value will do.
+
 ## Findings from play sessions (2026-10-07)
 
 - **Stacked fade overlays.** Undertale's door script creates a full-screen
@@ -141,6 +233,44 @@ whatever was running (a 3 s "music read" or "texture load" right after a
 screenshot is the screenshot), and the log overlay only shows the first 53 characters of a
 line, so anything longer is invisible on the device.
 
+**Script times** (Select + X in debug mode; `UT_PROFILE=n` on desktop).
+The slow-frame line says "step 300"; this says which scripts the step
+went to. It is Butterscotch's GML profiler (`--profile-gml-scripts`),
+reported every 60 frames in a form that fits the log overlay:
+
+```
+scripts 6.4 ms 5210 ops /frame (41, 60 fr)
+  2.1  1830   1.0 obj_mainchara_Step_0
+  1.2  7218   3.0 obj_base_writer_Draw_0
+  ...
+```
+
+First line: all game code together per frame, how many scripts ran, the
+window. Then the heaviest twenty: ms per frame, VM instructions per frame,
+calls per frame, name (without `gml_Object_`/`gml_Script_`). Reading it:
+- Built-in functions are entries of their own since 2026-10-09 (0 ops),
+  so a time is an entry's own: neither the scripts nor the built-ins it
+  calls. A drawing built-in's time is the renderer's.
+- ms divided by ops is a script's cost per instruction, now without its
+  built-ins; look for those by name further down the list.
+- Desktop times are near zero and mean nothing; the ops column is the
+  same on both, so the desktop can rank scripts by instructions for a
+  scene before asking for a device run.
+- Timing every script call costs time itself. Take frame-time numbers
+  with it off. The cost of having it compiled in but off (a test per
+  instruction) has not been measured on the device.
+- The report is up to 21 log lines every two seconds, more than the
+  overlay shows: read it from the log file, not a screenshot.
+When asking the user for it: debug mode on, go to the scene, Select + X
+(the log comes up with it), wait a few seconds, screenshot.
+
+**Opcode ranking** (desktop only: `make ops`, then run `undertale_pc_ops`
+with `UT_EXIT_FRAME=n`, usually with `UT_PLAYBACK` or `UT_SCRIPT`). Prints
+how often each bytecode instruction ran, split by operand types, when it
+leaves the main loop. Counts are the same as on the device. Use it before
+hand-tuning the interpreter, to see which instruction and type
+combinations a scene is made of; it does not say what each costs.
+
 **Benchmark** (`--bench` in the OS config's `ARGS=`; `make compare` adds a
 "Benchmark" entry to each core). It plays a fixed input script with a
 fixed seed, no frame pacing and saves disabled, then draws a report:
@@ -167,11 +297,25 @@ Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
-**Overlays during normal play:** Select shows three numbers (average
-work, worst work, worst frame period over 30 frames, in ms). R shows the
-last log lines over the game. L toggles crisp/smoothed 640x480 rooms. The
-log overlay itself costs a lot of frame time, so read the numbers with it
-off.
+**Overlays** (only in debug mode: hold Select for two seconds; ask the
+user to switch it on first): Select shows four numbers over 30 frames
+(average work, worst work and worst frame period in ms, then frames
+skipped). R shows the last log lines over the game. The log overlay itself
+costs a lot of frame time, so read the numbers with it off.
+
+**L, speed or accuracy.** Always ask which the user was in; numbers from
+the two are not comparable. Speed does three things: 640x480 rooms at
+320x240 smoothed, faint mirrored blend layers left out
+(`swrMirrorFaintAlpha` 8, against 0 in accuracy), and frame skipping. With
+skipping on, "average work" falls because skipped frames are cheap, and
+the worst period can go under 33 (a frame shortened to pay back time), so
+judge a scene in speed mode by the skipped count: 0 means it holds full
+speed drawn, 15 means every other frame is being dropped. To measure what
+a scene costs to draw, use accuracy mode or the benchmark, which never
+skips. A new fidelity-for-speed trade-off belongs under this toggle (see
+the comment above `decideFrameSkip` in `platform/of_platform.c`), not
+behind a new button; one that cannot be switched at run time (colour
+depth, mono audio, float reals) is a known difference for the README.
 
 **Log lines worth knowing:** every line carries seconds since start.
 `DataWin: NAME, n KB` marks each chunk as loading starts on it.
@@ -186,13 +330,16 @@ marks a mode switch. `Audio: playing NAME` marks a streamed track.
    undertale-pocket-verify skill) and read the log for texture loads,
    room changes and mode switches around the moment they describe. A
    freeze that lines up with `Loaded TXTR page` is a page load.
-2. Profile the desktop build with `sample <pid> 5` while the scene runs.
+2. If the slow part is `step`, get script times for the scene: on desktop
+   for the ranking by instructions (`UT_PROFILE=60`), and from the user
+   (Select + X) for real milliseconds.
+3. Profile the desktop build with `sample <pid> 5` while the scene runs.
    The game's own functions are a small share of samples next to the SDL
    display code, so read relative weights among `swr*` and VM functions
    only.
-3. If the cause is still unclear, add a measurement to the benchmark or
+4. If the cause is still unclear, add a measurement to the benchmark or
    the log rather than a fix.
-4. When you do change something, verify output is unchanged on desktop,
+5. When you do change something, verify output is unchanged on desktop,
    then ask for one benchmark run and name the lines you need.
 
 ## Asking the user for a run

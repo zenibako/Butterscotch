@@ -8,6 +8,22 @@
  * copy to the display, and utPerfAddSleep with time spent pacing. */
 void utPerfToggle(void);
 void utPerfToggleLog(void);
+void utPerfHideOverlays(void);
+void utPerfShowLog(void);
+
+/* Logs where game-script time went over the last `frames` frames, short
+ * enough for the log overlay:
+ *
+ *   scripts 6.4 ms 5210 ops /frame (41, 60 fr)
+ *     2.1  1830   1.0 obj_mainchara_Step_0
+ *     ...
+ *
+ * First line: everything together, how many entries ran, and the window.
+ * Then the heaviest twenty: ms per frame, VM instructions per frame, calls
+ * per frame, name. Built-in functions are entries of their own, with no
+ * instructions. Times are an entry's own, without what it calls. */
+struct Profiler;
+void utPerfScriptReport(const struct Profiler *profiler, int frames);
 
 /* Recent log lines for the overlay; age 0 is the newest complete line. */
 #define UT_LOG_LINES 21
@@ -15,6 +31,8 @@ void utPerfToggleLog(void);
 const char *utLogLine(int age);
 /* Whether log lines also go to stdout (the OS console). */
 void utLogSetConsole(bool enabled);
+/* Writes everything logged so far to the game's spare save slot; see of_log.c. */
+bool utLogDump(void);
 /* printf to the console and the overlay buffer, without a timestamp. */
 void utLogPrint(const char *format, ...) __attribute__((format(printf, 1, 2)));
 /* "slowest chunks: ..." once data.win has loaded, empty before that. */
@@ -50,12 +68,21 @@ typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOA
 typedef enum { UT_PHASE_OTHER, UT_PHASE_STEP, UT_PHASE_AUDIO, UT_PHASE_DRAW, UT_PHASE_OUT, UT_PHASES } UtPhase;
 #define UT_PERF_SLOW_FRAME_MS 150
 void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);
+/* The same split, added up over every frame since the last call (or since
+ * start), for the benchmark's per-section table. Taking it starts a new sum. */
+typedef struct {
+    uint64_t phaseNanos[UT_PHASES];
+    uint64_t drawNanos[UT_DRAW_KINDS];
+    uint64_t drawCalls[UT_DRAW_KINDS];
+    uint64_t loadNanos[UT_LOAD_KINDS];
+} UtPerfTotals;
+void utPerfTakeTotals(UtPerfTotals *out);
 /* Marks the start of a phase; time since the previous mark goes to the
  * phase that was running. */
 void utPerfPhase(UtPhase phase);
 void utPerfFrame(uint16_t *fb, int width, int height);
-/* Marks, in the top right corner, the width a 640x480 room is being drawn
- * at: 640 (native) or 320 (smoothed). Built in with MODE_MARK=1. */
-void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth);
+/* Writes a word in the top right corner: which way L's speed/accuracy
+ * toggle is set. */
+void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label);
 
 #endif /* UT_OF_PERF_H */

@@ -189,6 +189,13 @@ typedef struct {
     // Optional: draw a run of tiles that nothing else is drawn between, in order. offsets holds each tile's layer shift as an x, y pair.
     // A renderer can keep the composed picture and reuse it while the run is unchanged. Returning false means "not drawn": the caller draws the tiles one by one.
     bool (*drawTileRun)(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count);
+    // Optional: draw a grid of one sprite's images, column by column and each column top to bottom: cell (i, j) at
+    // x + stepX * i, y + stepY * j with image subimgs[i * rows + j], exactly as that many draw_sprite calls would.
+    // A renderer can hold the grid back and never draw it if the whole screen is painted over next. Returning false means "not drawn".
+    bool (*drawSpriteGrid)(Renderer* renderer, int32_t spriteIndex, const int32_t* subimgs, int32_t cols, int32_t rows, float x, float y, float stepX, float stepY);
+    // Optional: draw a GMS2 tile layer, tilesX * tilesY tilemap cells (tile index plus mirror/flip/rotate bits) of one tileset, shifted by the layer's offset.
+    // A renderer can leave out the cells that are not in view and copy plain ones directly. Returning false means "not drawn": the caller draws the cells one by one.
+    bool (*drawTileLayer)(Renderer* renderer, Background* tileset, const uint32_t* cells, uint32_t tilesX, uint32_t tilesY, float offsetX, float offsetY);
     void (*drawSpriteTiled)(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha);
     // Surface Functions
     int32_t (*createSurface)(Renderer* renderer, int32_t width, int32_t height);

@@ -1141,10 +1141,32 @@ static RValue convertValue(RValue val, uint8_t targetType, DataWin* dataWin) {
 
 // ===[ Opcode Handlers ]===
 
+// A double constant from the bytecode, as a real. With float reals that is a
+// double-to-float conversion, which a CPU with a single-precision FPU does
+// in software on every push of a constant like 0.5; the constants of a
+// script are few, so the last conversions are kept, looked up by the
+// constant's bits.
+static inline GMLReal readDoubleConstant(const uint8_t* extraData) {
+#ifdef USE_FLOAT_REALS
+    static struct { uint32_t low, high; float value; bool filled; } kept[64];
+    uint32_t words[2];
+    memcpy(words, ASSUME_ALIGNED(extraData, 4), 8);
+    uint32_t slot = (words[0] ^ words[1] ^ (words[1] >> 20)) & 63u;
+    if (kept[slot].filled && kept[slot].low == words[0] && kept[slot].high == words[1]) return kept[slot].value;
+    float value = (float) BinaryUtils_readFloat64Aligned(extraData);
+    kept[slot].low = words[0]; kept[slot].high = words[1];
+    kept[slot].value = value;
+    kept[slot].filled = true;
+    return value;
+#else
+    return (GMLReal) BinaryUtils_readFloat64Aligned(extraData);
+#endif
+}
+
 static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData, uint8_t type1) {
     switch (type1) {
         case GML_TYPE_DOUBLE:
-            stackPushTyped(ctx, RValue_makeReal(BinaryUtils_readFloat64Aligned(extraData)), GML_TYPE_DOUBLE);
+            stackPushTyped(ctx, RValue_makeReal(readDoubleConstant(extraData)), GML_TYPE_DOUBLE);
             break;
         case GML_TYPE_FLOAT:
             // Native push.f reads a 4-byte float; the bytecode-declared footprint is FLOAT (4 bytes), not DOUBLE (8).
@@ -1609,9 +1631,28 @@ static void handleDiv(VMContext* ctx, uint32_t instr) {
     stackPushTyped(ctx, RValue_makeReal(result), instrType2(instr));
 }
 
+// The value as a 32-bit integer, if it is a number whose integer part fits in
+// one: what RValue_toInt64 would give, without a 64-bit conversion.
+static inline bool rvalueFitsInt32(RValue val, int32_t* out) {
+    if (val.type == RVALUE_INT32 || val.type == RVALUE_BOOL) { *out = val.int32; return true; }
+    if (val.type == RVALUE_REAL && val.real > (GMLReal) -2147483648.0 && (GMLReal) 2147483648.0 > val.real) {
+        *out = (int32_t) val.real;
+        return true;
+    }
+    return false;
+}
+
 static void handleRem(VMContext* ctx, uint32_t instr) {
     RValue b = stackPop(ctx);
     RValue a = stackPop(ctx);
+    // `div` of two ordinary numbers, nearly every one there is: the quotient in 32 bits. The 64-bit
+    // route below is four software calls on a 32-bit CPU with a single-precision FPU.
+    int32_t small, smallDivisor;
+    if (rvalueFitsInt32(a, &small) && rvalueFitsInt32(b, &smallDivisor) && smallDivisor != 0 &&
+        !(small == INT32_MIN && smallDivisor == -1)) {
+        stackPushTyped(ctx, RValue_makeInt64((int64_t) (small / smallDivisor)), instrType2(instr));
+        return;
+    }
     int64_t divisor = RValue_toInt64(b);
     requireMessageFormatted(__FILE__, __LINE__, divisor != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
     int64_t result = RValue_toInt64(a) / divisor;
@@ -1692,7 +1733,7 @@ static void handleConv(VMContext* ctx, uint8_t srcType, uint8_t dstType, uint8_t
         // Double (0) -> other
         case 0x20: result = RValue_makeInt32((int32_t) val.real); break;
         case 0x30: result = RValue_makeInt64((int64_t) val.real); break;
-        case 0x40: result = RValue_makeBool(val.real > 0.5); break;
+        case 0x40: result = RValue_makeBool(val.real > (GMLReal) 0.5); break;
         case 0x50: result = val; break; // Double -> Variable (passthrough)
         case 0x60: { char* s = RValue_toString(val, ctx->runner->dataWin); result = RValue_makeOwnedString(s); break; }
         case 0xF0: result = RValue_makeInt32((int32_t) val.real); break;
@@ -1701,7 +1742,7 @@ static void handleConv(VMContext* ctx, uint8_t srcType, uint8_t dstType, uint8_t
         case 0x01: result = RValue_makeReal(val.real); break;
         case 0x21: result = RValue_makeInt32((int32_t) val.real); break;
         case 0x31: result = RValue_makeInt64((int64_t) val.real); break;
-        case 0x41: result = RValue_makeBool(val.real > 0.5); break;
+        case 0x41: result = RValue_makeBool(val.real > (GMLReal) 0.5); break;
         case 0x51: result = val; break; // Float -> Variable (passthrough)
 
         // Int32 (2) -> other
@@ -2047,7 +2088,15 @@ static void handleCall(VMContext* ctx, uint32_t instr, const uint8_t* extraData)
     // Fast path: cached builtin function pointer
     if (cache->builtin != nullptr) {
         BuiltinFunc builtin = (BuiltinFunc) cache->builtin;
+#ifdef ENABLE_VM_GML_PROFILER
+        // With the script profiler on, a built-in function's time goes under its own name, out of the calling
+        // script's: which of a script's time is its bytecode and which is what it calls is then readable.
+        if (ctx->profiler != nullptr) Profiler_enter(ctx->profiler, ctx->dataWin->func.functions[funcIndex].name);
+#endif
         RValue result = builtin(ctx, args, argCount);
+#ifdef ENABLE_VM_GML_PROFILER
+        if (ctx->profiler != nullptr) Profiler_exit(ctx->profiler);
+#endif
         // Free arguments
         if (args != nullptr) {
             repeat(argCount, i) {
@@ -2852,6 +2901,14 @@ static void unwindVMStack(VMContext* ctx, int32_t newStackTop) {
     ctx->stack.top = newStackTop;
 }
 
+// UT_FAST_LOOP (openfpgaOS only): the interpreter's loop goes into the app's
+// 14 KB of zero-wait, uncached block RAM (of_fastram.h), not into SDRAM
+// behind the instruction cache. Measured on the Pocket at 2 to 4% of a frame
+// with the drawing left out, in every section; the loop is 8.9 KB.
+#if defined(UT_FAST_LOOP) && !defined(OF_PC)
+#include "of_fastram.h"
+OF_FASTTEXT
+#endif
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
     // reload the values at the end of every iteration.
@@ -3784,9 +3841,52 @@ static uint32_t computeLocalsCount(VMContext* ctx, CodeEntry* code) {
     }
 }
 
+static int32_t findCodeIndexByName(VMContext* ctx, const char* codeName) {
+    repeat(ctx->dataWin->code.count, i) {
+        const char* name = ctx->dataWin->code.entries[i].name;
+        if (name != nullptr && strcmp(name, codeName) == 0) return (int32_t) i;
+    }
+    return -1;
+}
+
+uint64_t VM_codeHash(VMContext* ctx, const char* codeName, uint32_t* length) {
+    int32_t codeIndex = findCodeIndexByName(ctx, codeName);
+    if (0 > codeIndex) return 0;
+    CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+    const uint8_t* base = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase);
+    uint64_t hash = 14695981039346656037ull;
+    // The same bytes VM_executeCode runs: [offset, length) of the entry's bytecode.
+    for (uint32_t i = code->offset; code->length > i; i++) hash = (hash ^ base[i]) * 1099511628211ull;
+    if (length != nullptr) *length = code->length;
+    return hash;
+}
+
+bool VM_setNativeCode(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeCode native) {
+    uint32_t actualLength = 0;
+    uint64_t actualHash = VM_codeHash(ctx, codeName, &actualLength);
+    if (actualHash == 0 || actualLength != length || actualHash != hash) return false;
+    if (ctx->nativeCode == nullptr) ctx->nativeCode = (VMNativeCode*) safeCalloc(ctx->dataWin->code.count, sizeof(VMNativeCode));
+    ctx->nativeCode[findCodeIndexByName(ctx, codeName)] = native;
+    return true;
+}
+
 RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+
+    if (ctx->nativeCode != nullptr && ctx->nativeCode[codeIndex] != nullptr) {
+        const char* savedCodeName = ctx->currentCodeName;
+        ctx->currentCodeName = code->name;
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_enter(ctx->profiler, code->name);
+#endif
+        bool done = ctx->nativeCode[codeIndex](ctx);
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_exit(ctx->profiler);
+#endif
+        ctx->currentCodeName = savedCodeName;
+        if (done) return RValue_makeUndefined();
+    }
 
     ctx->bytecodeBase = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase);
     ctx->ip = code->offset;
@@ -4530,6 +4630,9 @@ void VM_free(VMContext* ctx) {
 
     // Reset mutable runtime state
     VM_reset(ctx);
+
+    free(ctx->nativeCode);
+    ctx->nativeCode = nullptr;
 
     // Free profiler (no-op if never enabled)
     Profiler_destroy(ctx->profiler);

@@ -5,5 +5,6 @@
 
 /* Renames keyboard keys in the game's on-screen prompts to Pocket buttons. */
 void utPatchStrings(DataWin *dw);
+void utPatchInstructions(DataWin *dw);
 
 #endif /* UT_STRINGS_H */

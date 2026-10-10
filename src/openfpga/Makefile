@@ -7,7 +7,7 @@
 # the SDK's RGB555 framebuffer. You supply your own Undertale data.win.
 #
 # Everything the build writes goes under out/ here; the SDK checkout is only
-# read. The SD card tree ends up in out/build/pocket/undertale/.
+# read. The SD card tree ends up in out/build/pocket/butterscotch/.
 #
 # Targets:
 #   make              Build the custom core
@@ -18,7 +18,28 @@
 #   make clean        Remove build artifacts
 #
 
-APP       = undertale
+# GAME picks which game's program is built. The core is one, with an entry
+# per game on the Pocket; each game has its own program, folder of game
+# data and save file:
+#   undertale (default)  data beside this Makefile                           WAD 16
+#   deltarune            games/deltarune/ (see tools/deltarune-setup.sh)     WAD 17
+# The SD tree is assembled from every game built so far (tools/mkcard.sh),
+# so `make && make GAME=deltarune` gives a card with both.
+GAME     ?= undertale
+ifeq ($(GAME),undertale)
+G         =
+WADS     ?= 16
+else ifeq ($(GAME),deltarune)
+G         = games/deltarune/
+WADS     ?= 17
+# Sounds of audio group 1 live in their own file, and the game reads its
+# text from lang_en.json; both go into the audio pack.
+MUSIC_EXTRAS = group:1:$(G)audiogroup1.dat file:$(G)lang_en.json
+GAME_DEFS = -DUT_GAME_DELTARUNE
+else
+$(error GAME=$(GAME) is not known; use undertale or deltarune)
+endif
+APP       = $(GAME)
 # Platform target: pocket (APF SD tree under build/pocket/<app>/) or
 # mister (disk-image bundle under build/mister/<app>/). Overridable per
 # invocation: `make TARGET=mister`, or from the SDK root Makefile.
@@ -36,7 +57,8 @@ ROOT      = $(CURDIR)/out
 OBJ_DIR   = $(ROOT)/.obj/$(APP)
 BUILD_DIR = $(OBJ_DIR)
 DIST      = $(CURDIR)/dist
-OUT       = $(ROOT)/build/$(TARGET)/$(APP)
+CARD      = butterscotch
+OUT       = $(ROOT)/build/$(TARGET)/$(CARD)
 RUNTIME   = $(SDK_ROOT)/runtime
 
 # ── Butterscotch sources ─────────────────────────────────────────────
@@ -61,7 +83,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/ut_bench.c \
-       platform/ut_strings.c platform/ut_save_fs.c \
+       platform/ut_strings.c platform/ut_save_fs.c platform/ut_native.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
        $(BS_VIDEO_SRCS) $(BS_STB_SRCS) $(BS_VENDOR_SRCS) $(BS_PHYSICS_SRCS)
 SRCS_CXX =
@@ -76,9 +98,8 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-WADS ?= 16
-BS_DEFS = $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
-          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK \
+BS_DEFS = $(GAME_DEFS) -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DUT_LOG_SLOT_FILE='"$(APP)_1.sav"' -DUT_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
 
@@ -90,13 +111,6 @@ TEXTURE_RESERVE_MB ?= 4
 BS_DEFS += -DTEXTURE_CACHE_BYTES='($(TEXTURE_CACHE_MB)u*1024u*1024u)' \
            -DTEXTURE_CACHE_RESERVE_BYTES='($(TEXTURE_RESERVE_MB)u*1024u*1024u)'
 
-# MODE_MARK=1 (the default for now) shows 640 or 320 in the top right corner
-# of battle and menu rooms: the width they are being drawn at (L toggles it).
-MODE_MARK ?= 1
-ifeq ($(MODE_MARK),1)
-BS_DEFS += -DUT_MODE_MARK
-endif
-
 ifeq ($(TRACE),1)
 BS_DEFS += -DUT_TRACE_FRAMES
 endif
@@ -104,7 +118,18 @@ endif
 BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
           -Wno-sign-compare -Wno-missing-field-initializers
 
-CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN)
+# UT_OPT: extra optimisation flags for the device build, after the SDK's -O2
+# (the last -O wins), named in a benchmark report's title. Build with some
+# into an OBJ_DIR of their own and hand mkcompare.sh "<name>:<app.elf>" to
+# get a benchmark entry for it. Tried on the Pocket, 2026-10-09: -O3 and
+# -O3 -flto change nothing; -Os is 16 to 22% slower; taking off the SDK's
+# 64-byte alignment of functions and loops is 2 to 4% slower.
+# Experiments ride the same way as defines. Tried so and dropped: a pool for
+# script call frames in place of calloc and free (0.2 to 0.3 ms of a 46 ms
+# undrawn battle frame, within run-to-run variation).
+UT_OPT ?=
+CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
+LDFLAGS += $(UT_OPT)
 
 # Data files bundled into the per-target deliverable (override per core).
 # data.win is your own copy of the game data (gitignored); when present it is
@@ -113,8 +138,16 @@ CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN)
 #
 # music/ is a directory (or symlink) holding the game's .ogg files; when
 # present they are converted into music.bin.
-GAME_PACKS = $(if $(wildcard data.win),textures.bin) $(if $(wildcard music/*.ogg),music.bin)
-MISTER_ASSETS ?= $(wildcard data.win) $(GAME_PACKS)
+GAME_PACKS = $(if $(wildcard $(G)data.win),$(G)textures.bin) $(if $(wildcard $(G)music/*.ogg),$(G)music.bin)
+MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
+
+# Neither sdk.mk's rules nor the desktop ones track headers, and objects built
+# against an old struct layout link without complaint and then crash (the
+# device build did, twice). So a change to any header empties the object
+# directories this run builds into. (Before sdk.mk, which looks at what is
+# in them; PC_OBJ_DIR is only set this early when a sub-make passes it.)
+HEADER_SUM := $(shell cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null | cksum | cut -d' ' -f1)
+$(foreach d,$(OBJ_DIR) $(or $(PC_OBJ_DIR),$(ROOT)/.obj/$(APP)-pc),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
 
 # Declare default target before sdk.mk's rules
 .DEFAULT_GOAL := all
@@ -131,8 +164,8 @@ $(MKTEXPACK): $(MKTEXPACK_SRCS)
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -DUT_HOST_TOOL $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(MKTEXPACK_SRCS) -lm -o $@
 
-textures.bin: data.win $(MKTEXPACK)
-	$(MKTEXPACK) data.win $@
+$(G)textures.bin: $(G)data.win $(MKTEXPACK)
+	$(MKTEXPACK) $(G)data.win $@
 
 # Host tool: converts the game's .ogg music and the sounds embedded in
 # data.win to mono ADPCM so the device does not have to decode Vorbis.
@@ -143,17 +176,21 @@ $(MKMUSIC): tools/mkmusic.c platform/ut_music_pack.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -w tools/mkmusic.c $(BS_VENDOR)/stb/vorbis/stb_vorbis.c -lm -o $@
 
-music.bin: $(MKMUSIC) data.win $(wildcard music/*.ogg)
-	$(MKMUSIC) data.win music $@ $(MUSIC_RATE)
+# The extra inputs are "group:<n>:<file>" and "file:<file>"; a change in one
+# of those files rebuilds the pack too.
+MUSIC_EXTRA_FILES = $(wildcard $(foreach e,$(MUSIC_EXTRAS),$(lastword $(subst :, ,$(e)))))
+
+$(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg) $(MUSIC_EXTRA_FILES)
+	$(MKMUSIC) $(G)data.win $(G)music $@ $(MUSIC_RATE) $(MUSIC_EXTRAS)
 
 # Host tool: packs a desktop save folder into the save slot file and back.
 #   make import-save SAVE_DIR=<desktop save folder>   -> undertale_0.sav
 #   make export-save EXPORT_DIR=<folder to write>     <- undertale_0.sav
-# The slot file belongs at Saves/undertale/common/ on the SD card. It is not
+# The slot file belongs at Saves/butterscotch/common/ on the SD card. It is not
 # part of the SD tree, so copying a build never replaces progress on the card.
 MKSAVE = $(ROOT)/.obj/$(APP)-tools/mksave
 SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
-SAVE_FILE ?= undertale_0.sav
+SAVE_FILE ?= $(APP)_0.sav
 
 $(MKSAVE): tools/mksave.c platform/ut_save_format.h
 	@mkdir -p $(dir $@)
@@ -178,8 +215,13 @@ $(ROOT)/runtime:
 	@mkdir -p $(ROOT)
 	ln -sfn $(SDK_ROOT)/runtime $@
 
+ifeq ($(TARGET),pocket)
+release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
+	@tools/mkcard.sh "$(SDK_DIR)/platforms/pocket/image.sh" "$(ROOT)" "$(DIST)" "$(CURDIR)"
+else
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
 	@$(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(OBJ_DIR)/app.elf" "$(ROOT)" "$(DIST)" $(MISTER_ASSETS)
+endif
 
 debug: all
 	@$(SDK_ROOT)/scripts/debug.sh $$(ls -d $(OUT)/Assets/*/common 2>/dev/null)/$(APP).elf
@@ -236,12 +278,12 @@ $(PC_OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -c -o $@ $<
 
-PC_BIN ?= undertale_pc
+PC_BIN ?= $(APP)_pc
 
 $(PC_BIN): $(PC_OBJS)
 	$(PC_CC) $(PC_OBJS) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $@
 
-test: undertale_pc $(GAME_PACKS)
+test: $(PC_BIN) $(GAME_PACKS)
 
 # The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
 # as undertale_pc_asan. Run it through the same frame scripts as undertale_pc:
@@ -259,6 +301,14 @@ asan:
 	$(MAKE) PC_BIN=undertale_pc_asan PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-asan \
 	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" undertale_pc_asan
 
+# The desktop build again, counting every bytecode instruction the game runs,
+# as undertale_pc_ops. Run it with UT_EXIT_FRAME=<n>: it prints the ranking
+# when it leaves the main loop. A separate binary because the count is a
+# compile-time option of Butterscotch's and costs time on every instruction.
+ops:
+	$(MAKE) PC_BIN=undertale_pc_ops PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-ops \
+	        PC_EXTRA_CFLAGS="-DENABLE_VM_OPCODE_PROFILER" undertale_pc_ops
+
 # Strict warnings for the code this port owns (not Butterscotch or the SDK,
 # whose headers are treated as system headers so they stay quiet). Compiles
 # nothing; fails if anything is reported.
@@ -273,7 +323,7 @@ lint:
 	done; [ -z "$$failed" ] && echo "lint: clean"
 
 clean: sdk-clean
-	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan undertale_pc undertale_pc_asan
-	rm -rf $(ROOT)/build/pocket/$(APP) $(ROOT)/build/mister/$(APP)
+	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops undertale_pc undertale_pc_asan undertale_pc_ops
+	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all release debug copy compare compare-copy package test asan lint clean
+.PHONY: all release debug copy compare compare-copy package test asan ops lint clean

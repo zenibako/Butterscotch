@@ -8,14 +8,15 @@
 # counts as idle, and macOS only auto-mounts removable disks into an active
 # desktop session. This script declares user activity, waits for the card,
 # mounts it if needed, removes renamed-away cores of the same platform,
-# copies, removes macOS sidecar files, verifies and ejects, and says what went wrong when it cannot.
+# copies, removes macOS sidecar files, verifies and unmounts, and says what went wrong when it cannot.
 #
-# Usage: sdcopy.sh <build tree> [seconds to wait for the card, default 90]
+# Usage: sdcopy.sh <build tree> [seconds to wait for the card, default 240]
 #
 set -u
 
 TREE="$1"
-WAIT="${2:-90}"
+# The reader on this headless Mac has taken more than 90 seconds to report a reinserted card.
+WAIT="${2:-240}"
 [ -d "$TREE/Cores" ] && [ -d "$TREE/Assets" ] || { echo "sdcopy: $TREE is not an assembled Pocket tree"; exit 1; }
 
 # A mounted volume that looks like a Pocket card.
@@ -77,6 +78,19 @@ for platform in "$TREE"/Assets/*/; do
     done
 done
 
+# The Pocket caches the platform list (System/platforms_cache.bin) and was
+# seen not to rebuild it when a platform was renamed: same number of files in
+# Platforms/, so the new platform stayed unknown and its core was missing
+# from the menu. A platform that is new to the card sets the cache aside so
+# that it is rebuilt at the next start.
+for platform in "$TREE"/Platforms/*.json; do
+    [ -f "$platform" ] && [ ! -f "$CARD/Platforms/$(basename "$platform")" ] || continue
+    if [ -f "$CARD/System/platforms_cache.bin" ]; then
+        echo "sdcopy: new platform $(basename "$platform" .json); setting the Pocket's platform cache aside"
+        mv -f "$CARD/System/platforms_cache.bin" "$CARD/System/platforms_cache.bin.old"
+    fi
+done
+
 echo "sdcopy: copying to $CARD"
 for dir in Cores Assets Platforms; do
     [ -d "$TREE/$dir" ] || continue
@@ -86,6 +100,12 @@ done
 # macOS adds ._ sidecar files on FAT volumes; the Pocket can list them as junk entries.
 for dir in "$CARD"/Cores/* "$CARD"/Assets/* "$CARD/Platforms"; do
     [ -d "$dir" ] && dot_clean -m "$dir" 2>/dev/null
+done
+# A folder created by this copy gets a sidecar beside it as well
+# (Cores/._zenibako.Butterscotch), which the loop above does not reach.
+for entry in "$TREE"/Cores/* "$TREE"/Assets/*; do
+    rel="${entry#"$TREE"/}"
+    rm -f "$CARD/$(dirname "$rel")/._$(basename "$rel")"
 done
 sync
 
@@ -97,15 +117,15 @@ while IFS= read -r file; do
 done < <(find "$TREE" -type f \( -name '*.elf' -o -name '*.bin' -o -name '*.rbf_r' -o -name '*.json' -o -name '*.ini' \) ! -name 'music.bin' ! -name 'textures.bin')
 [ $failed -eq 0 ] || { echo "sdcopy: verification failed; the card was left mounted"; exit 1; }
 
-# With nobody at the screen, loginwindow refuses a normal eject. Everything is
-# written and verified by now, so a forced unmount after a sync is safe.
-if diskutil eject "$CARD" >/dev/null 2>&1; then
-    echo "sdcopy: done, verified and ejected. Safe to remove the card."
+# Unmount, not eject: after an eject macOS does not notice the card again
+# until it is pulled and pushed back in, and sometimes not even then, so the
+# next copy cannot find it. An unmounted card is just as safe to remove, and
+# one left in the reader can be mounted again. Everything is written and
+# verified by now, so a forced unmount after a sync is safe if a plain one is
+# refused (with nobody at the screen, loginwindow can refuse it).
+sync
+if diskutil unmount "$CARD" >/dev/null 2>&1 || diskutil unmount force "$CARD" >/dev/null 2>&1; then
+    echo "sdcopy: done, verified and unmounted. Safe to remove the card."
 else
-    sync
-    if diskutil unmount force "$CARD" >/dev/null 2>&1; then
-        echo "sdcopy: done, verified and unmounted. Safe to remove the card."
-    else
-        echo "sdcopy: copied and verified, but could not unmount $CARD; eject it before removing."
-    fi
+    echo "sdcopy: copied and verified, but could not unmount $CARD; unmount it before removing."
 fi

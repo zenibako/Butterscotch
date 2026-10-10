@@ -9,6 +9,22 @@
 
 #include "math_compat.h"
 
+// The thresholds below were written as double constants, which made every
+// comparison with a float a software double-precision one where the FPU is
+// single-precision only: two calls each, and Collision_pointInInstance makes
+// three for every pixel a precise collision test looks at. With float reals
+// they are compared as floats, to exactly the same effect: (float) 0.0001 is
+// the largest float below 0.0001, so the floats greater than 0.0001 are the
+// floats greater than (float) 0.0001, and the floats less than 0.0001 are
+// the floats not greater than it.
+#ifdef USE_FLOAT_REALS
+#define GML_ANGLE_EPSILON 0.0001f
+#define GML_SCALE_IS_DEGENERATE(scale) (GMLReal_fabs(scale) <= 0.0001f)
+#else
+#define GML_ANGLE_EPSILON 0.0001
+#define GML_SCALE_IS_DEGENERATE(scale) (0.0001 > GMLReal_fabs(scale))
+#endif
+
 // Checks if an instance matches a collision target.
 // target >= INSTANCE_ID_BASE: instance ID (match specific instance)
 // target == INSTANCE_ALL (-3): match any instance
@@ -48,7 +64,7 @@ static inline InstanceBBox Collision_computeBBox(Runner* runner, Instance* inst)
     GMLReal originY = (GMLReal) spr->originY;
 
     GMLReal left, right, top, bottom;
-    if (GMLReal_fabs(inst->imageAngle) > 0.0001) {
+    if (GMLReal_fabs(inst->imageAngle) > GML_ANGLE_EPSILON) {
         // Compute rotated AABB: transform the 4 corners of the unrotated bbox
         GMLReal rad = inst->imageAngle * M_PI / 180.0;
         GMLReal cs = GMLReal_cos(rad);
@@ -136,7 +152,7 @@ static inline InstanceOBB Collision_instanceOBB(Sprite* spr, Instance* inst) {
     obb.ly1 = inst->imageYscale * (marginB - originY);
     if (obb.lx0 > obb.lx1) { GMLReal t = obb.lx0; obb.lx0 = obb.lx1; obb.lx1 = t; }
     if (obb.ly0 > obb.ly1) { GMLReal t = obb.ly0; obb.ly0 = obb.ly1; obb.ly1 = t; }
-    obb.rotated = GMLReal_fabs(inst->imageAngle) > 0.0001;
+    obb.rotated = GMLReal_fabs(inst->imageAngle) > GML_ANGLE_EPSILON;
     if (obb.rotated) {
         GMLReal rad = inst->imageAngle * M_PI / 180.0;
         obb.cs = GMLReal_cos(rad);
@@ -158,7 +174,7 @@ static inline void Collision_obbWorldToLocal(const InstanceOBB* obb, GMLReal wx,
 
 // Returns true iff the OBB needs SAT-style testing rather than AABB. Only sepMasks == 2 sprites that are actually rotated qualify; everything else (axis-aligned, or precise sprites which fall through to per-pixel scans) is handled correctly by AABB.
 static inline bool Collision_obbNeedsSAT(Sprite* spr, Instance* inst) {
-    return spr != nullptr && spr->sepMasks == 2 && GMLReal_fabs(inst->imageAngle) > 0.0001;
+    return spr != nullptr && spr->sepMasks == 2 && GMLReal_fabs(inst->imageAngle) > GML_ANGLE_EPSILON;
 }
 
 static inline bool Collision_rectOverlapsInstance(Runner* runner, Instance* inst, GMLReal rx1, GMLReal ry1, GMLReal rx2, GMLReal ry2) {
@@ -388,15 +404,15 @@ static inline bool Collision_pointInInstance(Sprite* spr, Instance* inst, GMLRea
     if (spr == nullptr) return false;
 
     // Reject degenerate scales to avoid divide-by-zero.
-    if (0.0001 > GMLReal_fabs(inst->imageXscale)) return false;
-    if (0.0001 > GMLReal_fabs(inst->imageYscale)) return false;
+    if (GML_SCALE_IS_DEGENERATE(inst->imageXscale)) return false;
+    if (GML_SCALE_IS_DEGENERATE(inst->imageYscale)) return false;
 
     // Transform world coords to sprite-local coords
     GMLReal dx = px - inst->x;
     GMLReal dy = py - inst->y;
 
     // Inverse of CW rotation is standard CCW rotation (positive angle)
-    if (GMLReal_fabs(inst->imageAngle) > 0.0001) {
+    if (GMLReal_fabs(inst->imageAngle) > GML_ANGLE_EPSILON) {
         GMLReal rad = inst->imageAngle * M_PI / 180.0;
         GMLReal cs = GMLReal_cos(rad);
         GMLReal sn = GMLReal_sin(rad);

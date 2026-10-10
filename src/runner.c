@@ -786,6 +786,11 @@ void Runner_drawTileLayer(Runner* runner, RoomLayerTilesData* data, float layerO
     uint32_t borderY = tileset->gms2OutputBorderY;
     uint32_t columns = tileset->gms2TileColumns;
 
+    // A renderer may draw the whole layer itself (see drawTileLayer).
+    if (runner->renderer->vtable->drawTileLayer != nullptr &&
+        runner->renderer->vtable->drawTileLayer(runner->renderer, tileset, data->tileData, data->tilesX, data->tilesY, layerOffsetX, layerOffsetY))
+        return;
+
     repeat(data->tilesY, ty) {
         repeat(data->tilesX, tx) {
             uint32_t cell = data->tileData[ty * data->tilesX + tx];
@@ -1178,15 +1183,30 @@ void Runner_draw(Runner* runner) {
             if (parsedLayer != nullptr && parsedLayer->type == RoomLayerType_Assets) {
                 RoomLayerAssetsData* data = parsedLayer->assetsData;
                 size_t tileElementCount = arrlenu(runtimeLayer->elements);
+                // The layer's tiles are gathered and offered to the renderer as one run (see drawTileRun), like
+                // the tiles of an older room; drawn one by one only if it declines. A tile whose element carries
+                // another alpha is handed over as a copy.
+                static RoomTile** layerTiles = nullptr;
+                static float* layerOffsets = nullptr;
+                static RoomTile* layerCopies = nullptr;
+                arrsetlen(layerTiles, 0);
+                arrsetlen(layerOffsets, 0);
+                arrsetlen(layerCopies, 0);
+                if (data->legacyTileCount > 0) arrsetcap(layerCopies, data->legacyTileCount); // copies must not move
+                size_t searchFrom = 0;
                 repeat(data->legacyTileCount, j) {
                     if (runner->renderer != nullptr) {
                         RoomTile* tile = &data->legacyTiles[j];
-                        // Find the matching RuntimeLayerElement so we can honor per-element visibility
+                        // Find the matching RuntimeLayerElement so we can honor per-element visibility. Elements
+                        // were created in the tiles' order, so the search resumes where the last one ended.
                         RuntimeLayerElement* tileEl = nullptr;
                         repeat(tileElementCount, k) {
-                            RuntimeLayerElement* candidate = &runtimeLayer->elements[k];
+                            size_t at = searchFrom + k;
+                            if (at >= tileElementCount) at -= tileElementCount;
+                            RuntimeLayerElement* candidate = &runtimeLayer->elements[at];
                             if (candidate->type == RuntimeLayerElementType_Tile && candidate->tileElement == tile) {
                                 tileEl = candidate;
+                                searchFrom = at + 1;
                                 break;
                             }
                         }
@@ -1226,9 +1246,24 @@ void Runner_draw(Runner* runner) {
                         }
 #endif
 
-                        RoomTile runtimeTile = *tile;
-                        if (tileEl != nullptr) runtimeTile.alpha = tileEl->alpha;
-                        Renderer_drawTile(runner->renderer, &runtimeTile, offsetX, offsetY);
+                        RoomTile* drawn = tile;
+                        if (tileEl != nullptr && tileEl->alpha != tile->alpha) {
+                            arrput(layerCopies, *tile);
+                            drawn = &layerCopies[arrlen(layerCopies) - 1];
+                            drawn->alpha = tileEl->alpha;
+                        }
+                        arrput(layerTiles, drawn);
+                        arrput(layerOffsets, offsetX);
+                        arrput(layerOffsets, offsetY);
+                    }
+                }
+                int32_t layerTileCount = (int32_t) arrlen(layerTiles);
+                if (layerTileCount > 0) {
+                    bool taken = runner->renderer->vtable->drawTileRun != nullptr &&
+                                 runner->renderer->vtable->drawTileRun(runner->renderer, layerTiles, layerOffsets, layerTileCount);
+                    if (!taken) {
+                        repeat(layerTileCount, j)
+                            Renderer_drawTile(runner->renderer, layerTiles[j], layerOffsets[j * 2], layerOffsets[j * 2 + 1]);
                     }
                 }
 
@@ -4272,6 +4307,12 @@ void Runner_step(Runner* runner) {
             if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0)) {
                 if (sprite->gms2PlaybackSpeedType == true) {
                     inst->imageIndex += inst->imageSpeed * sprite->gms2PlaybackSpeed;
+                } else if (inst->imageSpeed == 0.0f && runner->currentRoom->speed != 0 &&
+                           (sprite->gms2PlaybackSpeed - sprite->gms2PlaybackSpeed) == 0.0f) {
+                    // Not animating (and the other two factors finite): the sum below adds a zero, of
+                    // the sign this product has. Worked out in double it is nine software calls per
+                    // instance per frame on a CPU with a single-precision FPU, for most of a room.
+                    inst->imageIndex += sprite->gms2PlaybackSpeed * inst->imageSpeed;
                 } else {
                     inst->imageIndex += (1.0/runner->currentRoom->speed) * sprite->gms2PlaybackSpeed * inst->imageSpeed;
                 }

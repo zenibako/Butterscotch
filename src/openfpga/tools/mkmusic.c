@@ -2,13 +2,20 @@
  * mkmusic — build music.bin, the audio pack: every sound the game plays,
  * converted to mono IMA ADPCM.
  *
- *   mkmusic <data.win> <dir of .ogg files> <music.bin> [sample rate, default 32000]
+ *   mkmusic <data.win> <dir of .ogg files> <music.bin> [sample rate, default 32000] [extras...]
+ *
+ * Extras, for games that need them:
+ *   group:<n>:<audiogroupN.dat>   where the sounds of audio group n live
+ *   file:<path>                   a file stored as it is, under its base name
  *
  * Two sources are combined:
  *   - the external .ogg files the game streams (music and long sounds), named
  *     after the file;
  *   - the sounds embedded in data.win's AUDO chunk (short effects, WAV or
- *     Ogg), named after the sound.
+ *     Ogg), named after the sound. Sounds in other audio groups are taken
+ *     from the group files given.
+ * Stored files ride along because a core has only three data slots; the
+ * game's file layer reads them back (Deltarune's lang_en.json).
  * See platform/ut_music_pack.h for the format.
  *
  * Host tool only; assumes a little-endian machine.
@@ -163,7 +170,10 @@ typedef struct {
     char path[2048];
     const uint8_t *blob;
     uint32_t blobLen;
+    bool raw; /* stored unchanged */
 } Source;
+
+#define MAX_GROUPS 16
 
 static int compareSources(const void *a, const void *b) {
     return strncmp(((const Source *) a)->name, ((const Source *) b)->name, UT_MUSIC_NAME_LEN);
@@ -211,17 +221,43 @@ int main(int argc, char **argv) {
     uint32_t sondLen, audoLen;
     const uint8_t *sond = findChunk(win, winSize, "SOND", &sondLen);
     const uint8_t *audo = findChunk(win, winSize, "AUDO", &audoLen);
+
+    /* Group 0 is data.win itself; the others come from group:<n>:<file>. Offsets inside a group file are
+     * relative to that file. */
+    const uint8_t *groupBase[MAX_GROUPS] = {win};
+    const uint8_t *groupAudo[MAX_GROUPS] = {audo};
+    const char *rawPaths[64];
+    int rawCount = 0;
+    for (int a = 5; a < argc; a++) {
+        if (strncmp(argv[a], "group:", 6) == 0 && strchr(argv[a] + 6, ':') != NULL) {
+            int n = atoi(argv[a] + 6);
+            if (n < 1 || n >= MAX_GROUPS) { fprintf(stderr, "%s: group out of range\n", argv[a]); return 2; }
+            size_t size;
+            uint8_t *data = readFile(strchr(argv[a] + 6, ':') + 1, &size);
+            uint32_t len;
+            groupBase[n] = data;
+            groupAudo[n] = findChunk(data, size, "AUDO", &len);
+        } else if (strncmp(argv[a], "file:", 5) == 0 && rawCount < 64) {
+            rawPaths[rawCount++] = argv[a] + 5;
+        } else {
+            fprintf(stderr, "%s: not understood\n", argv[a]);
+            return 2;
+        }
+    }
+
     if (sond && audo) {
         uint32_t soundCount = readU32(sond);
-        uint32_t audioCount = readU32(audo);
         for (uint32_t i = 0; i < soundCount; i++) {
             const uint8_t *sound = win + readU32(sond + 4 + 4 * i);
             uint32_t flags = readU32(sound + 4);
+            uint32_t group = readU32(sound + 28);
             int32_t audioFile = (int32_t) readU32(sound + 32);
-            if (!(flags & 3) || audioFile < 0 || (uint32_t) audioFile >= audioCount) continue;
+            if (!(flags & 3) || audioFile < 0) continue;
+            if (group >= MAX_GROUPS || groupAudo[group] == NULL) continue;
+            if ((uint32_t) audioFile >= readU32(groupAudo[group])) continue;
 
             const char *name = (const char *) (win + readU32(sound));
-            const uint8_t *audio = win + readU32(audo + 4 + 4 * (uint32_t) audioFile);
+            const uint8_t *audio = groupBase[group] + readU32(groupAudo[group] + 4 + 4 * (uint32_t) audioFile);
 
             sources = realloc(sources, (count + 1) * sizeof(Source));
             memset(&sources[count], 0, sizeof(Source));
@@ -240,6 +276,21 @@ int main(int argc, char **argv) {
     } else {
         fprintf(stderr, "%s: no SOND/AUDO chunks, packing the .ogg files only\n", argv[1]);
     }
+    for (int r = 0; r < rawCount; r++) {
+        const char *base = strrchr(rawPaths[r], '/');
+        base = base != NULL ? base + 1 : rawPaths[r];
+        sources = realloc(sources, (count + 1) * sizeof(Source));
+        memset(&sources[count], 0, sizeof(Source));
+        if (!setName(&sources[count], base, strlen(base))) {
+            fprintf(stderr, "%s: name too long\n", rawPaths[r]);
+            return 1;
+        }
+        size_t size;
+        sources[count].blob = readFile(rawPaths[r], &size);
+        sources[count].blobLen = (uint32_t) size;
+        sources[count].raw = true;
+        count++;
+    }
     if (count == 0) {
         fprintf(stderr, "nothing to pack\n");
         return 1;
@@ -257,6 +308,14 @@ int main(int argc, char **argv) {
         memcpy(tracks[t].name, sources[t].name, UT_MUSIC_NAME_LEN);
         tracks[t].offset = offset;
         tracks[t].sampleRate = (uint32_t) outRate;
+
+        if (sources[t].raw) {
+            fwrite(sources[t].blob, 1, sources[t].blobLen, out);
+            tracks[t].sampleRate = UT_MUSIC_RAW_FILE;
+            tracks[t].sampleCount = sources[t].blobLen;
+            offset += sources[t].blobLen;
+            continue;
+        }
 
         int channels = 0, rate = 0;
         short *pcm = NULL;

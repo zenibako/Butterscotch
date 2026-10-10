@@ -66,6 +66,20 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
   the callback must not read files itself. The audio backend uses it to
   keep music going during loads.
 
+## The Pocket's menu
+
+- A core whose platform the Pocket does not know is left out of the core
+  list with no error. The Pocket caches platforms in
+  `System/platforms_cache.bin` and did not rebuild it when a platform was
+  renamed on the card (2026-10-08, firmware 2.7): `Platforms/` held the
+  same number of files before and after, which is the suspected reason.
+  Renaming the cache away made the core appear at the next start.
+  `strings` on the cache shows which platform ids it holds; `sdcopy.sh`
+  now sets it aside when it copies a platform that is new to the card.
+- Things that were suspected and are not the cause of a missing core:
+  a `description` over 63 characters (listed cores on the same card have
+  up to 92), and `._` sidecar files beside the core folder.
+
 ## Saves
 
 - Save slots 10–19 are 256 KB files named in the instance JSON
@@ -93,6 +107,20 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
   a capacity one. The port keeps about 100 ms queued.
 - The hardware mixer (`of_mixer_*`) is stubbed in the desktop shim, so
   code using it cannot be tested off the device.
+
+## The Pocket's core menu (interact.json)
+
+- A core cannot add menu options of its own that reach the app. The SDK's
+  README says app options start at index 4 of `of_interact_get`, but that
+  call reads a memory page nothing writes: in the hardware source
+  (`core_top.v`, same at the v0.7 tag) menu writes land only in the
+  Analogizer registers at 0xF7000000-0xF700000C and in 0xF7000010, which
+  is the app id that an instance file's `memory_writes` sets at launch.
+  An entry pointed at 0xF7000010 showed in the menu and could not be
+  changed (tried 2026-10-08).
+- What does reach the app from the Pocket's own screens: an instance
+  file's OS config (`ARGS=`), read at launch, and nothing live. Live
+  switches have to be buttons.
 
 ## Input
 

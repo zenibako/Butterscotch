@@ -175,22 +175,24 @@ void Instance_computeSpeedFromComponents(Instance* inst) {
         // If both are 0, direction stays unchanged
     } else {
         GMLReal dd = clampFloat(180.0 * GMLReal_atan2(inst->vspeed, inst->hspeed) / M_PI);
-        if (dd <= 0.0) {
+        if (dd <= (GMLReal) 0.0) {
             inst->direction = (float) -dd;
         } else {
             inst->direction = (float) (360.0 - dd);
         }
     }
 
-    // Round direction if very close to integer
-    if (GMLReal_fabs(inst->direction - GMLReal_round(inst->direction)) < 0.0001) {
+    // Round direction if very close to integer. The thresholds here are typed as reals so that a
+    // single-precision FPU compares in hardware: the floats < 0.0001 as a double are exactly the
+    // floats <= (float) 0.0001, so nothing rounds differently.
+    if (GMLReal_fabs(inst->direction - GMLReal_round(inst->direction)) <= (GMLReal) 0.0001) {
         inst->direction = (float) GMLReal_round(inst->direction);
     }
     inst->direction = (float) GMLReal_fmod((GMLReal) inst->direction, 360.0);
 
     // Speed
     inst->speed = (float) GMLReal_sqrt(inst->hspeed * inst->hspeed + inst->vspeed * inst->vspeed);
-    if (GMLReal_fabs(inst->speed - GMLReal_round(inst->speed)) < 0.0001) {
+    if (GMLReal_fabs(inst->speed - GMLReal_round(inst->speed)) <= (GMLReal) 0.0001) {
         inst->speed = (float) GMLReal_round(inst->speed);
     }
 }
@@ -201,10 +203,10 @@ void Instance_computeComponentsFromSpeed(Instance* inst) {
     inst->vspeed = (float) (-inst->speed * clampFloat(GMLReal_sin(inst->direction * (M_PI / 180.0))));
 
     // Round if very close to integer
-    if (GMLReal_fabs(inst->hspeed - GMLReal_round(inst->hspeed)) < 0.0001) {
+    if (GMLReal_fabs(inst->hspeed - GMLReal_round(inst->hspeed)) <= (GMLReal) 0.0001) {
         inst->hspeed = (float) GMLReal_round(inst->hspeed);
     }
-    if (GMLReal_fabs(inst->vspeed - GMLReal_round(inst->vspeed)) < 0.0001) {
+    if (GMLReal_fabs(inst->vspeed - GMLReal_round(inst->vspeed)) <= (GMLReal) 0.0001) {
         inst->vspeed = (float) GMLReal_round(inst->vspeed);
     }
 }

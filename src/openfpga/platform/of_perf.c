@@ -1,11 +1,13 @@
 /*
- * Frame-time overlay (Select or L) and log overlay (R).
+ * Frame-time overlay (Select) and log overlay (R), both in debug mode, and
+ * the word that shows which way L's speed/accuracy toggle is set.
  *
- * Shows three numbers in the top-left corner, in milliseconds, over the last
- * 30 frames:
+ * Shows four numbers in the top-left corner over the last 30 frames, the
+ * first three in milliseconds:
  *   average work time (frame period minus time spent sleeping for pacing)
  *   worst work time
  *   worst frame period (33 at full speed for a 30 fps game)
+ *   frames skipped (speed mode's frame skipping; 0 in accuracy mode)
  */
 
 #include "of_perf.h"
@@ -13,6 +15,10 @@
 #include "debug_font.h"
 #include "gettime.h"
 #include "log.h"
+#include "profiler.h"
+#include "stb_ds.h"
+
+#include <string.h>
 
 #define UT_PERF_WINDOW 30
 #define UT_PERF_SCALE  2
@@ -24,10 +30,12 @@ static uint64_t g_sleepNanos = 0;
 static unsigned g_worstWork = 0, g_worstPeriod = 0, g_totalWork = 0;
 static unsigned g_shownWork = 0, g_shownPeriod = 0, g_shownAverage = 0;
 static int g_count = 0;
+static unsigned g_skipped = 0, g_shownSkipped = 0;
 static uint64_t g_loadNanos[UT_LOAD_KINDS];
 static uint64_t g_phaseNanos[UT_PHASES];
 static uint64_t g_drawNanos[UT_DRAW_KINDS];
 static unsigned g_drawCalls[UT_DRAW_KINDS];
+static UtPerfTotals g_totals;
 static UtPhase g_phase = UT_PHASE_OTHER;
 static uint64_t g_phaseStart = 0;
 
@@ -75,12 +83,25 @@ static void reportSlowFrame(unsigned workMs) {
         logInfo("  draw: s%u/%u p%u/%u t%u/%u b%u/%u r%u/%u\n", g_drawCalls[0], draw[0], g_drawCalls[1], draw[1],
                 g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4]);
     }
-    for (int i = 0; i < UT_LOAD_KINDS; i++) g_loadNanos[i] = 0;
-    for (int i = 0; i < UT_PHASES; i++) g_phaseNanos[i] = 0;
+    for (int i = 0; i < UT_LOAD_KINDS; i++) {
+        g_totals.loadNanos[i] += g_loadNanos[i];
+        g_loadNanos[i] = 0;
+    }
+    for (int i = 0; i < UT_PHASES; i++) {
+        g_totals.phaseNanos[i] += g_phaseNanos[i];
+        g_phaseNanos[i] = 0;
+    }
     for (int i = 0; i < UT_DRAW_KINDS; i++) {
+        g_totals.drawNanos[i] += g_drawNanos[i];
+        g_totals.drawCalls[i] += g_drawCalls[i];
         g_drawNanos[i] = 0;
         g_drawCalls[i] = 0;
     }
+}
+
+void utPerfTakeTotals(UtPerfTotals *out) {
+    if (out != NULL) *out = g_totals;
+    memset(&g_totals, 0, sizeof(g_totals));
 }
 
 void utPerfToggle(void) {
@@ -89,6 +110,54 @@ void utPerfToggle(void) {
 
 void utPerfToggleLog(void) {
     g_logEnabled = !g_logEnabled;
+}
+
+void utPerfShowLog(void) {
+    g_logEnabled = true;
+}
+
+/* Butterscotch's own report is a line per script too wide for a 320-pixel
+ * log, so this writes its own: ms per frame and instructions per frame for
+ * the heaviest few, names without the "gml_Object_"/"gml_Script_" prefix. */
+#define UT_SCRIPT_TOP 20 /* scripts and the built-in functions they call share the list */
+
+void utPerfScriptReport(const Profiler *profiler, int frames) {
+    if (profiler == NULL || frames <= 0) return;
+    int count = (int) shlen(profiler->entries);
+    uint64_t totalNanos = 0, totalOps = 0;
+    int top[UT_SCRIPT_TOP];
+    int shown = 0;
+    for (int i = 0; i < count; i++) {
+        uint64_t nanos = profiler->entries[i].value.nanos;
+        totalNanos += nanos;
+        totalOps += profiler->entries[i].value.ops;
+        int at = shown;
+        while (at > 0 && profiler->entries[top[at - 1]].value.nanos < nanos) at--;
+        if (at >= UT_SCRIPT_TOP) continue;
+        if (shown < UT_SCRIPT_TOP) shown++;
+        for (int j = shown - 1; j > at; j--) top[j] = top[j - 1];
+        top[at] = i;
+    }
+
+    /* Tenths of a millisecond per frame, in integers: no float printf here. */
+    unsigned perFrame = (unsigned) (totalNanos / 100000u / (unsigned) frames);
+    logInfo("scripts %u.%u ms %u ops /frame (%d, %d fr)\n", perFrame / 10, perFrame % 10,
+            (unsigned) (totalOps / (unsigned) frames), count, frames);
+    for (int i = 0; i < shown; i++) {
+        const ProfilerEntry *entry = &profiler->entries[top[i]];
+        const char *name = entry->key;
+        if (strncmp(name, "gml_Object_", 11) == 0 || strncmp(name, "gml_Script_", 11) == 0) name += 11;
+        perFrame = (unsigned) (entry->value.nanos / 100000u / (unsigned) frames);
+        /* ms, instructions and calls per frame (calls in tenths). A built-in function has no instructions. */
+        unsigned callTenths = (unsigned) (entry->value.calls * 10u / (unsigned) frames);
+        logInfo(" %2u.%u %5u %3u.%u %s\n", perFrame / 10, perFrame % 10, (unsigned) (entry->value.ops / (unsigned) frames),
+                callTenths / 10, callTenths % 10, name);
+    }
+}
+
+void utPerfHideOverlays(void) {
+    g_enabled = false;
+    g_logEnabled = false;
 }
 
 /* Log overlay text: Butterscotch's debug font atlas shrunk 3:1 by averaging
@@ -176,10 +245,15 @@ static int drawNumber(uint16_t *fb, int width, int x, int y, unsigned value) {
     return x;
 }
 
-void utPerfDrawMode(uint16_t *fb, int width, int height, unsigned drawnWidth) {
-    int markWidth = 3 * 4 * UT_PERF_SCALE;
-    if (width < markWidth + 4 || height < 16) return;
-    drawNumber(fb, width, width - markWidth - 2, 2, drawnWidth);
+void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label) {
+    int textWidth = (int) strlen(label) * UT_LOG_CELL_W;
+    int left = width - textWidth - 4;
+    if (left < 0 || height < UT_LOG_CELL_H + 2) return;
+
+    /* A black box behind the word so it reads over any scene. */
+    for (int y = 0; y < UT_LOG_CELL_H + 2; y++)
+        for (int x = left; x < width; x++) fb[y * width + x] = 0;
+    for (int i = 0; label[i] != '\0'; i++) drawLogChar(fb, width, left + 2 + i * UT_LOG_CELL_W, 1, label[i]);
 }
 
 void utPerfFrame(uint16_t *fb, int width, int height) {
@@ -187,6 +261,7 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
      * and is reported with the next frame. */
     utPerfPhase(UT_PHASE_OUT);
     uint64_t now = nowNanos();
+    if (fb == NULL) g_skipped++;
     if (g_lastFrame != 0) {
         uint64_t period = now - g_lastFrame;
         uint64_t work = period > g_sleepNanos ? period - g_sleepNanos : 0;
@@ -200,6 +275,8 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
             g_shownAverage = g_totalWork / UT_PERF_WINDOW;
             g_shownWork = g_worstWork;
             g_shownPeriod = g_worstPeriod;
+            g_shownSkipped = g_skipped;
+            g_skipped = 0;
             g_worstWork = g_worstPeriod = g_totalWork = 0;
             g_count = 0;
         }
@@ -207,9 +284,11 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
     g_lastFrame = now;
     g_sleepNanos = 0;
 
+    if (fb == NULL) return; /* a skipped frame: counted, nothing to draw on */
     if (g_logEnabled) drawLog(fb, width, height);
-    if (!g_enabled || width < 96 || height < 16) return;
+    if (!g_enabled || width < 128 || height < 16) return;
     int x = drawNumber(fb, width, 2, 2, g_shownAverage);
     x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownWork);
-    drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownPeriod);
+    x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownPeriod);
+    drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownSkipped);
 }
