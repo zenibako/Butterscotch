@@ -4307,6 +4307,12 @@ void Runner_step(Runner* runner) {
             if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0)) {
                 if (sprite->gms2PlaybackSpeedType == true) {
                     inst->imageIndex += inst->imageSpeed * sprite->gms2PlaybackSpeed;
+                } else if (inst->imageSpeed == 0.0f && runner->currentRoom->speed != 0 &&
+                           (sprite->gms2PlaybackSpeed - sprite->gms2PlaybackSpeed) == 0.0f) {
+                    // Not animating (and the other two factors finite): the sum below adds a zero, of
+                    // the sign this product has. Worked out in double it is nine software calls per
+                    // instance per frame on a CPU with a single-precision FPU, for most of a room.
+                    inst->imageIndex += sprite->gms2PlaybackSpeed * inst->imageSpeed;
                 } else {
                     inst->imageIndex += (1.0/runner->currentRoom->speed) * sprite->gms2PlaybackSpeed * inst->imageSpeed;
                 }

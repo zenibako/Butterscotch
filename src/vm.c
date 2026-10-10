@@ -1141,10 +1141,32 @@ static RValue convertValue(RValue val, uint8_t targetType, DataWin* dataWin) {
 
 // ===[ Opcode Handlers ]===
 
+// A double constant from the bytecode, as a real. With float reals that is a
+// double-to-float conversion, which a CPU with a single-precision FPU does
+// in software on every push of a constant like 0.5; the constants of a
+// script are few, so the last conversions are kept, looked up by the
+// constant's bits.
+static inline GMLReal readDoubleConstant(const uint8_t* extraData) {
+#ifdef USE_FLOAT_REALS
+    static struct { uint32_t low, high; float value; bool filled; } kept[64];
+    uint32_t words[2];
+    memcpy(words, ASSUME_ALIGNED(extraData, 4), 8);
+    uint32_t slot = (words[0] ^ words[1] ^ (words[1] >> 20)) & 63u;
+    if (kept[slot].filled && kept[slot].low == words[0] && kept[slot].high == words[1]) return kept[slot].value;
+    float value = (float) BinaryUtils_readFloat64Aligned(extraData);
+    kept[slot].low = words[0]; kept[slot].high = words[1];
+    kept[slot].value = value;
+    kept[slot].filled = true;
+    return value;
+#else
+    return (GMLReal) BinaryUtils_readFloat64Aligned(extraData);
+#endif
+}
+
 static void handlePush(VMContext* ctx, uint32_t instr, const uint8_t* extraData, uint8_t type1) {
     switch (type1) {
         case GML_TYPE_DOUBLE:
-            stackPushTyped(ctx, RValue_makeReal(BinaryUtils_readFloat64Aligned(extraData)), GML_TYPE_DOUBLE);
+            stackPushTyped(ctx, RValue_makeReal(readDoubleConstant(extraData)), GML_TYPE_DOUBLE);
             break;
         case GML_TYPE_FLOAT:
             // Native push.f reads a 4-byte float; the bytecode-declared footprint is FLOAT (4 bytes), not DOUBLE (8).
@@ -1609,9 +1631,28 @@ static void handleDiv(VMContext* ctx, uint32_t instr) {
     stackPushTyped(ctx, RValue_makeReal(result), instrType2(instr));
 }
 
+// The value as a 32-bit integer, if it is a number whose integer part fits in
+// one: what RValue_toInt64 would give, without a 64-bit conversion.
+static inline bool rvalueFitsInt32(RValue val, int32_t* out) {
+    if (val.type == RVALUE_INT32 || val.type == RVALUE_BOOL) { *out = val.int32; return true; }
+    if (val.type == RVALUE_REAL && val.real > (GMLReal) -2147483648.0 && (GMLReal) 2147483648.0 > val.real) {
+        *out = (int32_t) val.real;
+        return true;
+    }
+    return false;
+}
+
 static void handleRem(VMContext* ctx, uint32_t instr) {
     RValue b = stackPop(ctx);
     RValue a = stackPop(ctx);
+    // `div` of two ordinary numbers, nearly every one there is: the quotient in 32 bits. The 64-bit
+    // route below is four software calls on a 32-bit CPU with a single-precision FPU.
+    int32_t small, smallDivisor;
+    if (rvalueFitsInt32(a, &small) && rvalueFitsInt32(b, &smallDivisor) && smallDivisor != 0 &&
+        !(small == INT32_MIN && smallDivisor == -1)) {
+        stackPushTyped(ctx, RValue_makeInt64((int64_t) (small / smallDivisor)), instrType2(instr));
+        return;
+    }
     int64_t divisor = RValue_toInt64(b);
     requireMessageFormatted(__FILE__, __LINE__, divisor != 0, "VM: [%s] DoRem :: Divide by zero", ctx->currentCodeName);
     int64_t result = RValue_toInt64(a) / divisor;

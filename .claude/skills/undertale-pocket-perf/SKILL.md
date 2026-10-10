@@ -131,6 +131,22 @@ change made on that inference writes such a pass together with the clear
 under it, row by row, so that its pixels land on lines the fill has just
 brought in (`swrTiledHold`).
 
+*Measured:* with the drawing left out altogether (`--draw-every 100000`,
+the "no drawing" benchmark entry) a Deltarune battle frame still takes 46 to
+50 ms: draw-event scripts about 24 to 30, step 7 to 21, sound 6 to 12. So
+battles cannot reach full speed by drawing less or skipping frames; the
+field (24 ms undrawn) can. Code size is not the reason: `-Os` (768 KB of
+code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower,
+so the 32 KB instruction cache is not what holds the scripts back.
+
+*Found by reading the device build's disassembly, effect not yet measured:*
+places that fall into software double precision on this single-precision
+FPU. `riscv64-elf-objdump -dlr` on an object built with `-g`, looking for
+calls to `__*df*` and `__*di*` helpers, names the source lines. The ones on
+a per-frame path were the collision thresholds (three compares for every
+pixel a precise test looks at), the image_index sum for instances that are
+not animating, double constants pushed by scripts, and `div`.
+
 So, before optimising a draw, find out which it is. The benchmark report's
 "costliest draws" list (`sw_call_notes.h`) names the calls and times parts
 of them; three guesses at the tiled background were wrong before that list

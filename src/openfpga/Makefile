@@ -119,11 +119,11 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
           -Wno-sign-compare -Wno-missing-field-initializers
 
 # UT_OPT: extra optimisation flags for the device build, after the SDK's -O2
-# (the last -O wins); `make compare` builds Deltarune again with some, as
-# benchmark entries of their own. The CPU has a 32 KB instruction cache, and
-# the SDK aligns every function and loop to its 64-byte lines: the variants
-# are there to find out whether smaller or denser code runs the game's
-# scripts faster.
+# (the last -O wins), named in a benchmark report's title. Build with some
+# into an OBJ_DIR of their own and hand mkcompare.sh "<name>:<app.elf>" to
+# get a benchmark entry for it. Tried on the Pocket, 2026-10-09: -O3 and
+# -O3 -flto change nothing; -Os is 16 to 22% slower; taking off the SDK's
+# 64-byte alignment of functions and loops is 2 to 4% slower.
 UT_OPT ?=
 CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
 LDFLAGS += $(UT_OPT)
@@ -242,9 +242,7 @@ OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-Os" OBJ_DIR=$(ROOT)/.obj/deltarune-os BUILD_DIR=$(ROOT)/.obj/deltarune-os $(ROOT)/.obj/deltarune-os/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-falign-functions=4 -falign-loops=4" OBJ_DIR=$(ROOT)/.obj/deltarune-dense BUILD_DIR=$(ROOT)/.obj/deltarune-dense $(ROOT)/.obj/deltarune-dense/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "Os:$(ROOT)/.obj/deltarune-os/app.elf" "dense:$(ROOT)/.obj/deltarune-dense/app.elf"
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.
