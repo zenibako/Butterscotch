@@ -33,6 +33,7 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     txt->halfBuffer = NULL;
     txt->rowBounds = NULL;
     txt->halfRowBounds = NULL;
+    txt->halfFullBounds = NULL;
     txt->immutable = false;
     txt->halfCoverage = NULL;
     txt->solid = txt->halfSolid = 0;

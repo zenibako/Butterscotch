@@ -22,6 +22,10 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 /* Port-internal: a file stored in the audio pack (of_audio_system.c). */
 bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize);
 bool utAudioHasPackFile(const char *path);
+
+/* Sound off or on (a debug switch): muted, sounds run their course unheard and cost almost nothing. */
+void utAudioSetMuted(bool muted);
+bool utAudioMuted(void);
 void platformLog(const logType type, const char *format, va_list va) __attribute__((format(printf, 2, 0)));
 
 #endif

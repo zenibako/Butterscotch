@@ -22,7 +22,10 @@ static int swrPendingCount = 0; // tile pictures being held (see the tile run ca
 #include "sw_call_notes.h"
 bool swrCallNotes = false;
 bool swrDrawTimed = true;
+int swrProbeStop = 0, swrProbePath = 0;
 #ifdef SW_DRAW_PROFILE
+static bool swrProbing = false;   // no counting of calls, and so no audio top-ups, while the probe times them
+static int32_t swrProbeGridSprite = -1;
 #include "gettime.h"
 #define SWR_NOTE_MAX 192
 // A call is noted as numbers and only put into words when the notes are
@@ -424,6 +427,7 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
                                   float angleDeg, uint32_t color, float alpha)
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return;
+    SWR_PROBE_STOP(1);
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dwin = renderer->dataWin;
 
@@ -443,6 +447,7 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
         logError("%s: could not ensure texture is loaded, tpagIndex: %d, pageId: %d\n", __func__, tpagIndex, pageId);
         return;
     }
+    SWR_PROBE_STOP(2);
     
     int sx = tpag->sourceX - texture->originX;
     int sy = tpag->sourceY - texture->originY;
@@ -1228,6 +1233,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     localSurface.halfBuffer = NULL;
     localSurface.rowBounds = NULL;
     localSurface.halfRowBounds = NULL;
+    localSurface.halfFullBounds = NULL;
     localSurface.immutable = false;
     localSurface.halfCoverage = NULL;
     localSurface.solid = localSurface.halfSolid = 0;
@@ -1899,7 +1905,7 @@ static uint64_t swrProfLast = 0; // what the SWR_PROFILED that ended last was ch
         if (!swrDrawTimed) { \
             call; \
             swrProfLast = 0; \
-            platformDrawCount(kind); \
+            if (!swrProbing) platformDrawCount(kind); \
             break; \
         } \
         uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
@@ -2019,6 +2025,9 @@ static bool SWRenderer_drawSpriteGrid(Renderer* renderer, int32_t spriteIndex, c
     swrGrid.owner = swr;
     int g = swrGrid.count++;
     swrGrid.grids[g].sprite = spriteIndex;
+#ifdef SW_DRAW_PROFILE
+    swrProbeGridSprite = spriteIndex;
+#endif
     swrGrid.grids[g].cols = cols; swrGrid.grids[g].rows = rows;
     swrGrid.grids[g].first = swrGrid.cells;
     swrGrid.grids[g].x = x; swrGrid.grids[g].y = y;
@@ -2635,6 +2644,57 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
         }
     }
     return true;
+#endif
+}
+
+// See sw_call_notes.h. Leaves the pixels it drew in the buffer.
+void swrSpriteCostProbe(Renderer* renderer, int calls, int32_t* width, int32_t* height, uint32_t nanos[SWR_PROBE_STAGES], uint32_t* outside, int* path)
+{
+    *width = *height = 0;
+    *outside = 0;
+    *path = 0;
+    for (int s = 0; s < SWR_PROBE_STAGES; s++) nanos[s] = 0;
+#ifdef SW_DRAW_PROFILE
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    if (swr->fb == NULL || calls <= 0) return;
+    int32_t sprite = -1;
+    if (swrProbeGridSprite >= 0 && (uint32_t) swrProbeGridSprite < dw->sprt.count && Renderer_resolveTPAGIndex(dw, swrProbeGridSprite, 0) >= 0)
+        sprite = swrProbeGridSprite;
+    bool fromGrid = sprite >= 0;
+    for (uint32_t s = 0; !fromGrid && s < dw->sprt.count; s++) {
+        const Sprite* candidate = &dw->sprt.sprites[s];
+        if (candidate->textureCount == 0 || Renderer_resolveTPAGIndex(dw, (int32_t) s, 0) < 0) continue;
+        if (sprite < 0) sprite = (int32_t) s;
+        if (candidate->width == 40 && candidate->height == 40) { sprite = (int32_t) s; break; }
+    }
+    if (sprite < 0) return;
+    *width = (int32_t) dw->sprt.sprites[sprite].width;
+    *height = (int32_t) dw->sprt.sprites[sprite].height;
+    
+    bool skipped = swrSkipFrame, timed = swrDrawTimed, noted = swrCallNotes;
+    swrSkipFrame = false; swrDrawTimed = false; swrCallNotes = false;
+    swrProbing = true;
+    swrOverlayFlush(swr);
+    float x = (float) swr->viewX + 60.0f, y = (float) swr->viewY + 60.0f;
+    swrProbePath = 0;
+    Renderer_drawSprite(renderer, sprite, 0, x, y); // its texture loaded, its copies made
+    *path = swrProbePath;
+    for (int stage = SWR_PROBE_STAGES - 1; stage >= 0; stage--) {
+        swrProbeStop = stage;
+        uint64_t start = nowNanos();
+        for (int i = 0; i < calls; i++) Renderer_drawSprite(renderer, sprite, 0, x, y);
+        nanos[stage] = (uint32_t) ((nowNanos() - start) / (uint64_t) calls);
+    }
+    swrProbeStop = 0;
+    uint64_t start = nowNanos();
+    for (int i = 0; i < calls; i++) Renderer_drawSprite(renderer, sprite, 0, (float) swr->viewX - 10000.0f, y);
+    *outside = (uint32_t) ((nowNanos() - start) / (uint64_t) calls);
+    swrOverlayFlush(swr);
+    swrProbing = false;
+    swrSkipFrame = skipped; swrDrawTimed = timed; swrCallNotes = noted;
+#else
+    (void) renderer; (void) calls;
 #endif
 }
 

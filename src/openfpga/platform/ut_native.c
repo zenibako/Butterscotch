@@ -105,6 +105,77 @@ static bool purpleGrassDraw(VMContext *ctx) {
     return true;
 }
 
+/* Deltarune, gml_Script___view_get(prop, index): GameMaker's own shim for the
+ * old view_xview[] family, a chain of seventeen compares that ends in one or
+ * two built-in calls. Battle scripts call it some twenty times a frame.
+ *
+ *   switch (prop) { case 0: return camera_get_view_x(view_get_camera(index)); ... }
+ *
+ * Anything but a number from 0 to 16 for prop is left to the bytecode. */
+static bool viewGet(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    static const char *const names[17] = {
+        "camera_get_view_x", "camera_get_view_y", "camera_get_view_width", "camera_get_view_height", "camera_get_view_angle",
+        "camera_get_view_border_x", "camera_get_view_border_y", "camera_get_view_speed_x", "camera_get_view_speed_y",
+        "camera_get_view_target", "view_get_visible", "view_get_xport", "view_get_yport", "view_get_wport", "view_get_hport",
+        "view_get_camera", "view_get_surface_id",
+    };
+    static BuiltinFunc functions[17];
+    static int resolved = 0; /* 1: all found, -1: not all */
+    if (resolved == 0) {
+        resolved = 1;
+        for (int k = 0; k < 17; k++) {
+            functions[k] = VM_findBuiltin(ctx, names[k]);
+            if (functions[k] == NULL) resolved = -1;
+        }
+    }
+    if (resolved < 0 || argCount < 2 || args == NULL || !isNumber(args[0])) return false;
+
+    /* Cmp EQ against 0, 1, 2, ... in turn, as the bytecode does it. */
+    GMLReal prop = RValue_toReal(args[0]);
+    int which = -1;
+    for (int k = 0; k < 17 && which < 0; k++) {
+        if (GMLReal_fabs(prop - (GMLReal) k) <= GML_MATH_EPSILON) which = k;
+    }
+    if (which < 0) return false;
+
+    RValue index = args[1];
+    if (which <= 9) {
+        /* The camera's property: the view's camera first. */
+        RValue camera = functions[15](ctx, &index, 1);
+        *result = functions[which](ctx, &camera, 1);
+        RValue_free(&camera);
+    } else {
+        *result = functions[which](ctx, &index, 1);
+    }
+    return true;
+}
+
+/* Deltarune, gml_Script_scr_84_get_sprite(name):
+ *
+ *   return ds_map_find_value(global.chemg_sprite_map, name)
+ */
+static int32_t g_spriteMapVar = -1; /* the VM's own id for the name; utNativeInstall forgets it for each new VM */
+static bool get84Sprite(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    static BuiltinFunc find = NULL;
+    if (find == NULL) find = VM_findBuiltin(ctx, "ds_map_find_value");
+    if (g_spriteMapVar < 0) g_spriteMapVar = VM_getOrAllocateVarID(ctx, "chemg_sprite_map");
+    int32_t mapVar = g_spriteMapVar;
+    if (find == NULL || argCount < 1 || args == NULL || ctx->globalScopeInstance == NULL) return false;
+    RValue call[2] = { Instance_getSelfVar(ctx->globalScopeInstance, mapVar), args[0] };
+    *result = find(ctx, call, 2);
+    return true;
+}
+
+static const struct {
+    const char *name;
+    uint32_t length;
+    uint64_t hash;
+    VMNativeScript native;
+} g_nativeScripts[] = {
+    { "gml_Script___view_get", 1260, 0xeff822f793176fb9ull, viewGet },
+    { "gml_Script_scr_84_get_sprite", 84, 0x4121b98b835bc977ull, get84Sprite },
+};
+
 static const struct {
     const char *name;
     uint32_t length;
@@ -117,6 +188,7 @@ static const struct {
 void utNativeInstall(Runner *runner) {
     VMContext *vm = runner->vmContext;
     if (vm == NULL) return;
+    g_spriteMapVar = -1; /* a game_change gives a new VM, with ids of its own */
 #ifdef OF_PC
     /* UT_CODEHASH=<code entry> prints what a table row needs; UT_NO_NATIVE=1 leaves the bytecode in charge. */
     const char *ask = getenv("UT_CODEHASH");
@@ -132,5 +204,11 @@ void utNativeInstall(Runner *runner) {
         if (VM_codeHash(vm, g_natives[n].name, &length) == 0) continue; /* another game */
         bool installed = VM_setNativeCode(vm, g_natives[n].name, g_natives[n].length, g_natives[n].hash, g_natives[n].native);
         logInfo("Native: %s %s\n", g_natives[n].name, installed ? "installed" : "left to the interpreter (bytecode differs)");
+    }
+    for (size_t n = 0; n < sizeof(g_nativeScripts) / sizeof(g_nativeScripts[0]); n++) {
+        uint32_t length = 0;
+        if (VM_codeHash(vm, g_nativeScripts[n].name, &length) == 0) continue; /* another game */
+        bool installed = VM_setNativeScript(vm, g_nativeScripts[n].name, g_nativeScripts[n].length, g_nativeScripts[n].hash, g_nativeScripts[n].native);
+        logInfo("Native: %s %s\n", g_nativeScripts[n].name, installed ? "installed" : "left to the interpreter (bytecode differs)");
     }
 }

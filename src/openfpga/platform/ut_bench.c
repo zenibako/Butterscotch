@@ -384,6 +384,24 @@ void utBenchFrame(void) {
             utLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
         }
     }
+    /* One more measurement, after the report so far is safely in the file: it
+     * draws outside a frame, and a report must not be lost to it. */
+    utLogDump();
+    {
+        /* A sprite draw cut short at each stage in turn (sw_call_notes.h), microseconds a call:
+         * what it has cost by the renderer's door, with its texture found, on entering the
+         * drawing code, clipped, set up, with held layers let out, and whole. */
+        int width, height, path;
+        unsigned at[7], outside;
+        utPlatformSpriteCosts(&width, &height, at, &outside, &path);
+        #define US(n) (n) / 1000, (n) % 1000 / 10
+        utLogPrint("sprite %dx%d draw, us, way %d: door %u.%02u texture %u.%02u entered %u.%02u\n", width, height, path,
+                   US(at[1]), US(at[2]), US(at[3]));
+        utLogPrint("  clipped %u.%02u set up %u.%02u let out %u.%02u whole %u.%02u; out of view %u.%02u\n",
+                   US(at[4]), US(at[5]), US(at[6]), US(at[0]), US(outside));
+        #undef US
+    }
     utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
+    utLogDump();
     utDiagHalt("benchmark finished");
 }

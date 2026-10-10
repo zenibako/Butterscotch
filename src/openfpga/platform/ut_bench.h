@@ -49,6 +49,8 @@ int utPlatformForcedSkip(void);
  * through everything a draw does up to the first pixel and stops there; the
  * same draw without the renderer's own timing around it; asking how full the
  * audio queue is. */
+/* The renderer's sprite cost probe (swrSpriteCostProbe) on the game's renderer. */
+void utPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path);
 void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree);
 
 #endif /* UT_BENCH_H */

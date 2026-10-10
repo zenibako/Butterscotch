@@ -50,6 +50,7 @@ typedef struct
     // with it and live in its allocation.
     uint16_t* rowBounds;
     uint16_t* halfRowBounds;
+    uint16_t* halfFullBounds; // per row of the half-size copy, the longest run of texels standing for all four of theirs: [start, end)
 }
 SWTexture;
 

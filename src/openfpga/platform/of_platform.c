@@ -23,6 +23,7 @@
 #include "ut_menu.h"
 #include "ut_strings.h"
 #include "ut_native.h"
+#include "sw_call_notes.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -262,6 +263,15 @@ void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skipp
     volatile int sink = 0;
     for (int i = 0; i < CALLS; i++) sink += of_audio_free();
     *audioFree = (unsigned) ((nowNanos() - start) / CALLS);
+}
+
+void utPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path) {
+    int32_t w = 0, h = 0;
+    uint32_t stages[SWR_PROBE_STAGES] = { 0 }, out = 0;
+    *path = 0;
+    if (g_runner != NULL && g_runner->renderer != NULL) swrSpriteCostProbe(g_runner->renderer, 2000, &w, &h, stages, &out, path);
+    *width = (int) w; *height = (int) h; *outside = (unsigned) out;
+    for (int s = 0; s < SWR_PROBE_STAGES; s++) nanos[s] = (unsigned) stages[s];
 }
 
 static void decideFrameSkip(void) {
@@ -921,6 +931,13 @@ bool platformHandleEvents(void) {
         toggleScriptTimes();
         chordUsed = true;
         showNotice(scriptProfileOn() ? "Script times on" : "Script times off");
+    }
+    if (chording && of_btn_pressed(OF_BTN_DOWN)) {
+        bool mute = !utAudioMuted();
+        utAudioSetMuted(mute);
+        chordUsed = true;
+        showNotice(mute ? "Sound off" : "Sound on");
+        logInfo("Debug: sound %s\n", mute ? "off" : "on; what was playing is rough until it next starts");
     }
     if (chording && of_btn_pressed(OF_BTN_Y)) {
         bool saved = utLogDump();
