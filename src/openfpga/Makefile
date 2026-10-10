@@ -176,7 +176,11 @@ $(MKMUSIC): tools/mkmusic.c platform/ut_music_pack.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -w tools/mkmusic.c $(BS_VENDOR)/stb/vorbis/stb_vorbis.c -lm -o $@
 
-$(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg)
+# The extra inputs are "group:<n>:<file>" and "file:<file>"; a change in one
+# of those files rebuilds the pack too.
+MUSIC_EXTRA_FILES = $(wildcard $(foreach e,$(MUSIC_EXTRAS),$(lastword $(subst :, ,$(e)))))
+
+$(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg) $(MUSIC_EXTRA_FILES)
 	$(MKMUSIC) $(G)data.win $(G)music $@ $(MUSIC_RATE) $(MUSIC_EXTRAS)
 
 # Host tool: packs a desktop save folder into the save slot file and back.

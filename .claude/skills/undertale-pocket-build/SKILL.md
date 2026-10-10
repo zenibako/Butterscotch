@@ -78,7 +78,10 @@ cores to that same tree.
 Until 2026-10-08 the platform folder was `undertale`. A card set up before
 then has `Assets/undertale/`, `Saves/undertale/` and possibly
 `Cores/zenibako.Deltarune` with `Assets/deltarune/`; the save belongs in
-`Saves/butterscotch/common/` now.
+`Saves/butterscotch/common/` now. Before the first launch of the new
+core, copy the save files under `Saves/undertale/` there, or the game
+starts as if nothing had been saved. Don't copy over a file that is
+already there and newer: that one is progress made since.
 
 ## The cardinal rule: don't rebuild under a copy
 

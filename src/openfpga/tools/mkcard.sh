@@ -40,11 +40,20 @@ for entry in "${GAMES[@]}"; do
     IFS='|' read -r game instance dir data textures music <<< "$entry"
     elf="$ROOT/.obj/$game/app.elf"
     src="$PORT/$dir"
-    if [ -f "$elf" ] && [ -f "$src/data.win" ]; then
+    # The program cannot draw without its texture pack. The music pack is
+    # only built when the .ogg files are there, so a game may go without it.
+    if [ -f "$elf" ] && [ -f "$src/data.win" ] && [ ! -f "$src/textures.bin" ]; then
+        echo "mkcard: $game left out, $src/textures.bin is missing"
+    fi
+    if [ -f "$elf" ] && [ -f "$src/data.win" ] && [ -f "$src/textures.bin" ]; then
         cp "$elf" "$COMMON/$game.elf"
         cp "$src/data.win" "$COMMON/$data"
-        [ -f "$src/textures.bin" ] && cp "$src/textures.bin" "$COMMON/$textures"
-        [ -f "$src/music.bin" ] && cp "$src/music.bin" "$COMMON/$music"
+        cp "$src/textures.bin" "$COMMON/$textures"
+        if [ -f "$src/music.bin" ]; then
+            cp "$src/music.bin" "$COMMON/$music"
+        else
+            echo "mkcard: $game has no $src/music.bin, it will have no sound pack"
+        fi
         included="$included $game"
     else
         rm -f "$OUT/Assets/$NAME"/*/"$instance" "$COMMON/${game}_os.ini"

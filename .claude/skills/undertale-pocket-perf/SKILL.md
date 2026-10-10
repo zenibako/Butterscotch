@@ -240,28 +240,27 @@ reported every 60 frames in a form that fits the log overlay:
 
 ```
 scripts 6.4 ms 5210 ops /frame (41, 60 fr)
-  2.1  1830 obj_mainchara_Step_0
-  1.2  7218 obj_base_writer_Draw_0
+  2.1  1830   1.0 obj_mainchara_Step_0
+  1.2  7218   3.0 obj_base_writer_Draw_0
   ...
 ```
 
 First line: all game code together per frame, how many scripts ran, the
-window. Then the heaviest eight: ms per frame, VM instructions per frame,
-name (without `gml_Object_`/`gml_Script_`). Reading it:
-- Times are a script's own, not the scripts it calls, but they do include
-  the built-in functions it calls. A Draw event's time is mostly the
-  renderer; compare with the slow line's draw kinds before blaming the
-  interpreter.
-- ms divided by ops is the cost per instruction. A script far above the
-  others on that ratio is spending its time in built-ins, not bytecode.
+window. Then the heaviest twenty: ms per frame, VM instructions per frame,
+calls per frame, name (without `gml_Object_`/`gml_Script_`). Reading it:
+- Built-in functions are entries of their own since 2026-10-09 (0 ops),
+  so a time is an entry's own: neither the scripts nor the built-ins it
+  calls. A drawing built-in's time is the renderer's.
+- ms divided by ops is a script's cost per instruction, now without its
+  built-ins; look for those by name further down the list.
 - Desktop times are near zero and mean nothing; the ops column is the
   same on both, so the desktop can rank scripts by instructions for a
   scene before asking for a device run.
 - Timing every script call costs time itself. Take frame-time numbers
   with it off. The cost of having it compiled in but off (a test per
   instruction) has not been measured on the device.
-- The report is nine log lines every two seconds and pushes slow-frame
-  lines out of the 11-line overlay quickly.
+- The report is up to 21 log lines every two seconds, more than the
+  overlay shows: read it from the log file, not a screenshot.
 When asking the user for it: debug mode on, go to the scene, Select + X
 (the log comes up with it), wait a few seconds, screenshot.
 

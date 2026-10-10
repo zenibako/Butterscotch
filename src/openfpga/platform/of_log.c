@@ -119,6 +119,7 @@ bool utLogDump(void) {
                             while (drop < keptLen && kept[drop - 1] != '\n') drop++;
                             memmove(kept, kept + drop, keptLen - drop);
                             keptLen -= drop;
+                            if (keptLen + blockLen > UT_LOG_REPORTS) keptLen = 0; /* still too big: keep only this one */
                         }
                         memcpy(kept + keptLen, at, blockLen);
                         keptLen += blockLen;

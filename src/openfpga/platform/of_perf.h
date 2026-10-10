@@ -15,12 +15,13 @@ void utPerfShowLog(void);
  * enough for the log overlay:
  *
  *   scripts 6.4 ms 5210 ops /frame (41, 60 fr)
- *     2.1  1830 obj_mainchara_Step_0
+ *     2.1  1830   1.0 obj_mainchara_Step_0
  *     ...
  *
- * First line: all scripts together, how many ran, and the window. Then the
- * heaviest eight: ms per frame, VM instructions per frame, name. Times are
- * a script's own, without the scripts it calls. */
+ * First line: everything together, how many entries ran, and the window.
+ * Then the heaviest twenty: ms per frame, VM instructions per frame, calls
+ * per frame, name. Built-in functions are entries of their own, with no
+ * instructions. Times are an entry's own, without what it calls. */
 struct Profiler;
 void utPerfScriptReport(const struct Profiler *profiler, int frames);
 

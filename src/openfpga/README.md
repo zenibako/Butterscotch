@@ -134,8 +134,9 @@ screen names the hold on Select instead. With it on:
   stuck. Select alone acts on release. The state dumps (F11, F12) are not
   mapped: they print far more than the device can show.
 - Select + X turns script times on or off: every two seconds the log gets
-  the eight game scripts that took the most time, as milliseconds and VM
-  instructions per frame (Butterscotch's GML profiler). The log overlay
+  the twenty game scripts and built-in functions that took the most time, as
+  milliseconds, VM instructions and calls per frame (Butterscotch's GML
+  profiler). The log overlay
   comes up with it. Measuring slows the game a little while it is on.
 
 Anything that would otherwise leave the screen unchanged says what it did

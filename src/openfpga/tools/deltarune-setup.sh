@@ -13,6 +13,8 @@
 set -e
 SRC="$1"; CHAPTER="${2:-1}"
 [ -n "$SRC" ] || { echo "usage: $0 <game folder> [chapter]"; exit 2; }
+# The links live in games/deltarune/, so a relative path would point nowhere from there.
+SRC="$(cd "$SRC" 2>/dev/null && pwd)" || { echo "$1 is not a folder"; exit 1; }
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/games/deltarune"
 
