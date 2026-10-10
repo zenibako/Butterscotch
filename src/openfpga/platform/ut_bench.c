@@ -384,9 +384,8 @@ void utBenchFrame(void) {
             utLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
         }
     }
-    utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
-    /* One more measurement, after the report is safely in the file: it draws
-     * outside a frame, and a report must not be lost to it. */
+    /* One more measurement, after the report so far is safely in the file: it
+     * draws outside a frame, and a report must not be lost to it. */
     utLogDump();
     {
         /* A sprite draw cut short at each stage in turn (sw_call_notes.h), microseconds a call:
@@ -402,5 +401,7 @@ void utBenchFrame(void) {
                    US(at[4]), US(at[5]), US(at[6]), US(at[0]), US(outside));
         #undef US
     }
+    utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
+    utLogDump();
     utDiagHalt("benchmark finished");
 }
