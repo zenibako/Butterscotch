@@ -21,20 +21,40 @@ static int swrPendingCount = 0; // tile pictures being held (see the tile run ca
 // See sw_call_notes.h.
 #include "sw_call_notes.h"
 bool swrCallNotes = false;
+bool swrDrawTimed = true;
 #ifdef SW_DRAW_PROFILE
 #include "gettime.h"
 #define SWR_NOTE_MAX 192
-static SWCallNote swrNotes[SWR_NOTE_MAX];
-static uint32_t swrNoteHashes[SWR_NOTE_MAX]; // of the descriptions, to find one without comparing them all
+// A call is noted as numbers and only put into words when the notes are
+// taken: formatting a description per call cost more than most calls did
+// (about 0.15 ms each on the device), which the benchmark then measured.
+enum { SWR_NOTE_NAMED, SWR_NOTE_SPRITE, SWR_NOTE_TILED, SWR_NOTE_RECT };
+enum { SWR_NOTE_TURNED = 1, SWR_NOTE_TINTED = 2, SWR_NOTE_OUTLINE = 4 };
+typedef struct {
+    uint8_t kind, flags;
+    int16_t alpha;      // in hundredths
+    int32_t a, b, c, d; // sprite: width, height, tenths of x scale. tiled: its tpag. rect: x, y, width, height
+    uint32_t color;
+    const char* name;   // SWR_NOTE_NAMED: a string that outlives the notes
+} SWNoteKey;
+static struct { SWNoteKey key; uint32_t hash, calls; uint64_t nanos; } swrNotes[SWR_NOTE_MAX];
 static int swrNoteCount = 0;
 static uint32_t swrNoteMissed = 0;
 
-static void swrNote(uint64_t nanos, const char* what)
+static void swrNoteKeyed(uint64_t nanos, const SWNoteKey* key)
 {
     uint32_t hash = 2166136261u;
-    for (int c = 0; what[c] != '\0' && c < (int) sizeof(swrNotes[0].what) - 1; c++) hash = (hash ^ (uint8_t) what[c]) * 16777619u;
+    hash = (hash ^ ((uint32_t) key->kind | (uint32_t) key->flags << 8 | (uint32_t) (uint16_t) key->alpha << 16)) * 16777619u;
+    hash = (hash ^ (uint32_t) key->a) * 16777619u;
+    hash = (hash ^ (uint32_t) key->b) * 16777619u;
+    hash = (hash ^ (uint32_t) key->c) * 16777619u;
+    hash = (hash ^ (uint32_t) key->d) * 16777619u;
+    hash = (hash ^ key->color) * 16777619u;
+    hash = (hash ^ (uint32_t) (uintptr_t) key->name) * 16777619u;
     for (int i = 0; i < swrNoteCount; i++) {
-        if (swrNoteHashes[i] != hash || strncmp(swrNotes[i].what, what, sizeof(swrNotes[i].what) - 1) != 0) continue;
+        const SWNoteKey* have = &swrNotes[i].key;
+        if (swrNotes[i].hash != hash || have->kind != key->kind || have->flags != key->flags || have->alpha != key->alpha || have->a != key->a ||
+            have->b != key->b || have->c != key->c || have->d != key->d || have->color != key->color || have->name != key->name) continue;
         swrNotes[i].calls++;
         swrNotes[i].nanos += nanos;
         return;
@@ -49,11 +69,36 @@ static void swrNote(uint64_t nanos, const char* what)
     } else {
         swrNoteCount++;
     }
-    swrNoteHashes[slot] = hash;
-    SWCallNote* note = &swrNotes[slot];
-    snprintf(note->what, sizeof(note->what), "%s", what);
-    note->calls = 1;
-    note->nanos = nanos;
+    swrNotes[slot].key = *key;
+    swrNotes[slot].hash = hash;
+    swrNotes[slot].calls = 1;
+    swrNotes[slot].nanos = nanos;
+}
+
+static void swrNote(uint64_t nanos, const char* name)
+{
+    SWNoteKey key = { .kind = SWR_NOTE_NAMED, .name = name };
+    swrNoteKeyed(nanos, &key);
+}
+
+static void swrNoteWords(const SWNoteKey* key, char* what, size_t size)
+{
+    switch (key->kind) {
+        case SWR_NOTE_SPRITE:
+            snprintf(what, size, "sprite %dx%d x%d.%d a%d%s%s", (int) key->a, (int) key->b, (int) key->c / 10, abs((int) key->c) % 10, (int) key->alpha,
+                     (key->flags & SWR_NOTE_TURNED) ? " turned" : "", (key->flags & SWR_NOTE_TINTED) ? " tinted" : "");
+            break;
+        case SWR_NOTE_TILED:
+            snprintf(what, size, "tiled tpag %d a%d", (int) key->a, (int) key->alpha);
+            break;
+        case SWR_NOTE_RECT:
+            snprintf(what, size, "rect %d,%d %dx%d a%d c%06x%s", (int) key->a, (int) key->b, (int) key->c, (int) key->d, (int) key->alpha,
+                     (unsigned) key->color, (key->flags & SWR_NOTE_OUTLINE) ? " outline" : "");
+            break;
+        default:
+            snprintf(what, size, "%s", key->name != nullptr ? key->name : "?");
+            break;
+    }
 }
 
 int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
@@ -65,7 +110,10 @@ int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
             if (swrNotes[i].calls != 0 && (heaviest < 0 || swrNotes[i].nanos > swrNotes[heaviest].nanos)) heaviest = i;
         }
         if (heaviest < 0) break;
-        out[taken++] = swrNotes[heaviest];
+        swrNoteWords(&swrNotes[heaviest].key, out[taken].what, sizeof(out[taken].what));
+        out[taken].calls = swrNotes[heaviest].calls;
+        out[taken].nanos = swrNotes[heaviest].nanos;
+        taken++;
         swrNotes[heaviest].calls = 0;
     }
     if (missed != NULL) *missed = swrNoteMissed;
@@ -75,9 +123,10 @@ int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
 }
 // Times a statement that is part of some call, under a name of its own.
 #define SWR_NOTED(what, statement) do { \
-        uint64_t noteStart_ = swrCallNotes ? nowNanos() : 0; \
+        bool noted_ = swrCallNotes && swrDrawTimed; \
+        uint64_t noteStart_ = noted_ ? nowNanos() : 0; \
         statement; \
-        if (swrCallNotes) swrNote(nowNanos() - noteStart_, what); \
+        if (noted_) swrNote(nowNanos() - noteStart_, what); \
     } while (0)
 #else
 int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed) { (void) out; (void) max; if (missed != NULL) *missed = 0; return 0; }
@@ -548,6 +597,16 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
     
     // Still one colour if the flush has nothing to draw; a fill with that colour is then redundant.
     bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
+#if PIXEL_SIZE == 16
+    // A translucent fill of the whole buffer over a held clear and its tiled
+    // passes, with nothing else held: it joins them (swrFillHold).
+    if (!outline && nothingHeld && swr->clearHeld && swr->tiledHeldCount > 0 && swrPendingCount == 0 && !swrGridHeld() &&
+        swr->fb == swr->mainFb && swr->fbPitch == swr->mainWidth && swr->blendMode == bm_normal &&
+        swrIntAlpha(alpha) <= 253 && swrFillCoversWhole(swr, x1, y1, x2, y2) && swrFillHold(swr, pxcolor, swrIntAlpha(alpha))) {
+        swr->uniformValid = false;
+        return;
+    }
+#endif
     bool kept = swr->uniformValid && nothingHeld;
     // A clear still held is handed to the fill, which replaces it if it covers as much.
     bool clearTaken = kept && !outline && swr->clearHeld;
@@ -863,7 +922,7 @@ void swrClearSettle(SWRenderer* swr)
 {
     if (!swr->clearHeld) return;
     swr->clearHeld = false;
-    if (!swr->mainFb) { swr->tiledHeldCount = 0; return; }
+    if (!swr->mainFb) { swr->tiledHeldCount = 0; swrFillHeldDrop(); return; }
     if (swr->tiledHeldCount > 0) {
         SWR_NOTED("  of which: held clear and tiled written", swrTiledHeldWrite(swr, swr->clearHeldColor));
         return;
@@ -1828,10 +1887,21 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
 #ifdef SW_DRAW_PROFILE
 #include "gettime.h"
 void platformDrawProfile(int kind, uint64_t nanos);
+void platformDrawCount(int kind);
 enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
 static uint64_t swrProfInner = 0;
 static uint64_t swrProfLast = 0; // what the SWR_PROFILED that ended last was charged
+// Reading the clock is not free everywhere (17 us on openfpgaOS, a trap into
+// the kernel, against 6 us for the rest of a sprite draw that draws nothing),
+// so the platform says when calls are to be timed (swrDrawTimed); otherwise
+// they are only counted.
 #define SWR_PROFILED(kind, call) do { \
+        if (!swrDrawTimed) { \
+            call; \
+            swrProfLast = 0; \
+            platformDrawCount(kind); \
+            break; \
+        } \
         uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
         call; \
         uint64_t span_ = nowNanos() - start_; \
@@ -2231,6 +2301,7 @@ void swrHeldUnderDiscard(SWRenderer* swr)
     // Tiled passes held over the clear go, and that clear with them: it is no longer one colour to work from.
     if (swr->tiledHeldCount > 0) {
         swr->tiledHeldCount = 0;
+        swrFillHeldDrop();
         swr->clearHeld = false;
     }
     swrPendingCount = 0;
@@ -2574,13 +2645,12 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
 static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
-    if (swrCallNotes && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
+    if (swrCallNotes && swrDrawTimed && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
         const TexturePageItem* tpag = &renderer->dataWin->tpag.items[tpagIndex];
-        char what[56];
-        snprintf(what, sizeof(what), "sprite %ux%u x%d.%d a%d%s%s", (unsigned) tpag->targetWidth, (unsigned) tpag->targetHeight,
-                 (int) xscale, (int) (fabsf(xscale) * 10.0f) % 10, (int) (alpha * 100.0f), angleDeg != 0.0f ? " turned" : "",
-                 (color & 0xFFFFFF) != 0xFFFFFF ? " tinted" : "");
-        swrNote(swrProfLast, what);
+        SWNoteKey key = { .kind = SWR_NOTE_SPRITE, .alpha = (int16_t) (alpha * 100.0f), .a = tpag->targetWidth, .b = tpag->targetHeight,
+                          .c = (int32_t) (xscale * 10.0f),
+                          .flags = (uint8_t) ((angleDeg != 0.0f ? SWR_NOTE_TURNED : 0) | ((color & 0xFFFFFF) != 0xFFFFFF ? SWR_NOTE_TINTED : 0)) };
+        swrNoteKeyed(swrProfLast, &key);
     }
 }
 
@@ -2602,10 +2672,9 @@ static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, f
 static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
-    if (swrCallNotes) {
-        char what[56];
-        snprintf(what, sizeof(what), "tiled tpag %d a%d", (int) tpagIndex, (int) (alpha * 100.0f));
-        swrNote(swrProfLast, what);
+    if (swrCallNotes && swrDrawTimed) {
+        SWNoteKey key = { .kind = SWR_NOTE_TILED, .alpha = (int16_t) (alpha * 100.0f), .a = tpagIndex };
+        swrNoteKeyed(swrProfLast, &key);
     }
 }
 
@@ -2626,13 +2695,12 @@ static bool SWRenderer_profDrawTileLayer(Renderer* renderer, Background* tileset
 static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
 {
     SWR_PROFILED(SWR_PROF_RECT, SWRenderer_drawRectangle(renderer, x1, y1, x2, y2, color, alpha, outline));
-    if (swrCallNotes) {
+    if (swrCallNotes && swrDrawTimed) {
         // Where it is on the screen, not in the room, so that a scrolling view does not make each frame's a new one.
         const SWRenderer* swr = (const SWRenderer*) renderer;
-        char what[56];
-        snprintf(what, sizeof(what), "rect %d,%d %dx%d a%d c%06x%s", (int) x1 - swr->viewX, (int) y1 - swr->viewY, (int) (x2 - x1), (int) (y2 - y1),
-                 (int) (alpha * 100.0f), (unsigned) (color & 0xFFFFFF), outline ? " outline" : "");
-        swrNote(swrProfLast, what);
+        SWNoteKey key = { .kind = SWR_NOTE_RECT, .alpha = (int16_t) (alpha * 100.0f), .a = (int) x1 - swr->viewX, .b = (int) y1 - swr->viewY,
+                          .c = (int) (x2 - x1), .d = (int) (y2 - y1), .color = color & 0xFFFFFF, .flags = (uint8_t) (outline ? SWR_NOTE_OUTLINE : 0) };
+        swrNoteKeyed(swrProfLast, &key);
     }
 }
 #endif

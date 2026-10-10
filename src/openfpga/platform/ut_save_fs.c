@@ -114,7 +114,7 @@ static void loadArchive(UtSaveFs *fs) {
 
 static bool storeArchive(UtSaveFs *fs) {
     if (g_volatile) return true;
-    uint32_t total = sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry);
+    uint32_t total = (uint32_t) (sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry));
     for (uint32_t i = 0; i < fs->fileCount; i++) total += fs->files[i].size;
     if (total > UT_SAVE_MAX_BYTES) {
         logWarn("Saves: %u bytes will not fit in the save slot.\n", (unsigned) total);
@@ -128,7 +128,7 @@ static bool storeArchive(UtSaveFs *fs) {
     header->totalBytes = total;
 
     UtSaveEntry *entries = (UtSaveEntry *) (archive + sizeof(UtSaveHeader));
-    uint32_t offset = sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry);
+    uint32_t offset = (uint32_t) (sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry));
     for (uint32_t i = 0; i < fs->fileCount; i++) {
         memcpy(entries[i].name, fs->files[i].name, UT_SAVE_NAME_LEN);
         entries[i].size = fs->files[i].size;

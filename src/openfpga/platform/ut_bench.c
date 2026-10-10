@@ -103,9 +103,16 @@ static int g_sectionNoteCount[UT_BENCH_SECTIONS];
 static uint32_t g_sectionNotesMissed[UT_BENCH_SECTIONS];
 static unsigned g_firstFrameMs = 0;
 
+/* Draw calls and mixing are timed on one frame in this many: timing them
+ * costs 3 to 5 ms of a battle frame on the device, which the game does not
+ * pay, so the frame times come out about half a millisecond high. The tables
+ * of where the time went are averages over the timed frames. */
+#define UT_BENCH_DETAIL_EVERY 8
+
 void utBenchStart(void) {
     g_running = true;
     g_startNanos = nowNanos();
+    utPerfDetailEvery(UT_BENCH_DETAIL_EVERY);
     utPlatformSetInputScript(g_script);
 #ifdef UT_GAME_DELTARUNE
     utPlatformSetJumps(g_jumps, (int) (sizeof(g_jumps) / sizeof(g_jumps[0])));
@@ -263,6 +270,7 @@ void utBenchFrame(void) {
 
     g_running = false;
     swrCallNotes = false;
+    utPerfDetailEvery(0);
     /* A build with optimisation flags of its own (UT_OPT) says so in the title. */
     const char *note = "";
 #ifdef UT_BUILD_NOTE
@@ -299,12 +307,20 @@ void utBenchFrame(void) {
     utLogPrint("work = total minus display flip\n");
     ioReport();
     asyncReport();
+    {
+        unsigned clock, draw, drawUntimed, audioFree;
+        utPlatformCallCosts(&clock, &draw, &drawUntimed, &audioFree);
+        utLogPrint("call costs, us: clock %u.%02u, skipped sprite draw %u.%02u (%u.%02u without its timing), audio queue %u.%02u\n",
+                   clock / 1000, clock % 1000 / 10, draw / 1000, draw % 1000 / 10, drawUntimed / 1000, drawUntimed % 1000 / 10,
+                   audioFree / 1000, audioFree % 1000 / 10);
+    }
     /* Where each section's time went, in ms per frame. step: game code; draw:
      * all drawing, of which the next five are sprites, sprite parts and
      * tiles, text, tiled backgrounds and rectangles (what is left of draw is
      * none of those: clears, held layers let out by another kind of draw,
      * the runner's own work); snd: the audio update; out: presenting. The
-     * second table is how many of each kind of draw call a frame makes. */
+     * second table is how many of each kind of draw call a frame makes.
+     * The five kinds are averages over the frames timed in detail. */
     #define TENTHS(nanos, frames) (unsigned) ((nanos) / ((uint64_t) (frames) * 1000000u)), \
                                   (unsigned) ((nanos) / ((uint64_t) (frames) * 100000u) % 10u)
     utLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
@@ -312,11 +328,32 @@ void utBenchFrame(void) {
     for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
         const UtPerfTotals *t = &g_sectionTotals[i];
         int frames = g_sections[i].lastFrame - firstFrame;
+        int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
         utLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", g_sections[i].tag,
                    TENTHS(t->phaseNanos[UT_PHASE_STEP], frames), TENTHS(t->phaseNanos[UT_PHASE_DRAW], frames),
-                   TENTHS(t->drawNanos[0], frames), TENTHS(t->drawNanos[1], frames), TENTHS(t->drawNanos[2], frames),
-                   TENTHS(t->drawNanos[3], frames), TENTHS(t->drawNanos[4], frames),
+                   TENTHS(t->drawNanos[0], detail), TENTHS(t->drawNanos[1], detail), TENTHS(t->drawNanos[2], detail),
+                   TENTHS(t->drawNanos[3], detail), TENTHS(t->drawNanos[4], detail),
                    TENTHS(t->phaseNanos[UT_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[UT_PHASE_OUT], frames));
+        firstFrame = g_sections[i].lastFrame;
+    }
+    /* Sound, in ms per frame wherever in the frame it ran (the draw profiler
+     * feeds the queue too, so this is not the snd column): mix is all of
+     * mixing, of which voices is decoding and summing them and write is
+     * handing the samples to the OS; music is reading it from the card; fx
+     * is loading sound effects. Then output sample pairs per frame, and how
+     * many voices were playing on average, in tenths. */
+    utLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
+    firstFrame = 0;
+    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+        const UtPerfTotals *t = &g_sectionTotals[i];
+        int frames = g_sections[i].lastFrame - firstFrame;
+        int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
+        uint64_t pairs = t->loadNanos[UT_LOAD_MIX_PAIRS];
+        unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[UT_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
+        utLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", g_sections[i].tag,
+                   TENTHS(t->loadNanos[UT_LOAD_MIX], detail), TENTHS(t->loadNanos[UT_LOAD_MIX_VOICES], detail),
+                   TENTHS(t->loadNanos[UT_LOAD_MIX_WRITE], detail), TENTHS(t->loadNanos[UT_LOAD_MUSIC], frames),
+                   TENTHS(t->loadNanos[UT_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
         firstFrame = g_sections[i].lastFrame;
     }
     #undef TENTHS
@@ -335,7 +372,8 @@ void utBenchFrame(void) {
      * "of which" lines are parts of other calls and are counted in those too. */
     firstFrame = 0;
     for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
-        uint64_t frames = (uint64_t) (g_sections[i].lastFrame - firstFrame);
+        /* Notes are only taken on the frames timed in detail. */
+        uint64_t frames = g_sectionTotals[i].detailFrames > 0 ? g_sectionTotals[i].detailFrames : 1;
         firstFrame = g_sections[i].lastFrame;
         if (i < UT_BENCH_SECTIONS - 4 || g_sectionNoteCount[i] == 0) continue;
         utLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", g_sections[i].tag, (unsigned) g_sectionNotesMissed[i]);

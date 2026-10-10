@@ -75,10 +75,16 @@ void utPerfAddSleep(uint64_t nanos);
  * text, tiled backgrounds and rectangles. All times in ms. */
 #define UT_DRAW_KINDS 5
 void platformDrawProfile(int kind, uint64_t nanos);
+void platformDrawCount(int kind);
 #define UT_DRAW_TICK_NANOS 5000000u
 void platformBusyTick(void);
 void utAudioRoomChange(void);
-typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOAD_MUSIC, UT_LOAD_KINDS } UtLoadKind;
+/* UT_LOAD_MIX is all of mixing, wherever in the frame it ran; MIX_VOICES
+ * (decoding and summing the voices) and MIX_WRITE (handing the samples to
+ * the OS) are parts of it. The last two are counts, not times: output sample
+ * pairs mixed, and those times the voices playing. */
+typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOAD_MUSIC,
+               UT_LOAD_MIX_VOICES, UT_LOAD_MIX_WRITE, UT_LOAD_MIX_PAIRS, UT_LOAD_MIX_VOICE_PAIRS, UT_LOAD_KINDS } UtLoadKind;
 typedef enum { UT_PHASE_OTHER, UT_PHASE_STEP, UT_PHASE_AUDIO, UT_PHASE_DRAW, UT_PHASE_OUT, UT_PHASES } UtPhase;
 #define UT_PERF_SLOW_FRAME_MS 150
 void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);
@@ -89,7 +95,17 @@ typedef struct {
     uint64_t drawNanos[UT_DRAW_KINDS];
     uint64_t drawCalls[UT_DRAW_KINDS];
     uint64_t loadNanos[UT_LOAD_KINDS];
+    uint32_t frames, detailFrames;
 } UtPerfTotals;
+/* Detail: the time of each draw call and of the parts of mixing. It takes
+ * clock reads by the hundred, at 17 us each on the device (3 to 5 ms of a
+ * battle frame), so it is only taken on frames someone will look at: all of
+ * them while an overlay is up or the platform asks (debug mode), every nth
+ * for a benchmark, none otherwise. drawNanos and the mix times in the totals
+ * are of detailFrames frames; everything else of frames. */
+extern bool utPerfDetail;
+void utPerfDetailEvery(int frames); /* 0: only as above */
+void utPerfDetailAlways(bool always);
 void utPerfTakeTotals(UtPerfTotals *out);
 /* Marks the start of a phase; time since the previous mark goes to the
  * phase that was running. */

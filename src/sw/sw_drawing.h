@@ -43,10 +43,13 @@ bool swrTiledHold(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, i
                   int firstX, int firstY, int tileW, int tileH, int countX, int countY,
                   uint32_t color, float alphaf);
 void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color);
+bool swrFillHold(SWRenderer* swr, uintpixel_t pxcolor, int alphaInt);
+void swrFillHeldDrop(void);
 void swrGridFlush(SWRenderer* swr);
 bool swrGridHeld(void);
 void swrHeldUnderDiscard(SWRenderer* swr);
 bool swrFillCoversMain(SWRenderer* swr, float x1, float y1, float x2, float y2, float alpha);
+bool swrFillCoversWhole(SWRenderer* swr, float x1, float y1, float x2, float y2);
 void swrOverlayFlushForState(SWRenderer* swr);
 void swrDrawSprite(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha);
 void swrDrawSpriteRotated(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, float angleDeg, float pivotX, float pivotY);

@@ -205,6 +205,11 @@ export-save: $(MKSAVE)
 	@[ -n "$(EXPORT_DIR)" ] || { echo "export-save: give EXPORT_DIR=<folder to write the save files into>"; exit 1; }
 	$(MKSAVE) unpack $(SAVE_FILE) "$(EXPORT_DIR)"
 
+# The program alone. It needs no game data, so it is what a machine without
+# any (the CI) can build: `make elf && make GAME=deltarune elf`.
+elf: $(OBJ_DIR)/app.elf
+	@$(SIZE) $<
+
 # Build ELF, then assemble SD card image in build/<app>/
 all: $(OBJ_DIR)/app.elf $(GAME_PACKS) release
 	@$(SIZE) $<
@@ -327,4 +332,4 @@ clean: sdk-clean
 	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops undertale_pc undertale_pc_asan undertale_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all release debug copy compare compare-copy package test asan ops lint clean
+.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean

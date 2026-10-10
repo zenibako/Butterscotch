@@ -10,7 +10,7 @@ description: Build, package and deploy the Undertale port for the Analogue Pocke
 ```
 undertale-pocket/                 not a git repo; holds the pieces below
 ├── env.sh                        source before any RISC-V build on macOS
-├── butterscotch-pocket/          THIS REPOSITORY: fork of ButterscotchRunner/Butterscotch, branch `pocket`
+├── butterscotch-pocket/          THIS REPOSITORY: fork of ButterscotchRunner/Butterscotch; trunk is `main` (it was `pocket` until 2026-10-10)
 │   ├── src/                      Butterscotch itself; src/sw is the software renderer the port draws with
 │   └── src/openfpga/             THE PORT
 │       ├── main.c, Makefile, README.md
@@ -82,6 +82,24 @@ then has `Assets/undertale/`, `Saves/undertale/` and possibly
 core, copy the save files under `Saves/undertale/` there, or the game
 starts as if nothing had been saved. Don't copy over a file that is
 already there and newer: that one is progress made since.
+
+## Keeping `src/openfpga/README.md` true
+
+That README says what is here and how to use it, and nothing that a day of
+work changes. It went out of date twice by carrying measurements and
+walk-throughs of the renderer.
+
+- **No measurements in it**: no frame times, load times, sizes or counts
+  read off a run. Those go in the perf skill, dated and with the commit, or
+  nowhere. A number may appear only as a definition (a frame is 33 ms) or
+  next to the name that sets it (`MUSIC_RATE`, `TEXTURE_RESERVE_MB`).
+- **No account of how the renderer does something**: that belongs in the
+  comment over the code, and the README points at the file.
+- **Update it in the same commit** as a change to anything a reader acts on:
+  controls and debug chords, `make` targets, environment variables, file and
+  slot names on the card, benchmark entries, what a log line means.
+- Its outline comments and the sections marked "To be written" are the
+  user's to write. Leave their wording alone; say so if one has gone stale.
 
 ## The cardinal rule: don't rebuild under a copy
 

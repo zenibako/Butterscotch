@@ -429,52 +429,134 @@ static bool nextSample(const UtAudioSystem *ut, UtVoice *voice, int32_t *out) {
     return true;
 }
 
-/* Adds `pairs` output samples of one voice into the mono mix buffer. */
+/* What a 4-bit code adds to or takes from the predictor at each step size:
+ * utAdpcmDecode's sum of step fractions, worked out once. Looked up it is one
+ * load where the decoder had three branches on bits of the sound itself,
+ * which the CPU cannot predict. */
+static uint16_t g_adpcmDiff[89 * 8];
+
+static void adpcmDiffInit(void) {
+    for (int index = 0; index < 89; index++) {
+        int32_t step = utAdpcmStepTable[index];
+        for (int code = 0; code < 8; code++) {
+            int32_t diff = step >> 3;
+            if (code & 4) diff += step;
+            if (code & 2) diff += step >> 1;
+            if (code & 1) diff += step >> 2;
+            g_adpcmDiff[index * 8 + code] = (uint16_t) diff;
+        }
+    }
+}
+
+/* Adds `pairs` output samples of one voice into the mono mix buffer.
+ * The decoder, resampler and gain state are kept in locals for as long as
+ * samples come straight out of the buffer, which is nearly always; the end
+ * of the buffer or of the track goes through nextSample, with the voice
+ * brought up to date before and read back after. */
 static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int pairs) {
+    int32_t sample0 = voice->sample0, sample1 = voice->sample1;
+    uint32_t frac = voice->frac;
+    const uint32_t step = voice->step;
+    int32_t gainNow = voice->gainNow;
+    const int32_t gainTarget = voice->gainTarget, gainStep = voice->gainStepPerPair;
+
+    const uint32_t sampleCount = ut->tracks[voice->track].sampleCount;
+    const uint8_t *const data = voice->data;
+    const uint32_t bufferLen = voice->bufferLen;
+    uint32_t bufferPos = voice->bufferPos, samplesDecoded = voice->samplesDecoded, pendingCode = voice->pendingCode;
+    bool havePendingCode = voice->havePendingCode;
+    int32_t predictor = voice->adpcm.predictor, stepIndex = voice->adpcm.stepIndex;
+#define UT_VOICE_STORE() do { \
+        voice->bufferPos = bufferPos; voice->samplesDecoded = samplesDecoded; voice->pendingCode = pendingCode; \
+        voice->havePendingCode = havePendingCode; voice->adpcm.predictor = predictor; voice->adpcm.stepIndex = stepIndex; \
+    } while (0)
+
     for (int i = 0; i < pairs; i++) {
-        while (voice->frac >= 65536) {
+        while (frac >= 65536) {
             int32_t next;
-            if (!nextSample(ut, voice, &next)) {
-                if (!voice->finished) return; /* starved: resume here once refilled */
-                next = 0;
-                if (voice->sample1 == 0) {
-                    voice->active = false;
-                    return;
+            if (samplesDecoded < sampleCount && (havePendingCode || bufferPos < bufferLen)) {
+                uint32_t code;
+                if (havePendingCode) {
+                    code = pendingCode;
+                    havePendingCode = false;
+                } else {
+                    uint8_t byte = data[bufferPos++];
+                    code = byte & 0x0F;
+                    pendingCode = byte >> 4;
+                    havePendingCode = true;
+                }
+                int32_t diff = g_adpcmDiff[stepIndex * 8 + (int32_t) (code & 7)];
+                int32_t sign = -(int32_t) (code >> 3);
+                predictor += (diff ^ sign) - sign;
+                if (predictor > 32767) predictor = 32767;
+                if (predictor < -32768) predictor = -32768;
+                stepIndex += utAdpcmIndexTable[code];
+                if (stepIndex < 0) stepIndex = 0;
+                if (stepIndex > 88) stepIndex = 88;
+                samplesDecoded++;
+                next = predictor;
+            } else {
+                UT_VOICE_STORE();
+                bool got = nextSample(ut, voice, &next);
+                bufferPos = voice->bufferPos; samplesDecoded = voice->samplesDecoded; pendingCode = voice->pendingCode;
+                havePendingCode = voice->havePendingCode; predictor = voice->adpcm.predictor; stepIndex = voice->adpcm.stepIndex;
+                if (!got) {
+                    if (!voice->finished) goto out; /* starved: resume here once refilled */
+                    next = 0;
+                    if (sample1 == 0) {
+                        voice->active = false;
+                        goto out;
+                    }
                 }
             }
-            voice->sample0 = voice->sample1;
-            voice->sample1 = next;
-            voice->frac -= 65536;
+            sample0 = sample1;
+            sample1 = next;
+            frac -= 65536;
         }
 
-        int32_t sample = voice->sample0 + (((voice->sample1 - voice->sample0) * (int32_t) (voice->frac >> 4)) >> 12);
-        voice->frac += voice->step;
+        int32_t sample = sample0 + (((sample1 - sample0) * (int32_t) (frac >> 4)) >> 12);
+        frac += step;
 
-        if (voice->gainNow != voice->gainTarget) {
-            int32_t delta = voice->gainTarget - voice->gainNow;
-            if (delta > voice->gainStepPerPair) delta = voice->gainStepPerPair;
-            if (delta < -voice->gainStepPerPair) delta = -voice->gainStepPerPair;
-            voice->gainNow += delta;
+        if (gainNow != gainTarget) {
+            int32_t delta = gainTarget - gainNow;
+            if (delta > gainStep) delta = gainStep;
+            if (delta < -gainStep) delta = -gainStep;
+            gainNow += delta;
         }
-        mix[i] += (sample * (voice->gainNow >> 8)) / UT_GAIN_ONE;
+        mix[i] += (sample * (gainNow >> 8)) / UT_GAIN_ONE;
     }
+out:
+    UT_VOICE_STORE();
+#undef UT_VOICE_STORE
+    voice->sample0 = sample0;
+    voice->sample1 = sample1;
+    voice->frac = frac;
+    voice->gainNow = gainNow;
 }
 
 static void mixAndWrite(UtAudioSystem *ut, int pairs) {
     static int32_t mix[UT_MIX_CHUNK_PAIRS];
     static int16_t out[UT_MIX_CHUNK_PAIRS * 2];
     int32_t master = (int32_t) (ut->masterGain * (float) UT_GAIN_ONE);
-    uint64_t mixStart = nowNanos();
+    const bool timed = utPerfDetail; /* a clock read costs more than mixing a few samples */
+    uint64_t mixStart = timed ? nowNanos() : 0;
+    uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0;
+    int allPairs = pairs;
 
     while (pairs > 0) {
         int chunk = pairs < UT_MIX_CHUNK_PAIRS ? pairs : UT_MIX_CHUNK_PAIRS;
         memset(mix, 0, (size_t) chunk * sizeof(int32_t));
 
         if (!ut->allPaused) {
+            uint64_t voicesStart = timed ? nowNanos() : 0;
             for (int v = 0; v < UT_MAX_VOICES; v++) {
                 UtVoice *voice = &ut->voices[v];
-                if (voice->active && !voice->paused) mixVoice(ut, voice, mix, chunk);
+                if (voice->active && !voice->paused) {
+                    mixVoice(ut, voice, mix, chunk);
+                    voicePairs += (uint64_t) chunk;
+                }
             }
+            if (timed) voicesNanos += nowNanos() - voicesStart;
         }
 
         for (int i = 0; i < chunk; i++) {
@@ -482,7 +564,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
             int32_t sample = mix[i];
             if (sample > 65535) sample = 65535;
             if (sample < -65535) sample = -65535;
-            sample = (sample * master) / UT_GAIN_ONE;
+            if (master != UT_GAIN_ONE) sample = (sample * master) / UT_GAIN_ONE;
             if (sample > 32767) sample = 32767;
             if (sample < -32768) sample = -32768;
             out[i * 2] = (int16_t) sample;
@@ -490,10 +572,16 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
         }
 
         if (ut->dump != NULL) fwrite(out, sizeof(int16_t) * 2, (size_t) chunk, ut->dump);
+        uint64_t writeStart = timed ? nowNanos() : 0;
         of_audio_write(out, chunk);
+        if (timed) writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
     }
-    utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
+    if (timed) utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
+    utPerfAddLoad(UT_LOAD_MIX_VOICES, voicesNanos);
+    utPerfAddLoad(UT_LOAD_MIX_WRITE, writeNanos);
+    utPerfAddLoad(UT_LOAD_MIX_PAIRS, (uint64_t) allPairs);
+    utPerfAddLoad(UT_LOAD_MIX_VOICE_PAIRS, voicePairs);
 }
 
 /* Keeps the output queue topped up to the target. Does no file I/O, so it is
@@ -607,6 +695,7 @@ static void utInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem)
     UtAudioSystem *ut = (UtAudioSystem *) audio;
     arrput(audio->audioGroups, dataWin);
 
+    adpcmDiffInit();
     of_audio_init();
     ut->queueCapacity = of_audio_free();
     ut->masterGain = 1.0f;

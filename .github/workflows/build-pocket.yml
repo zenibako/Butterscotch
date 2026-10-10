@@ -1,0 +1,88 @@
+name: Pocket
+
+# The Analogue Pocket port (src/openfpga). A workflow of its own, so that
+# Butterscotch's build.yml stays as upstream has it.
+#
+# No game data is available here, so this builds what needs none: the RISC-V
+# program for each game, the desktop test binaries, and the port's lint. The
+# SD card tree and the texture and music packs are built from a reader's own
+# data.win and are not made here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # The openfpgaOS SDK commit the port is built against. The build only reads it.
+  SDK_REPOSITORY: openfpgaOS/openfpgaSDK
+  SDK_REF: a408ddc12aed0dfaa4aa22c06af82f829db77126
+  # Compile with the runner's own cross compiler: the SDK's container mounts
+  # only the SDK, and the port lives outside it.
+  USE_SDK_CONTAINER: "0"
+
+jobs:
+  build-pocket:
+    name: Build (Analogue Pocket)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: butterscotch
+
+      # Next to the repository, which is where src/openfpga/Makefile looks for it.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.SDK_REPOSITORY }}
+          ref: ${{ env.SDK_REF }}
+          path: openfpgaSDK
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf libsdl2-dev pkg-config
+          riscv64-unknown-elf-gcc --version | head -1
+
+      - name: Build the RISC-V programs
+        working-directory: butterscotch/src/openfpga
+        run: |
+          make elf
+          make GAME=deltarune elf
+
+      - name: Check the interpreter loop is in block RAM
+        working-directory: butterscotch/src/openfpga
+        run: |
+          # UT_FAST_LOOP puts executeLoop in the app's uncached block RAM, below
+          # the SDRAM the rest of the program is linked into.
+          for game in undertale deltarune; do
+            line=$(riscv64-unknown-elf-nm -S out/.obj/$game/app.elf | grep -E ' executeLoop(\..*)?$' || true)
+            if [ -z "$line" ]; then
+              echo "::error::executeLoop not found in $game's program"
+              exit 1
+            fi
+            echo "$game: $line"
+            address=$((0x$(echo "$line" | awk '{print $1}')))
+            if [ "$address" -ge $((0x10000000)) ]; then
+              echo "::error::executeLoop of $game is in SDRAM, not block RAM"
+              exit 1
+            fi
+          done
+
+      - name: Build the desktop test binaries
+        working-directory: butterscotch/src/openfpga
+        run: |
+          make undertale_pc
+          make GAME=deltarune deltarune_pc
+
+      - name: Lint the port's own files
+        working-directory: butterscotch/src/openfpga
+        run: make lint
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: butterscotch-pocket-programs
+          path: |
+            butterscotch/src/openfpga/out/.obj/undertale/app.elf
+            butterscotch/src/openfpga/out/.obj/deltarune/app.elf
+          if-no-files-found: error
