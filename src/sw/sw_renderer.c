@@ -15,7 +15,7 @@
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
 static void swrFlushPendingClear(SWRenderer* swr);
-static int swrPendingCount; // tile pictures being held (see the tile run cache)
+static int swrPendingCount = 0; // tile pictures being held (see the tile run cache)
 
 // ===[ Call notes ]===
 // See sw_call_notes.h.
@@ -1867,7 +1867,6 @@ static struct {
     int32_t subimgs[SWR_GRID_MAX_CELLS];
 } swrGrid;
 
-static int swrPendingCount; // tile pictures being held (see the tile run cache below)
 
 bool swrGridHeld(void) { return swrGrid.count > 0; }
 
@@ -2000,8 +1999,7 @@ static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 // are held and drawn together (swrTileRunsFlush): for each block of the
 // screen, drawing starts at the topmost picture that is solid there, since
 // nothing under it can show.
-static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES];
-static int swrPendingCount = 0;
+static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES]; // swrPendingCount, at the top of the file, counts them
 static SWRenderer* swrPendingOwner = NULL;
 
 // The same pictures held together frame after frame are flattened into one,
@@ -2440,7 +2438,7 @@ typedef struct {
 static SWTileset swrTilesets[SWR_TILESETS];
 bool swrTileLayerFast = true;
 
-static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
+MAYBE_UNUSED static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
 {
     SWTileset* spare = &swrTilesets[0];
     for (int e = 0; e < SWR_TILESETS; e++) {
@@ -2470,7 +2468,7 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
     if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
     SWRenderer* swr = (SWRenderer*) renderer;
 #if PIXEL_SIZE != 16
-    (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
+    (void) swr; (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
     return false;
 #else
     DataWin* dwin = renderer->dataWin;
