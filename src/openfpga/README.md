@@ -1,5 +1,21 @@
 # Butterscotch Pocket: Undertale on openfpgaOS (Analogue Pocket / MiSTer)
 
+<p align="center"><img src="docs/banner.png" alt="Butterscotch Pocket menu banner: a pixel heart above the words BUTTERSCOTCH POCKET" width="521"></p>
+
+<!--
+Introduction: one short paragraph, then the game-data notice.
+- What is this, in one sentence? (Whose runner is it a port of, and to what device?)
+- Which game and version does it run today?
+- What is this repository in relation to Butterscotch, and where does the port live in it?
+  (A fork, on the `pocket` branch; src/openfpga/ is the port and src/openfpga/dist/ the core definition.
+  The openfpgaOS SDK is a separate checkout the build reads.)
+- Upstream lists out-of-tree ports under "Community Ports" in its README; the two there open with a
+  short note about the port and then carry the original README below. This file follows that shape.
+- The notice a reader must not miss: no game data is included; what do they have to supply?
+- The sentence that stood in the root README: "This is a port of Butterscotch for the Analogue Pocket, targeted at running Undertale v0.8."
+  (The paragraph below says v1.08; which is right?)
+-->
+
 Butterscotch built as an openfpgaOS app: this directory is the platform
 layer and the Undertale core around it. It uses Butterscotch's software
 renderer (draft PR #429, carried on this branch) drawing RGB555 straight
@@ -16,13 +32,41 @@ You must supply your own `data.win` from Undertale v1.08.
 | `../` | Butterscotch itself; `../sw/` is the software renderer |
 | `dist/` | Pocket core definition (core, data slots, instance JSON) |
 | `out/` | Everything the build writes; not tracked |
-| `tools/mkart.py` | Draws the menu banner and core icon into `dist/` (run by hand after changing the art; needs Pillow). `docs/banner.png` is its preview of the banner, used in the root README |
+| `tools/mkart.py` | Draws the menu banner and core icon into `dist/` (run by hand after changing the art; needs Pillow). `docs/banner.png` is its preview of the banner, shown at the top of this file |
 
 The openfpgaOS SDK is a dependency, not part of this repository. Clone
 https://github.com/openfpgaOS/openfpgaSDK next to this repository, or pass
 `SDK_ROOT=<its path>` to `make`. The build only reads it.
 
 ## Build
+
+<!--
+- Which host have you built on, and what does it need installed?
+- Why are GNU sed and USE_SDK_CONTAINER=0 needed here? (One line each; env.sh has the reasons.)
+- What does the reader need to supply, and where does each file go?
+- Which commit of the openfpgaOS SDK have you built against? (The port was developed on a408ddc.)
+- Where should they look for the rest? (src/openfpga/README.md covers controls, packs, saves,
+  the benchmark and diagnostics.)
+The commands below match the layout as of 2026-10-08; check they still match how you build.
+-->
+
+From nothing, with the SDK cloned next to this repository:
+
+```bash
+git clone -b pocket https://github.com/zenibako/Butterscotch.git butterscotch-pocket
+git clone https://github.com/openfpgaOS/openfpgaSDK.git
+cd butterscotch-pocket/src/openfpga
+
+# Your own game data: data.win (named game.ios inside the macOS app) and
+# the folder holding the game's .ogg files.
+cp /path/to/data.win data.win
+ln -s /path/to/folder-with-ogg-files music
+
+export PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$PATH"
+export USE_SDK_CONTAINER=0
+make            # builds the core and its data packs into out/build/pocket/butterscotch/
+make copy       # copies it to a mounted Pocket SD card
+```
 
 On macOS, put Homebrew's GNU sed first on `PATH` and set
 `USE_SDK_CONTAINER=0` first (the SDK's scripts need GNU sed, and this builds
@@ -290,6 +334,19 @@ is hidden by then and each line written to it cost about 20 ms.
 
 ## Status
 
+<!--
+- What works on a real Pocket today? What have you actually played through yourself?
+- Which numbers are worth quoting, and from which benchmark run? The table that was here was out of date.
+  Latest measurements (2026-10-08, v0.7 runtime, os25), for reference:
+    start-up to first frame 18.9 s
+    intro, menu, naming 28.7 ms of work per frame; first room 27.7 ms (the game needs 33.3)
+    Flowey's dialogue about 39 ms; battle at native 640x480 about 47 ms
+    battle smoothed to 320x240 (L) was 28.3 ms in an earlier run
+    Ruins outside Toriel's house about 25 ms
+- What is still rough? (Which scenes run below full speed? What happens on a room change now?)
+- What is untested? (MiSTer; anything past the opening hours.)
+-->
+
 - Runs on an Analogue Pocket (firmware 2.7, os25 bitstream): boots, plays
   the intro, name entry works, and the first room and menu are playable.
 - Use the os25 bitstream. The SDK's runtime `os.bin` paired with os20
@@ -299,3 +356,37 @@ is hidden by then and each line written to it cost about 20 ms.
 - Loading `data.win` takes about 19 s on the Pocket before the first frame.
 - The ruins room outside Toriel's house runs at about 25 ms of work per frame
   (33 ms is full speed). Each room change still has one frame of 150-250 ms.
+
+## Download
+
+<!--
+- Is there a build to download yet, and where? Upstream links nightly builds of each platform from
+  its CI; the community ports attach a binary to a GitHub release. Neither is set up here yet.
+- What can a download contain, given that no game data may be included? (The core, and the two
+  tools that build textures.bin and music.bin from the reader's own data.win.)
+-->
+
+_To be written._
+
+## Licences and credits
+
+<!--
+- Who wrote Butterscotch, and under what licence? What does that licence mean for a core built
+  from this repository?
+- What does this branch add to Butterscotch? (The software renderer from draft PR #429, this port's
+  changes to it, and src/openfpga.)
+- What licence is the openfpgaOS SDK under, and does any of it ship in a built core?
+- Is there anyone else to credit?
+-->
+
+_To be written._
+
+## Disclaimer
+
+<!--
+- Butterscotch's own README has a disclaimer about having no association with the software it
+  runs and not providing it. Do you want to follow its wording or write your own?
+- What must a reader understand about game files before they start?
+-->
+
+_To be written._
