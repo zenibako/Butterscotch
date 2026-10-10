@@ -194,6 +194,11 @@ void platformExit(void) {
     emscripten_webgl_destroy_context(gWebGLContextHandle);
 }
 
+// The web build draws with GL; the software renderer is linked in but never shows a frame here.
+void platformSetNextFramebuffer(uint32_t* framebuffer, int width, int height, int bpp) {
+    (void)framebuffer, (void)width, (void)height, (void)bpp;
+}
+
 bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
     if (!outW || !outH) return false;
     if (!gInitialized) return false;
