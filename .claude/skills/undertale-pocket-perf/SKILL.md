@@ -396,7 +396,8 @@ returns says which a build has.) What follows from it:
   Work out the colour without reading where the layers under it are known
   (`swrFillHold`, the held clear, `swrTiledHeldWrite`'s row buffer), or put
   the rows together in ordinary memory and copy them out.
-- If reads must happen, two pixels per 32-bit load halves them.
+- If reads must happen, two pixels per 32-bit load halves them (with 16-bit
+  pixels, as the Pocket build uses).
 - Scattered single-pixel stores are each a round trip too; consecutive
   stores are what is cheap.
 
