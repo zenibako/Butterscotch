@@ -2013,7 +2013,13 @@ bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy,
         const uintpixel_t* srcline = &buffer[(srcY + row) * pitch + srcX];
         const uint8_t* covline = coverage != NULL ? &coverage[(srcY + row) * pitch + srcX] : NULL;
         uintpixel_t* dstline = &swr->fb[y * swr->fbPitch];
-        for (int copyX = 0, left = originX; copyX < countX && left + from < maxX; copyX++, left += stepX)
+        // Start at the first copy whose stretch reaches the port: in a wide room most lie to its left.
+        int copyX = 0, left = originX;
+        if (left + to <= minX) {
+            copyX = (minX - to - left) / stepX + 1;
+            left += copyX * stepX;
+        }
+        for (; copyX < countX && left + from < maxX; copyX++, left += stepX)
         {
             int x0 = left + from, x1 = left + to;
             if (x1 <= minX) continue;
