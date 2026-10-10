@@ -61,10 +61,11 @@ MAYBE_UNUSED static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY
     int halfW = (texture->width + phaseX + 1) / 2, halfH = (texture->height + phaseY + 1) / 2;
     size_t texels = (size_t) halfW * halfH;
     // One allocation: the texels, each row's bounds, then room for the coverage should it be needed.
-    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + (size_t) halfH * 2 * sizeof(uint16_t) + texels);
+    uintpixel_t* half = (uintpixel_t*) malloc(texels * sizeof(uintpixel_t) + (size_t) halfH * 4 * sizeof(uint16_t) + texels);
     if (half == NULL) return false; // may fit another time
     uint16_t* bounds = (uint16_t*) (half + texels);
-    uint8_t* coverage = (uint8_t*) (bounds + (size_t) halfH * 2);
+    uint16_t* fullBounds = bounds + (size_t) halfH * 2;
+    uint8_t* coverage = (uint8_t*) (fullBounds + (size_t) halfH * 2);
     bool partial = false;
     
     for (int hy = 0; hy < halfH; hy++)
@@ -109,9 +110,22 @@ MAYBE_UNUSED static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY
         }
         bounds[hy * 2] = (uint16_t) first;
         bounds[hy * 2 + 1] = (uint16_t) end;
+        // The longest run of whole texels: a draw at full opacity copies it as it is.
+        int bestStart = 0, bestEnd = 0, runStart = -1;
+        for (int hx = 0; hx <= halfW; hx++) {
+            bool whole = hx < halfW && coverage[hy * halfW + hx] == 4;
+            if (whole && runStart < 0) runStart = hx;
+            if (!whole && runStart >= 0) {
+                if (hx - runStart > bestEnd - bestStart) { bestStart = runStart; bestEnd = hx; }
+                runStart = -1;
+            }
+        }
+        fullBounds[hy * 2] = (uint16_t) bestStart;
+        fullBounds[hy * 2 + 1] = (uint16_t) bestEnd;
     }
     texture->halfBuffer = half;
     texture->halfRowBounds = bounds;
+    texture->halfFullBounds = fullBounds;
     texture->halfCoverage = partial ? coverage : NULL;
     texture->halfSolid = 2;
     if (!partial) {
@@ -979,8 +993,22 @@ static void swrDrawSpriteInternal(
                 int from = (int) halved.halfRowBounds[(sy + y) * 2] - sx, to = (int) halved.halfRowBounds[(sy + y) * 2 + 1] - sx;
                 if (from < 0) from = 0;
                 if (to > dw) to = dw;
+                // Untinted at full opacity, a texel standing for all four of its own is stored as it
+                // is: the row's longest run of those is copied, and only what is left on either side
+                // (a sprite's edge) is gone through a pixel at a time. The loop below does the left
+                // side, the copy, then the right side.
+                int copyFrom = to, copyTo = to;
+                if (alpha > 253 && (tintColor & 0x7FFF) == 0x7FFF) {
+                    copyFrom = (int) halved.halfFullBounds[(sy + y) * 2] - sx;
+                    copyTo = (int) halved.halfFullBounds[(sy + y) * 2 + 1] - sx;
+                    if (copyFrom < from) copyFrom = from;
+                    if (copyTo > to) copyTo = to;
+                    if (copyTo - copyFrom < 4) copyFrom = copyTo = to; // not worth a call
+                    else memcpy(&dstline[copyFrom], &srcline[copyFrom], (size_t) (copyTo - copyFrom) * sizeof(uintpixel_t));
+                }
                 for (int x = from; x < to; x++)
                 {
+                    if (x == copyFrom) { x = copyTo - 1; continue; }
                     uint32_t covered = covline[x];
                     if (covered == 0) continue;
                     uintpixel_t color = srcline[x];
