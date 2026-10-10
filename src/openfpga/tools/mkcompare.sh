@@ -62,16 +62,15 @@ if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
     write_ini deltarune_bnsc.ini deltarune.elf "--bench-smooth --scripts --draw-every 100000" os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bnsc.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing scripts.json"
-    # The same program built with other compiler flags, timed without its drawing (see above): the
-    # game's scripts are what holds battles back, and this is the shortest run that shows them.
+    # The same program built another way ("<tag>:<its app.elf>" arguments), on the Speed benchmark.
     for build in "$@"; do
         tag="${build%%:*}"; elf="${build#*:}"
         [ -n "$elf" ] && [ -f "$elf" ] || continue
         lower=$(printf '%s' "$tag" | tr 'A-Z' 'a-z' | tr -d ' ')
         cp "$elf" "$COMMON/deltarune_$lower.elf"
-        write_ini "deltarune_b$lower.ini" "deltarune_$lower.elf" "--bench-smooth --draw-every 100000" os25
+        write_ini "deltarune_b$lower.ini" "deltarune_$lower.elf" "--bench-smooth" os25
         sed -e "s/\"deltarune_os\.ini\"/\"deltarune_b$lower.ini\"/" -e "s/\"deltarune\.elf\"/\"deltarune_$lower.elf\"/" "$DR_INSTANCE" \
-            > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing $tag.json"
+            > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark speed $tag.json"
     done
 fi
 

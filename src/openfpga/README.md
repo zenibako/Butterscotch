@@ -182,12 +182,17 @@ config's `ARGS=`, or `UT_DEBUG=1` on desktop):
   off, and Select + Y saves the log. A Select used for one of these does not
   open the menu. The state dumps (F11, F12) are not mapped: they print far
   more than the device can show.
+- Select + Down turns sound off or on ("Sound off", "Sound on"), to see
+  what sound costs: muted, nothing is decoded, mixed or read from the card,
+  and sounds still run their course so that the game is not left waiting
+  for one. Music that was playing when sound comes back is rough until it
+  next starts. `--mute` in `ARGS=` starts with sound off.
 
 Anything that would otherwise leave the screen unchanged says what it did
 in the top right corner for two seconds, in the game's font: "Next room",
-"Previous room", "interact = 0", "Script times on" and "off", "Log saved",
-and "Resumed". A paused game shows "Paused, frame N" for as long as it is
-paused, and each step advances N.
+"Previous room", "interact = 0", "Sound off" and "on", "Script times on" and
+"off", "Log saved", and "Resumed". A paused game shows "Paused, frame N"
+for as long as it is paused, and each step advances N.
 
 ## Resolution
 

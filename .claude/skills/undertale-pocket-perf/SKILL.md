@@ -399,3 +399,36 @@ returns says which a build has.) What follows from it:
 - If reads must happen, two pixels per 32-bit load halves them.
 - Scattered single-pixel stores are each a round trip too; consecutive
   stores are what is cheap.
+
+## Sprite-path layout experiment closed (2026-10-10)
+
+*Measured on the Pocket, f42a23c, v0.7/os25, Deltarune Speed benchmark:*
+the ordinary build's 40x40 sprite probe was 19.87 us outside the view and
+73.48 us inside; the adjacent-function build was 19.56 us and 78.34 us.
+Battle work changed from 67.8/80.2/62.8 to 67.5/80.0/62.7 ms; field work
+stayed at 44.4 ms. The hot build booted and completed. One probe-bearing
+run per build, so there is no run-to-run variance estimate.
+
+The proposed criterion was a result well below 19.9 us outside the view;
+this layout failed it and is dropped as a performance direction. It does
+not establish that instruction-cache misses are absent elsewhere: the
+probe is 2000 repeated renderer calls after warming the sprite, bypassing
+the GML builtin and VM. No cache-miss counters are measured.
+
+See the [result and exact device-report excerpts](../../../src/openfpga/docs/2026-10-10-sprite-layout-results.md).
+
+## Code layout is not it (2026-10-10)
+
+*Measured, and it overturned a hypothesis:* a small sprite draw costs about
+15 us on the Pocket between the renderer's door and finding itself out of
+view, for some 150 instructions, and its functions are spread over 900 KB of
+a 1.25 MB program with a 32 KB instruction cache. Linking those sixteen
+functions side by side (`ld --section-ordering-file`, 14.7 KB in one
+stretch) changed nothing: the sprite probe read 19.56 against 19.87 us out
+of view and 78.3 against 73.5 in view, and every section's frame time was
+within 0.5 ms. So instruction-cache conflicts among a draw's own functions
+are not where that time goes. (Together with `-Os`, unaligned code and the
+loop in block RAM, that is four layout experiments with nothing to show.)
+The benchmark now ends with a staged probe instead (`swrSpriteCostProbe`):
+the same draw cut short at six points, each timed over 2000 calls with
+audio top-ups off, on a grid's own sprite when one was drawn.

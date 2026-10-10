@@ -181,6 +181,10 @@ typedef struct VMContext VMContext;
 // up as for the entry; returns false to have the bytecode run after all, which
 // it may only do before changing anything.
 typedef bool (*VMNativeCode)(VMContext* ctx);
+// The same for a script that is called with arguments and returns a value (see VM_setNativeScript):
+// it is given the call's arguments, which stay the caller's, and leaves the value in *result.
+// Returning false leaves the call to the bytecode, which must then find nothing changed.
+typedef bool (*VMNativeScript)(VMContext* ctx, RValue* args, int32_t argCount, RValue* result);
 
 // ===[ Builtin Functions Manager ]===
 #ifndef BUILTINFUNC_DEFINED
@@ -295,6 +299,7 @@ struct VMContext {
     Profiler* profiler;
     // Per code index: a routine that does what the entry's bytecode does, or nullptr (see VM_setNativeCode). The array itself is nullptr until one is set.
     VMNativeCode* nativeCode;
+    VMNativeScript* nativeScript; // the same for called scripts (see VM_setNativeScript)
 
 #ifdef ENABLE_VM_OPCODE_PROFILER
     bool opcodeProfilerEnabled;
@@ -357,6 +362,7 @@ uint64_t VM_codeHash(VMContext* ctx, const char* codeName, uint32_t* length);
 // bytecode is exactly the one the routine was written against (its length and
 // VM_codeHash). Returns whether it was installed.
 bool VM_setNativeCode(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeCode native);
+bool VM_setNativeScript(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeScript native);
 
 // Writes to the VMContext's scriptArgs, resizing the underlying array if needed
 // The "val" will be RValue_makeIndependent(val), it won't be freed
