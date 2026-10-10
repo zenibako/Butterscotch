@@ -3870,6 +3870,15 @@ bool VM_setNativeCode(VMContext* ctx, const char* codeName, uint32_t length, uin
     return true;
 }
 
+bool VM_setNativeScript(VMContext* ctx, const char* codeName, uint32_t length, uint64_t hash, VMNativeScript native) {
+    uint32_t actualLength = 0;
+    uint64_t actualHash = VM_codeHash(ctx, codeName, &actualLength);
+    if (actualHash == 0 || actualLength != length || actualHash != hash) return false;
+    if (ctx->nativeScript == nullptr) ctx->nativeScript = (VMNativeScript*) safeCalloc(ctx->dataWin->code.count, sizeof(VMNativeScript));
+    ctx->nativeScript[findCodeIndexByName(ctx, codeName)] = native;
+    return true;
+}
+
 RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
@@ -3939,6 +3948,19 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
 RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t argCount) {
     require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+
+    // A native stand-in answers the call without a frame being set up for it.
+    if (ctx->nativeScript != nullptr && ctx->nativeScript[codeIndex] != nullptr) {
+        RValue nativeResult = RValue_makeUndefined();
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_enter(ctx->profiler, code->name);
+#endif
+        bool done = ctx->nativeScript[codeIndex](ctx, args, argCount, &nativeResult);
+#ifdef ENABLE_VM_GML_PROFILER
+        Profiler_exit(ctx->profiler);
+#endif
+        if (done) return nativeResult;
+    }
 
     // Save current frame
     CallFrame frame = {0};
@@ -4633,6 +4655,8 @@ void VM_free(VMContext* ctx) {
 
     free(ctx->nativeCode);
     ctx->nativeCode = nullptr;
+    free(ctx->nativeScript);
+    ctx->nativeScript = nullptr;
 
     // Free profiler (no-op if never enabled)
     Profiler_destroy(ctx->profiler);
