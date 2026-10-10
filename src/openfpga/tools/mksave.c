@@ -77,7 +77,7 @@ static int pack(const char *folder, const char *outPath) {
     uint8_t *archive = calloc(1, UT_SAVE_SLOT_BYTES);
     UtSaveHeader *header = (UtSaveHeader *) archive;
     UtSaveEntry *entries = (UtSaveEntry *) (archive + sizeof(UtSaveHeader));
-    uint32_t offset = sizeof(UtSaveHeader) + count * sizeof(UtSaveEntry);
+    uint32_t offset = (uint32_t) (sizeof(UtSaveHeader) + count * sizeof(UtSaveEntry));
 
     for (uint32_t i = 0; i < count; i++) {
         char path[1024];
