@@ -2025,7 +2025,7 @@ static uint8_t swrRunBlockKind(const SWTileRun* run, int unitX, int unitY)
 static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
 {
     const uint8_t* at = (const uint8_t*) data;
-    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * 1099511628211ull;
+    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * BS_FNV64_PRIME;
     return hash;
 }
 
@@ -2119,7 +2119,7 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
 // been held together before, are too big together, or there is no room.
 static SWTileRun* swrPendingFlattened(SWRenderer* swr)
 {
-    uint64_t key = 14695981039346656037ull;
+    uint64_t key = BS_FNV64_OFFSET;
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
     for (int i = 0; i < swrPendingCount; i++) {
         const SWTileRun* run = swrPendingRuns[i];
@@ -2271,7 +2271,7 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f) shift = 1;
     else return false;
     
-    uint64_t key = 14695981039346656037ull;
+    uint64_t key = BS_FNV64_OFFSET;
     int32_t mode[2] = { shift, swrFavorSpeed ? 1 : 0 };
     key = swrTileRunHash(key, mode, sizeof(mode));
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
@@ -2298,7 +2298,7 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
             (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height, 0, 0,
         };
         memcpy(&words[9], &offsets[t * 2], 2 * sizeof(float));
-        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * 1099511628211ull;
+        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * BS_FNV64_PRIME;
     }
     
     // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
