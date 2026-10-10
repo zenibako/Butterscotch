@@ -110,6 +110,26 @@ Texture page loads take about 1.3 s for a 1024x2048 page: a cold read of
 the run-length-encoded page plus the decode. That is the "brief freeze"
 when a dialogue box or new room first appears.
 
+### Memory reads are the cost, not arithmetic (2026-10-09)
+
+A data cache miss costs about 1.9 microseconds (roughly 190 cycles at
+100 MHz); a line is 16 pixels. Writes that do not read first are cheap: a
+320x240 fill is about 2 ms. *Measured* three ways that agree: a tiled pass
+that touched about 3,100 scattered pixels of the framebuffer took 6 ms; a
+full-screen translucent fill takes 15 to 19 ms at 320x240 even when it only
+reads and compares; copying a cached tile picture to the screen costs about
+110 ns a pixel. `-O3` and LTO changed nothing (within 2%), which fits.
+
+So a draw is slow in proportion to the cache lines it *reads*, in the
+framebuffer or a texture, far more than to what it computes per pixel.
+Before optimising arithmetic, ask whether the read can be avoided: the
+buffer's colour known without reading it (`uniformValid`, the tiled pass's
+`tiledPrev`), work dropped before it is drawn (held layers discarded under
+an opaque full-screen fill), fewer passes over the screen. The benchmark
+report's "costliest draws" list (`sw_call_notes.h`) names the calls to look
+at; three guesses at the tiled background were wrong before that list
+existed.
+
 ## Findings from play sessions (2026-10-07)
 
 - **Stacked fade overlays.** Undertale's door script creates a full-screen
