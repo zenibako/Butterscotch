@@ -775,23 +775,35 @@ static void refillStreams(UtAudioSystem *ut) {
  * their course, since the game asks whether they are playing and where they
  * have got to: each frame moves every voice on by the game's time, as a seek
  * would. A seek cannot carry the decoder's state, so a sound that was playing
- * when the mute came off is rough for a moment, as after any seek. */
+ * when the mute came off is rough for a moment, as after any seek. A short
+ * sound started while muted is not loaded until the mute comes off. */
 
-
+/* mixVoice keeps samplesDecoded * 65536 + frac moving by exactly step per
+ * output pair: fetching a sample adds 65536 to one side and takes it from the
+ * other. So a skip moves that sum on and splits it again, putting the decoder
+ * on the even sample at or below it (a byte boundary) and leaving any odd
+ * sample in frac for the mixer to fetch, as it would have. */
 static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
     const UtMusicTrack *track = &ut->tracks[voice->track];
-    uint64_t ahead = (uint64_t) voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
-    uint64_t sample = (uint64_t) voice->samplesDecoded + (ahead >> 16);
-    voice->frac = (uint32_t) (ahead & 0xFFFF) + 65536; /* as after a seek: the next output sample fetches a new one */
-    if (sample >= track->sampleCount) {
-        if (!voice->loop || track->sampleCount == 0) {
+    uint64_t count = track->sampleCount;
+    uint64_t position = ((uint64_t) voice->samplesDecoded << 16) + voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
+    uint64_t sample = position >> 16;
+    if (sample >= count) {
+        if (voice->loop && count > 0) {
+            position %= count << 16; /* the mixer starts over on needing sample count */
+            sample = position >> 16;
+        } else if (count == 0 || sample >= count + 2) {
+            /* The mixer fetches a zero after the last sample, then stops. */
             voice->finished = true;
             voice->active = false;
             return;
+        } else {
+            sample = count; /* nothing left to decode; the next fetch ends the voice */
+            voice->finished = true;
         }
-        sample %= track->sampleCount;
     }
-    sample &= ~(uint64_t) 1;
+    if (sample < count) sample &= ~(uint64_t) 1;
+    voice->frac = (uint32_t) (position - (sample << 16));
     if (voice->streamSlot >= 0) {
         voice->bufferLen = voice->bufferPos = 0;
         voice->fileBytePos = (uint32_t) (sample / 2);
@@ -805,8 +817,23 @@ static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
     voice->gainNow = voice->gainTarget;
 }
 
+/* Whether voices are skipped rather than mixed. A desktop dump mixes even when
+ * muted, so its output is the same either way. */
+static bool skipping(const UtAudioSystem *ut) {
+    return g_muted && ut->dump == NULL;
+}
+
 void utAudioSetMuted(bool muted) {
     g_muted = muted;
+    if (muted || g_audio == NULL || g_audio->file == NULL) return;
+    /* Load the short sounds that were started while muted. */
+    UtAudioSystem *ut = g_audio;
+    for (int v = 0; v < UT_MAX_VOICES; v++) {
+        UtVoice *voice = &ut->voices[v];
+        if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL) continue;
+        voice->data = cachedSound(ut, voice->track);
+        if (voice->data == NULL) voice->active = false;
+    }
 }
 
 bool utAudioMuted(void) {
@@ -816,7 +843,7 @@ bool utAudioMuted(void) {
 static void updateAudio(UtAudioSystem *ut, float deltaTime) {
     if (ut->file == NULL) return;
 
-    if (g_muted && ut->dump == NULL) {
+    if (skipping(ut)) {
         int pairs = (int) (deltaTime * (float) OF_AUDIO_RATE + 0.5f);
         if (pairs > 0 && !ut->allPaused) {
             for (int v = 0; v < UT_MAX_VOICES; v++) {
@@ -868,7 +895,10 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     bool streamed = trackBytes(&ut->tracks[track]) > UT_MEMORY_SOUND_BYTES;
     uint8_t *soundData = NULL;
-    if (!streamed) {
+    if (!streamed && skipping(ut)) {
+        /* Not read until the mute comes off; see utAudioSetMuted. */
+        if (trackBytes(&ut->tracks[track]) == 0) return -1;
+    } else if (!streamed) {
         soundData = cachedSound(ut, track);
         if (soundData == NULL) return -1;
     }
