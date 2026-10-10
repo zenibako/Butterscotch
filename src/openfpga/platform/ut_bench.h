@@ -44,5 +44,11 @@ void utPlatformSetUncapped(bool uncapped);
 void utPlatformSetMirrorFaint(int alpha);
 void utPlatformSetForcedSkip(int every);
 int utPlatformForcedSkip(void);
+/* What a call costs on this machine, in nanoseconds, each averaged over a few
+ * thousand: reading the clock; a sprite draw on a skipped frame, which goes
+ * through everything a draw does up to the first pixel and stops there; the
+ * same draw without the renderer's own timing around it; asking how full the
+ * audio queue is. */
+void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree);
 
 #endif /* UT_BENCH_H */

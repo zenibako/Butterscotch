@@ -237,6 +237,33 @@ int utPlatformForcedSkip(void) {
     return g_forceSkip;
 }
 
+void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree) {
+    enum { CALLS = 4000 };
+    uint64_t start = nowNanos();
+    for (int i = 0; i < CALLS; i++) (void) nowNanos();
+    uint64_t afterClock = nowNanos();
+    *clock = (unsigned) ((afterClock - start) / CALLS);
+
+    *skippedDraw = *skippedDrawUntimed = 0;
+    Renderer *renderer = g_runner != NULL ? g_runner->renderer : NULL;
+    if (renderer != NULL && renderer->dataWin->sprt.count > 0) {
+        bool skipped = swrSkipFrame;
+        swrSkipFrame = true;
+        start = nowNanos();
+        for (int i = 0; i < CALLS; i++) Renderer_drawSprite(renderer, 0, i, 0.0f, 0.0f);
+        uint64_t afterDraw = nowNanos();
+        *skippedDraw = (unsigned) ((afterDraw - start) / CALLS);
+        /* Two clock reads are the renderer's timing of the call; what is left is the call itself. */
+        *skippedDrawUntimed = *skippedDraw > 2 * *clock ? *skippedDraw - 2 * *clock : 0;
+        swrSkipFrame = skipped;
+    }
+
+    start = nowNanos();
+    volatile int sink = 0;
+    for (int i = 0; i < CALLS; i++) sink += of_audio_free();
+    *audioFree = (unsigned) ((nowNanos() - start) / CALLS);
+}
+
 static void decideFrameSkip(void) {
     static bool lastSkipped = false;
     static int32_t lastShown = 0;

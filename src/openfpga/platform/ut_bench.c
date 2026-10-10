@@ -299,6 +299,13 @@ void utBenchFrame(void) {
     utLogPrint("work = total minus display flip\n");
     ioReport();
     asyncReport();
+    {
+        unsigned clock, draw, drawUntimed, audioFree;
+        utPlatformCallCosts(&clock, &draw, &drawUntimed, &audioFree);
+        utLogPrint("call costs, us: clock %u.%02u, skipped sprite draw %u.%02u (%u.%02u without its timing), audio queue %u.%02u\n",
+                   clock / 1000, clock % 1000 / 10, draw / 1000, draw % 1000 / 10, drawUntimed / 1000, drawUntimed % 1000 / 10,
+                   audioFree / 1000, audioFree % 1000 / 10);
+    }
     /* Where each section's time went, in ms per frame. step: game code; draw:
      * all drawing, of which the next five are sprites, sprite parts and
      * tiles, text, tiled backgrounds and rectangles (what is left of draw is
