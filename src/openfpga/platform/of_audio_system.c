@@ -429,10 +429,30 @@ static bool nextSample(const UtAudioSystem *ut, UtVoice *voice, int32_t *out) {
     return true;
 }
 
+/* What a 4-bit code adds to or takes from the predictor at each step size:
+ * utAdpcmDecode's sum of step fractions, worked out once. Looked up it is one
+ * load where the decoder had three branches on bits of the sound itself,
+ * which the CPU cannot predict. */
+static uint16_t g_adpcmDiff[89 * 8];
+
+static void adpcmDiffInit(void) {
+    for (int index = 0; index < 89; index++) {
+        int32_t step = utAdpcmStepTable[index];
+        for (int code = 0; code < 8; code++) {
+            int32_t diff = step >> 3;
+            if (code & 4) diff += step;
+            if (code & 2) diff += step >> 1;
+            if (code & 1) diff += step >> 2;
+            g_adpcmDiff[index * 8 + code] = (uint16_t) diff;
+        }
+    }
+}
+
 /* Adds `pairs` output samples of one voice into the mono mix buffer.
- * The resampler and gain state are kept in locals for the length of the
- * call: mix[] could alias the voice as far as the compiler knows, so working
- * on the voice itself reloads and stores every field for every sample. */
+ * The decoder, resampler and gain state are kept in locals for as long as
+ * samples come straight out of the buffer, which is nearly always; the end
+ * of the buffer or of the track goes through nextSample, with the voice
+ * brought up to date before and read back after. */
 static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int pairs) {
     int32_t sample0 = voice->sample0, sample1 = voice->sample1;
     uint32_t frac = voice->frac;
@@ -440,15 +460,53 @@ static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int 
     int32_t gainNow = voice->gainNow;
     const int32_t gainTarget = voice->gainTarget, gainStep = voice->gainStepPerPair;
 
+    const uint32_t sampleCount = ut->tracks[voice->track].sampleCount;
+    const uint8_t *const data = voice->data;
+    const uint32_t bufferLen = voice->bufferLen;
+    uint32_t bufferPos = voice->bufferPos, samplesDecoded = voice->samplesDecoded, pendingCode = voice->pendingCode;
+    bool havePendingCode = voice->havePendingCode;
+    int32_t predictor = voice->adpcm.predictor, stepIndex = voice->adpcm.stepIndex;
+#define UT_VOICE_STORE() do { \
+        voice->bufferPos = bufferPos; voice->samplesDecoded = samplesDecoded; voice->pendingCode = pendingCode; \
+        voice->havePendingCode = havePendingCode; voice->adpcm.predictor = predictor; voice->adpcm.stepIndex = stepIndex; \
+    } while (0)
+
     for (int i = 0; i < pairs; i++) {
         while (frac >= 65536) {
             int32_t next;
-            if (!nextSample(ut, voice, &next)) {
-                if (!voice->finished) goto out; /* starved: resume here once refilled */
-                next = 0;
-                if (sample1 == 0) {
-                    voice->active = false;
-                    goto out;
+            if (samplesDecoded < sampleCount && (havePendingCode || bufferPos < bufferLen)) {
+                uint32_t code;
+                if (havePendingCode) {
+                    code = pendingCode;
+                    havePendingCode = false;
+                } else {
+                    uint8_t byte = data[bufferPos++];
+                    code = byte & 0x0F;
+                    pendingCode = byte >> 4;
+                    havePendingCode = true;
+                }
+                int32_t diff = g_adpcmDiff[stepIndex * 8 + (int32_t) (code & 7)];
+                int32_t sign = -(int32_t) (code >> 3);
+                predictor += (diff ^ sign) - sign;
+                if (predictor > 32767) predictor = 32767;
+                if (predictor < -32768) predictor = -32768;
+                stepIndex += utAdpcmIndexTable[code];
+                if (stepIndex < 0) stepIndex = 0;
+                if (stepIndex > 88) stepIndex = 88;
+                samplesDecoded++;
+                next = predictor;
+            } else {
+                UT_VOICE_STORE();
+                bool got = nextSample(ut, voice, &next);
+                bufferPos = voice->bufferPos; samplesDecoded = voice->samplesDecoded; pendingCode = voice->pendingCode;
+                havePendingCode = voice->havePendingCode; predictor = voice->adpcm.predictor; stepIndex = voice->adpcm.stepIndex;
+                if (!got) {
+                    if (!voice->finished) goto out; /* starved: resume here once refilled */
+                    next = 0;
+                    if (sample1 == 0) {
+                        voice->active = false;
+                        goto out;
+                    }
                 }
             }
             sample0 = sample1;
@@ -468,6 +526,8 @@ static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int 
         mix[i] += (sample * (gainNow >> 8)) / UT_GAIN_ONE;
     }
 out:
+    UT_VOICE_STORE();
+#undef UT_VOICE_STORE
     voice->sample0 = sample0;
     voice->sample1 = sample1;
     voice->frac = frac;
@@ -634,6 +694,7 @@ static void utInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem)
     UtAudioSystem *ut = (UtAudioSystem *) audio;
     arrput(audio->audioGroups, dataWin);
 
+    adpcmDiffInit();
     of_audio_init();
     ut->queueCapacity = of_audio_free();
     ut->masterGain = 1.0f;
