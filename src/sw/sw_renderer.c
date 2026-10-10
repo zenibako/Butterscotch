@@ -16,6 +16,73 @@ void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height,
 
 static void swrFlushPendingClear(SWRenderer* swr);
 
+// ===[ Call notes ]===
+// See sw_call_notes.h.
+#include "sw_call_notes.h"
+bool swrCallNotes = false;
+#ifdef SW_DRAW_PROFILE
+#include "gettime.h"
+#define SWR_NOTE_MAX 192
+static SWCallNote swrNotes[SWR_NOTE_MAX];
+static uint32_t swrNoteHashes[SWR_NOTE_MAX]; // of the descriptions, to find one without comparing them all
+static int swrNoteCount = 0;
+static uint32_t swrNoteMissed = 0;
+
+static void swrNote(uint64_t nanos, const char* what)
+{
+    uint32_t hash = 2166136261u;
+    for (int c = 0; what[c] != '\0' && c < (int) sizeof(swrNotes[0].what) - 1; c++) hash = (hash ^ (uint8_t) what[c]) * 16777619u;
+    for (int i = 0; i < swrNoteCount; i++) {
+        if (swrNoteHashes[i] != hash || strncmp(swrNotes[i].what, what, sizeof(swrNotes[i].what) - 1) != 0) continue;
+        swrNotes[i].calls++;
+        swrNotes[i].nanos += nanos;
+        return;
+    }
+    int slot = swrNoteCount;
+    if (swrNoteCount == SWR_NOTE_MAX) {
+        // Full: the description with the least time makes way, so that ones
+        // seen once (a bar a pixel longer every frame) do not crowd out the rest.
+        slot = 0;
+        for (int i = 1; i < SWR_NOTE_MAX; i++) if (swrNotes[i].nanos < swrNotes[slot].nanos) slot = i;
+        swrNoteMissed += swrNotes[slot].calls;
+    } else {
+        swrNoteCount++;
+    }
+    swrNoteHashes[slot] = hash;
+    SWCallNote* note = &swrNotes[slot];
+    snprintf(note->what, sizeof(note->what), "%s", what);
+    note->calls = 1;
+    note->nanos = nanos;
+}
+
+int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
+{
+    int taken = 0;
+    while (taken < max) {
+        int heaviest = -1;
+        for (int i = 0; i < swrNoteCount; i++) {
+            if (swrNotes[i].calls != 0 && (heaviest < 0 || swrNotes[i].nanos > swrNotes[heaviest].nanos)) heaviest = i;
+        }
+        if (heaviest < 0) break;
+        out[taken++] = swrNotes[heaviest];
+        swrNotes[heaviest].calls = 0;
+    }
+    if (missed != NULL) *missed = swrNoteMissed;
+    swrNoteCount = 0;
+    swrNoteMissed = 0;
+    return taken;
+}
+// Times a statement that is part of some call, under a name of its own.
+#define SWR_NOTED(what, statement) do { \
+        uint64_t noteStart_ = swrCallNotes ? nowNanos() : 0; \
+        statement; \
+        if (swrCallNotes) swrNote(nowNanos() - noteStart_, what); \
+    } while (0)
+#else
+int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed) { (void) out; (void) max; if (missed != NULL) *missed = 0; return 0; }
+#define SWR_NOTED(what, statement) do { statement; } while (0)
+#endif
+
 #ifdef SW_PLATFORM_FRAMEBUFFER
 // Optional: lets the platform hand out the buffer each frame is drawn into
 // (typically the display's back buffer) so a finished frame does not have to
@@ -679,8 +746,9 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
         for (int dx = startX; endX > dx; dx += tileW) countX++;
         for (int dy = startY; endY > dy; dy += tileH) countY++;
         int firstX = (int) startX + (int) originX + sx0, firstY = (int) startY + (int) originY + sy0;
-        if (swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha))
-            return;
+        bool drawn;
+        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha));
+        if (drawn) return;
     }
     
     for (int dy = startY; endY > dy; dy += tileH) {
@@ -785,7 +853,7 @@ void swrClearSettle(SWRenderer* swr)
     if (!swr->clearHeld) return;
     swr->clearHeld = false;
     if (!swr->mainFb) return;
-    swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->clearHeldColor);
+    SWR_NOTED("  of which: held clear written", swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->clearHeldColor));
 }
 
 static void SWRenderer_clearScreen(Renderer* renderer, uint32_t color, float alpha)
@@ -1747,11 +1815,13 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
 void platformDrawProfile(int kind, uint64_t nanos);
 enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
 static uint64_t swrProfInner = 0;
+static uint64_t swrProfLast = 0; // what the SWR_PROFILED that ended last was charged
 #define SWR_PROFILED(kind, call) do { \
         uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
         call; \
         uint64_t span_ = nowNanos() - start_; \
-        platformDrawProfile(kind, span_ - (swrProfInner - inner_)); \
+        swrProfLast = span_ - (swrProfInner - inner_); \
+        platformDrawProfile(kind, swrProfLast); \
         swrProfInner = inner_ + span_; \
     } while (0)
 #else
@@ -2469,6 +2539,14 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
 static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
+    if (swrCallNotes && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
+        const TexturePageItem* tpag = &renderer->dataWin->tpag.items[tpagIndex];
+        char what[56];
+        snprintf(what, sizeof(what), "sprite %ux%u x%d.%d a%d%s%s", (unsigned) tpag->targetWidth, (unsigned) tpag->targetHeight,
+                 (int) xscale, (int) (fabsf(xscale) * 10.0f) % 10, (int) (alpha * 100.0f), angleDeg != 0.0f ? " turned" : "",
+                 (color & 0xFFFFFF) != 0xFFFFFF ? " tinted" : "");
+        swrNote(swrProfLast, what);
+    }
 }
 
 static void SWRenderer_profDrawSpritePart(Renderer* renderer, int32_t tpagIndex, float srcOffX, float srcOffY, float srcW, float srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha)
@@ -2489,6 +2567,11 @@ static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, f
 static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
+    if (swrCallNotes) {
+        char what[56];
+        snprintf(what, sizeof(what), "tiled tpag %d a%d", (int) tpagIndex, (int) (alpha * 100.0f));
+        swrNote(swrProfLast, what);
+    }
 }
 
 static bool SWRenderer_profDrawTileRun(Renderer* renderer, RoomTile** tiles, const float* offsets, int32_t count)
@@ -2508,6 +2591,14 @@ static bool SWRenderer_profDrawTileLayer(Renderer* renderer, Background* tileset
 static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
 {
     SWR_PROFILED(SWR_PROF_RECT, SWRenderer_drawRectangle(renderer, x1, y1, x2, y2, color, alpha, outline));
+    if (swrCallNotes) {
+        // Where it is on the screen, not in the room, so that a scrolling view does not make each frame's a new one.
+        const SWRenderer* swr = (const SWRenderer*) renderer;
+        char what[56];
+        snprintf(what, sizeof(what), "rect %d,%d %dx%d a%d c%06x%s", (int) x1 - swr->viewX, (int) y1 - swr->viewY, (int) (x2 - x1), (int) (y2 - y1),
+                 (int) (alpha * 100.0f), (unsigned) (color & 0xFFFFFF), outline ? " outline" : "");
+        swrNote(swrProfLast, what);
+    }
 }
 #endif
 

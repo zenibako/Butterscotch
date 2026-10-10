@@ -5,6 +5,7 @@
 #include "gettime.h"
 #include "of_diag.h"
 #include "of_perf.h"
+#include "sw_call_notes.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -95,6 +96,11 @@ static unsigned g_sectionMs[UT_BENCH_SECTIONS];
 static uint64_t g_flipNanos = 0; /* time inside the display flip this section */
 static unsigned g_sectionFlipMs[UT_BENCH_SECTIONS];
 static UtPerfTotals g_sectionTotals[UT_BENCH_SECTIONS];
+/* The draw calls each section spent most on (see sw_call_notes.h). */
+#define UT_BENCH_NOTES 10
+static SWCallNote g_sectionNotes[UT_BENCH_SECTIONS][UT_BENCH_NOTES];
+static int g_sectionNoteCount[UT_BENCH_SECTIONS];
+static uint32_t g_sectionNotesMissed[UT_BENCH_SECTIONS];
 static unsigned g_firstFrameMs = 0;
 
 void utBenchStart(void) {
@@ -241,6 +247,8 @@ void utBenchFrame(void) {
         g_firstFrameMs = (unsigned) ((now - g_startNanos) / 1000000u);
         g_sectionStart = now;
         utPerfTakeTotals(NULL); /* loading is not part of the first section */
+        swrCallNotes = true;
+        swrCallNotesTake(NULL, 0, NULL);
     }
     g_frame++;
     if (g_frame < g_sections[g_section].lastFrame) return;
@@ -248,11 +256,13 @@ void utBenchFrame(void) {
     g_sectionMs[g_section] = (unsigned) ((now - g_sectionStart) / 1000000u);
     g_sectionFlipMs[g_section] = (unsigned) (g_flipNanos / 1000000u);
     utPerfTakeTotals(&g_sectionTotals[g_section]);
+    g_sectionNoteCount[g_section] = swrCallNotesTake(g_sectionNotes[g_section], UT_BENCH_NOTES, &g_sectionNotesMissed[g_section]);
     g_sectionStart = now;
     g_flipNanos = 0;
     if (++g_section < UT_BENCH_SECTIONS) return;
 
     g_running = false;
+    swrCallNotes = false;
     /* A build with optimisation flags of its own (UT_OPT) says so in the title. */
     const char *note = "";
 #ifdef UT_BUILD_NOTE
@@ -317,6 +327,22 @@ void utBenchFrame(void) {
                    (unsigned) (t->drawCalls[1] / frames), (unsigned) (t->drawCalls[2] / frames),
                    (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
         firstFrame = g_sections[i].lastFrame;
+    }
+    /* For the last few sections, the draw calls that cost the most, grouped
+     * by what was asked for: ms per frame, calls per frame (in tenths), what.
+     * "of which" lines are parts of other calls and are counted in those too. */
+    firstFrame = 0;
+    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+        uint64_t frames = (uint64_t) (g_sections[i].lastFrame - firstFrame);
+        firstFrame = g_sections[i].lastFrame;
+        if (i < UT_BENCH_SECTIONS - 4 || g_sectionNoteCount[i] == 0) continue;
+        utLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", g_sections[i].tag, (unsigned) g_sectionNotesMissed[i]);
+        for (int n = 0; n < g_sectionNoteCount[i]; n++) {
+            const SWCallNote *draw = &g_sectionNotes[i][n];
+            unsigned tenths = (unsigned) (draw->nanos / (frames * 100000u));
+            unsigned callTenths = (unsigned) ((uint64_t) draw->calls * 10u / frames);
+            utLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
+        }
     }
     utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
     utDiagHalt("benchmark finished");
