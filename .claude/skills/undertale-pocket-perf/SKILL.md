@@ -139,9 +139,15 @@ field (24 ms undrawn) can. Making the code smaller does not help: `-Os` (768 KB 
 code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower.
 That does not settle whether fetching code from SDRAM is what holds the
 scripts back: `-Os` also inlines less, and neither build moved the hot code
-out of SDRAM. The direct test is the interpreter's loop (8.9 KB) in the
-app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`, the
-"no drawing fast loop" benchmark entry); not yet measured.
+out of SDRAM. The direct test was the interpreter's loop (8.9 KB) in the
+app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`).
+*Measured:* 2 to 4% of an undrawn frame in every section (battle rows 46.7,
+47.2, 47.5 became 45.3, 46.2, 46.4). Kept as the default, but it shows the
+loop itself is not where a script operation's time goes; the desktop
+profile, which put more than half in the loop, does not carry over.
+*Measured the same day:* the collision-threshold fix took 3.4 ms off the
+dodging section's step time; the other three double-precision fixes showed
+nothing.
 
 *Found by reading the device build's disassembly, effect not yet measured:*
 places that fall into software double precision on this single-precision

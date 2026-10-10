@@ -98,7 +98,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-BS_DEFS = $(GAME_DEFS) -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DUT_LOG_SLOT_FILE='"$(APP)_1.sav"' $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+BS_DEFS = $(GAME_DEFS) -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DUT_LOG_SLOT_FILE='"$(APP)_1.sav"' -DUT_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
@@ -124,8 +124,7 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
 # get a benchmark entry for it. Tried on the Pocket, 2026-10-09: -O3 and
 # -O3 -flto change nothing; -Os is 16 to 22% slower; taking off the SDK's
 # 64-byte alignment of functions and loops is 2 to 4% slower.
-# -DUT_FAST_LOOP is not an optimisation flag but rides the same way: it puts
-# the interpreter's loop in the app's block RAM (see vm.c).
+# Experiments ride the same way as defines: -DUT_FRAME_POOL (see vm.c).
 UT_OPT ?=
 CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
 LDFLAGS += $(UT_OPT)
@@ -244,8 +243,8 @@ OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-DUT_FAST_LOOP" OBJ_DIR=$(ROOT)/.obj/deltarune-fastloop BUILD_DIR=$(ROOT)/.obj/deltarune-fastloop $(ROOT)/.obj/deltarune-fastloop/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "fast loop:$(ROOT)/.obj/deltarune-fastloop/app.elf"
+	$(MAKE) GAME=deltarune UT_OPT="-DUT_FRAME_POOL" OBJ_DIR=$(ROOT)/.obj/deltarune-framepool BUILD_DIR=$(ROOT)/.obj/deltarune-framepool $(ROOT)/.obj/deltarune-framepool/app.elf
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "frame pool:$(ROOT)/.obj/deltarune-framepool/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.

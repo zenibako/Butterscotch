@@ -462,6 +462,49 @@ static Variable* resolveVarDef(VMContext* ctx, uint32_t varRef) {
 //
 // BC13/BC14, BC17+: a single GML local can surface as several VARI chunk entries that share a varID (BC17+) or has no pre-assigned slot at all (BC13/BC14).
 // We key by varID/varIdx via the per-code currentCodeLocalsSlotMap so reads/writes via any reference agree on the same localVars slot.
+// A frame's local variables and script arguments: arrays of a few RValues,
+// allocated and freed on every script call. With UT_FRAME_POOL they come
+// from lists of freed arrays, by size, in place of calloc and free; zeroed
+// the same either way. An experiment until the device says what it is worth.
+#ifdef UT_FRAME_POOL
+#define VM_FRAME_CLASSES 4
+typedef union VMFrameHeader {
+    RValue asRValue; // keeps the array that follows aligned as an RValue array is
+    struct { union VMFrameHeader* next; uint32_t sizeClass; } pooled;
+} VMFrameHeader;
+static VMFrameHeader* vmFramePool[VM_FRAME_CLASSES];
+
+static RValue* vmFrameAlloc(uint32_t count) {
+    uint32_t sizeClass = 0, capacity = 4;
+    while (VM_FRAME_CLASSES > sizeClass && count > capacity) { sizeClass++; capacity *= 2; }
+    VMFrameHeader* header;
+    if (sizeClass == VM_FRAME_CLASSES) {
+        // Bigger than the pool keeps: straight from the heap, and back to it.
+        header = (VMFrameHeader*) safeCalloc((size_t) count + 1, sizeof(RValue));
+    } else if (vmFramePool[sizeClass] != nullptr) {
+        header = vmFramePool[sizeClass];
+        vmFramePool[sizeClass] = header->pooled.next;
+        memset(header, 0, ((size_t) capacity + 1) * sizeof(RValue));
+    } else {
+        header = (VMFrameHeader*) safeCalloc((size_t) capacity + 1, sizeof(RValue));
+    }
+    header->pooled.sizeClass = sizeClass;
+    return (RValue*) (header + 1);
+}
+
+static void vmFrameFree(RValue* frame) {
+    if (frame == nullptr) return;
+    VMFrameHeader* header = ((VMFrameHeader*) frame) - 1;
+    uint32_t sizeClass = header->pooled.sizeClass;
+    if (sizeClass >= VM_FRAME_CLASSES) { free(header); return; }
+    header->pooled.next = vmFramePool[sizeClass];
+    vmFramePool[sizeClass] = header;
+}
+#else
+static inline RValue* vmFrameAlloc(uint32_t count) { return (RValue*) safeCalloc(count, sizeof(RValue)); }
+static inline void vmFrameFree(RValue* frame) { free(frame); }
+#endif
+
 static uint32_t resolveLocalSlot(VMContext* ctx, int32_t varID) {
     if (IS_WAD15_OR_HIGHER(ctx) && IS_WAD16_OR_BELOW(ctx)) {
         return (uint32_t) varID;
@@ -473,9 +516,9 @@ static uint32_t resolveLocalSlot(VMContext* ctx, int32_t varID) {
     // Grow this frame's localVars window to cover `slot` whether the entry is pre-existing or freshly allocated.
     // Pre-existing entries can still be past ctx->localVarCount if a nested call to the same code extended the slot map while the outer frame was suspended (the outer frame's localVarCount is captured at call entry and doesn't follow later growth).
     if (slot >= ctx->localVarCount) {
-        RValue* resizedLocalVars = (RValue *)safeCalloc(slot + 1, sizeof(RValue));
+        RValue* resizedLocalVars = vmFrameAlloc(slot + 1);
         memcpy(resizedLocalVars, ctx->localVars, sizeof(RValue) * ctx->localVarCount);
-        free(ctx->localVars);
+        vmFrameFree(ctx->localVars);
         ctx->localVars = resizedLocalVars;
         ctx->localVarCount = slot + 1;
     }
@@ -647,11 +690,11 @@ static inline bool VM_ensureScriptArg(VMContext* ctx, int32_t writeIndex) {
     if (writeIndex < 0) return false;
     if (writeIndex < ctx->scriptArgCount) return true;
 
-    RValue* newScriptArgs = (RValue *)safeCalloc(writeIndex + 1, sizeof(RValue));
+    RValue* newScriptArgs = vmFrameAlloc((uint32_t) writeIndex + 1);
 
     if (ctx->scriptArgCount > 0) {
         memcpy(newScriptArgs, ctx->scriptArgs, ctx->scriptArgCount * sizeof(RValue));
-        free(ctx->scriptArgs);
+        vmFrameFree(ctx->scriptArgs);
     }
 
     ctx->scriptArgs = newScriptArgs;
@@ -2895,9 +2938,9 @@ static void unwindVMStack(VMContext* ctx, int32_t newStackTop) {
 
 // UT_FAST_LOOP (openfpgaOS only): the interpreter's loop goes into the app's
 // 14 KB of zero-wait, uncached block RAM (of_fastram.h), not into SDRAM
-// behind the instruction cache. An experiment: built as its own benchmark
-// entry, to be kept only if the device says so.
-#ifdef UT_FAST_LOOP
+// behind the instruction cache. Measured on the Pocket at 2 to 4% of a frame
+// with the drawing left out, in every section; the loop is 8.9 KB.
+#if defined(UT_FAST_LOOP) && !defined(OF_PC)
 #include "of_fastram.h"
 OF_FASTTEXT
 #endif
@@ -3888,7 +3931,7 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     setCurrentCodeLocalsSlotMap(ctx);
 
     uint32_t localsCount = computeLocalsCount(ctx, code);
-    RValue* localVars = (RValue *)safeCalloc(localsCount, sizeof(RValue));
+    RValue* localVars = vmFrameAlloc(localsCount);
     ctx->localVars = localVars;
     ctx->localVarCount = localsCount;
 
@@ -3913,7 +3956,7 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     repeat(ctx->localVarCount, i) {
         RValue_free(&ctx->localVars[i]);
     }
-    free(ctx->localVars);
+    vmFrameFree(ctx->localVars);
     ctx->localVars = nullptr;
     ctx->localVarCount = 0;
 
@@ -3960,7 +4003,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     setCurrentCodeLocalsSlotMap(ctx);
 
     uint32_t localsCount = computeLocalsCount(ctx, code);
-    RValue* localVars = (RValue *)safeCalloc(localsCount, sizeof(RValue));
+    RValue* localVars = vmFrameAlloc(localsCount);
     ctx->localVars = localVars;
     ctx->localVarCount = localsCount;
 
@@ -3969,7 +4012,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     // the caller's original args remain valid and owner-tracked by the caller.
     RValue* scriptArgs = nullptr;
     if (argCount > 0 && args != nullptr) {
-        scriptArgs = (RValue *)safeCalloc(argCount, sizeof(RValue));
+        scriptArgs = vmFrameAlloc((uint32_t) argCount);
         repeat(argCount, argIdx) {
             RValue argCopy = RValue_makeIndependent(args[argIdx]);
             scriptArgs[argIdx] = argCopy;
@@ -4006,7 +4049,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
         RValue_free(&ctx->localVars[i]);
     }
 
-    free(ctx->localVars);
+    vmFrameFree(ctx->localVars);
 
     // Free callee script args
     {
@@ -4015,7 +4058,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     }
     }
 
-    free(ctx->scriptArgs);
+    vmFrameFree(ctx->scriptArgs);
 
     ctx->localVars = saved->savedLocals;
     ctx->localVarCount = saved->savedLocalsCount;

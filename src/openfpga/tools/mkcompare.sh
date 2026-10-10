@@ -58,6 +58,10 @@ if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
     write_ini deltarune_bnod.ini deltarune.elf "--bench-smooth --draw-every 100000" os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bnod.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing.json"
+    # The script times again with nothing drawn: which scripts the undrawn frame is spent in.
+    write_ini deltarune_bnsc.ini deltarune.elf "--bench-smooth --scripts --draw-every 100000" os25
+    sed -e 's/"deltarune_os\.ini"/"deltarune_bnsc.ini"/' "$DR_INSTANCE" \
+        > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing scripts.json"
     # The same program built with other compiler flags, timed without its drawing (see above): the
     # game's scripts are what holds battles back, and this is the shortest run that shows them.
     for build in "$@"; do
