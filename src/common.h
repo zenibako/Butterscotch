@@ -39,6 +39,15 @@
     #define BS_ALIGN(x)
 #endif
 
+/* FNV-1a 64-bit constants. Old MSVC has no ull suffix, only ui64. */
+#ifdef _MSC_VER
+    #define BS_FNV64_OFFSET 14695981039346656037ui64
+    #define BS_FNV64_PRIME  1099511628211ui64
+#else
+    #define BS_FNV64_OFFSET 14695981039346656037ull
+    #define BS_FNV64_PRIME  1099511628211ull
+#endif
+
 #if defined(__GNUC__) || defined(__clang__) || defined(__TINYC__)
     #define NOINLINE __attribute__((noinline))
 #elif defined(_MSC_VER) && _MSC_VER >= 1400 // VS2005 or later

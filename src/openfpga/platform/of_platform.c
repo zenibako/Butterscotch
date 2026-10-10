@@ -19,6 +19,8 @@
 #include "profiler.h"
 #include "runner.h"
 #include "ut_bench.h"
+#include "ut_font.h"
+#include "ut_menu.h"
 #include "ut_strings.h"
 #include "ut_native.h"
 
@@ -64,8 +66,9 @@ static int g_modeStride = 0; /* bytes per row of the display surface */
 
 /* Pad button -> GML virtual key. Undertale reads Z/X/C with Enter/Shift/Ctrl
  * as aliases; the d-pad maps to the arrow keys. Select is not Esc (holding
- * Esc quits Undertale); Select toggles the frame-time overlay, R the log overlay, and L switches
- * 640x480 rooms between native resolution and smoothed 320x240. */
+ * Esc quits Undertale); Select opens the port's menu (see "The menu" below),
+ * and L switches 640x480 rooms between native resolution and smoothed
+ * 320x240. */
 static const struct {
     uint32_t button;
     int32_t key;
@@ -82,24 +85,18 @@ static const struct {
 };
 #define UT_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
 
-/* Debug mode: everything on screen or on the buttons that is for looking
- * into the port and not for playing. Off at start-up unless the game was
- * started with --debug; holding Select for two seconds switches it on or
- * off. (The Pocket's core menu cannot do it: the hardware gives a core no
- * menu variables of its own. interact.json entries can only write the
- * Analogizer registers and the app id that an instance file sets.) With it on:
- *   - Select toggles the frame-time overlay and R the log overlay;
+/* Debug buttons ("debug mode"): the buttons that are for looking into the
+ * port and not for playing. Off at start-up unless the game was started with
+ * --debug; the menu switches them on or off. With them on:
+ *   - R toggles the log overlay;
  *   - 640x480 rooms keep showing which way L's speed/accuracy toggle is set;
  *   - Butterscotch's own debug hotkeys (see "Debug Features" in its README)
  *     are reached by holding Select and pressing another button, since a
- *     Pocket has no keyboard. Select then acts on release, and a button
- *     pressed with it held does not also reach the game.
+ *     Pocket has no keyboard. A button pressed with Select held does not
+ *     also reach the game, and that Select does not open the menu.
  * Each action that would otherwise leave the screen as it was says so in
- * the top right corner: switching debug mode itself, changing room, clearing
- * global.interact, pausing ("Paused, frame N", which a step advances) and
- * resuming.
- * With it off none of that is drawn or reacts, and what was showing is hidden. */
-#define UT_DEBUG_HOLD_NANOS 2000000000ull
+ * the top right corner: changing room, clearing global.interact, pausing
+ * ("Paused, frame N", which a step advances) and resuming. */
 /* `notice` is what the top right corner says for two seconds when the hotkey
  * is used. Pause and step have none: a paused game says "Paused, frame N"
  * there for as long as it is paused, and a step changes N. */
@@ -118,6 +115,10 @@ static const struct {
 #define UT_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
 static bool g_debugRequested = false;
 static bool g_debugMode = false;
+/* A key a menu row asked for, pressed on the frame the menu closes. */
+static int32_t g_menuKey = 0;
+/* The menu was up: the frame that follows it is not late. */
+static bool g_menuClosed = false;
 
 /* A few words in the top right corner for two seconds: what a button that
  * changes nothing else on screen just did. */
@@ -134,7 +135,12 @@ void utPlatformSetDebugMode(bool enabled) {
     g_debugRequested = enabled;
 }
 
-/* Script times (Select + X in debug mode, UT_PROFILE on desktop): Butterscotch's
+static void setDebugMode(bool enabled) {
+    g_debugMode = enabled;
+    logInfo("Debug buttons %s\n", enabled ? "on: R log; Select + Right/Left room, Start pause, A step, B unstick, X script times, Y save log" : "off");
+}
+
+/* Script times (the menu, or Select + X with the debug buttons on; UT_PROFILE on desktop): Butterscotch's
  * GML profiler, reported to the log every so many frames. Timing every script
  * call costs time itself, so it is off until asked for. */
 #define UT_PROFILE_FRAMES 60
@@ -275,6 +281,7 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
+    utFontSetRunner(runner);
     utPatchStrings(runner->dataWin);
     utNativeInstall(runner);
     runner->setCursor = NULL;
@@ -381,12 +388,12 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 #ifdef OF_PC
 /* Desktop-only verification aid: UT_DUMP_FRAME=<n> writes frame n of the
  * RGB555 output to UT_DUMP_PATH (default frame.ppm) and exits. */
-static void writeFrameTo(const char *path, bool thenExit) {
+static void writePictureTo(const char *path, const uint16_t *fb, int width, int height) {
     FILE *f = fopen(path, "wb");
     if (f == NULL) exit(1);
-    fprintf(f, "P6\n%d %d\n255\n", g_nextW, g_nextH);
-    for (int i = 0; i < g_nextW * g_nextH; i++) {
-        uint16_t p = g_nextFb[i];
+    fprintf(f, "P6\n%d %d\n255\n", width, height);
+    for (int i = 0; i < width * height; i++) {
+        uint16_t p = fb[i];
         uint8_t rgb[3] = {
             (uint8_t) (((p >> 10) & 0x1F) << 3),
             (uint8_t) (((p >> 5) & 0x1F) << 3),
@@ -395,6 +402,10 @@ static void writeFrameTo(const char *path, bool thenExit) {
         fwrite(rgb, 1, 3, f);
     }
     fclose(f);
+}
+
+static void writeFrameTo(const char *path, bool thenExit) {
+    writePictureTo(path, g_nextFb, g_nextW, g_nextH);
     if (thenExit) exit(0);
 }
 
@@ -640,6 +651,185 @@ static void runInputScript(void) {
     }
 }
 
+/* ===[ The menu ]===
+ *
+ * Select (pressed and let go on its own) opens it over the paused game; see
+ * ut_menu.c for how it looks and moves. It holds the debug and performance
+ * settings that used to be button chords, so none of them has to be
+ * remembered. (The Pocket's own core menu cannot hold them: the hardware
+ * gives a core no menu variables of its own. interact.json entries can only
+ * write the Analogizer registers and the app id that an instance file sets.)
+ * Everything it sets lasts until the core is left, like the chords did. */
+
+static void toggleSpeed(void) {
+    g_smoothLowres = !g_smoothLowres;
+    g_modeShownUntil = nowNanos() + UT_MODE_SHOWN_NANOS;
+    logInfo("Video: %s\n", g_smoothLowres ? "speed (640x480 rooms at 320x240, faint layers left out, frame skipping)" : "accuracy");
+}
+
+static void toggleScriptTimes(void) {
+    /* The report goes to the log, so bring that up with it. */
+    bool enable = !scriptProfileOn();
+    setScriptProfile(enable);
+    if (enable) utPerfShowLog();
+    logInfo("Debug: script times %s\n", enable ? "on, every 2 s" : "off");
+}
+
+static const char *onOff(bool on) {
+    return on ? "On" : "Off";
+}
+
+static bool menuResume(int direction) {
+    (void) direction;
+    return true;
+}
+
+static const char *menuVideoValue(void) {
+    return g_smoothLowres ? "Speed" : "Accuracy";
+}
+
+static bool menuVideo(int direction) {
+    (void) direction;
+    toggleSpeed();
+    return false;
+}
+
+static const char *menuFrameTimesValue(void) {
+    return onOff(utPerfOverlayOn());
+}
+
+static bool menuFrameTimes(int direction) {
+    (void) direction;
+    utPerfToggle();
+    return false;
+}
+
+static const char *menuLogValue(void) {
+    return onOff(utPerfLogOn());
+}
+
+static bool menuLog(int direction) {
+    (void) direction;
+    utPerfToggleLog();
+    return false;
+}
+
+static const char *menuScriptTimesValue(void) {
+    return onOff(scriptProfileOn());
+}
+
+static bool menuScriptTimes(int direction) {
+    (void) direction;
+    toggleScriptTimes();
+    return false;
+}
+
+static const char *menuDebugValue(void) {
+    return onOff(g_debugMode);
+}
+
+static bool menuDebug(int direction) {
+    (void) direction;
+    setDebugMode(!g_debugMode);
+    return false;
+}
+
+/* Rows that act on the game press one of Butterscotch's debug keys as the
+ * menu closes, the way the chords do. */
+static bool pressAfterMenu(int32_t key, const char *notice, const char *what) {
+    g_menuKey = key;
+    showNotice(notice);
+    logInfo("Debug: %s\n", what);
+    return true;
+}
+
+static bool menuNextRoom(int direction) {
+    (void) direction;
+    return pressAfterMenu(VK_PAGEUP, "Next room", "next room");
+}
+
+static bool menuPreviousRoom(int direction) {
+    (void) direction;
+    return pressAfterMenu(VK_PAGEDOWN, "Previous room", "previous room");
+}
+
+static bool menuUnstick(int direction) {
+    (void) direction;
+    return pressAfterMenu(VK_F10, "interact = 0", "clear global.interact");
+}
+
+static bool menuSaveLog(int direction) {
+    (void) direction;
+    bool saved = utLogDump();
+    showNotice(saved ? "Log saved" : "Log not saved");
+    logInfo("Debug: log %s\n", saved ? "written to the spare save slot; quit from the Analogue menu to keep it" : "could not be written");
+    return true;
+}
+
+static const UtMenuRow g_menuRows[] = {
+    { "Resume",          NULL,                 menuResume },
+    { "Video",           menuVideoValue,       menuVideo },
+    { "Frame times",     menuFrameTimesValue,  menuFrameTimes },
+    { "Log",             menuLogValue,         menuLog },
+    { "Script times",    menuScriptTimesValue, menuScriptTimes },
+    { "Debug buttons",   menuDebugValue,       menuDebug },
+    { "Next room",       NULL,                 menuNextRoom },
+    { "Previous room",   NULL,                 menuPreviousRoom },
+    { "Clear interact",  NULL,                 menuUnstick },
+    { "Save log",        NULL,                 menuSaveLog },
+};
+
+/* The frame-time overlay's numbers, in words. */
+static void menuStatus(char *out, size_t size) {
+    unsigned average, worstWork, worstPeriod, skipped;
+    utPerfShown(&average, &worstWork, &worstPeriod, &skipped);
+    (void) worstPeriod;
+    snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
+}
+
+#ifdef OF_PC
+static bool g_menuDump = false;
+#endif
+static uint8_t *g_menuShownIn = NULL; /* the display buffer the menu last showed a picture in */
+
+static void menuPresent(const uint16_t *fb) {
+    uint8_t *dst = of_video_surface();
+    g_menuShownIn = dst;
+    size_t rowBytes = (size_t) g_nextW * sizeof(uint16_t);
+    for (int y = 0; y < g_nextH; y++) memcpy(dst + (size_t) y * (size_t) g_modeStride, fb + (size_t) y * (size_t) g_nextW, rowBytes);
+#ifdef OF_PC
+    if (g_menuDump) {
+        const char *path = getenv("UT_DUMP_PATH");
+        writePictureTo(path != NULL ? path : "frame.ppm", fb, g_nextW, g_nextH);
+    }
+    static int noFlip = -1;
+    if (noFlip < 0) noFlip = getenv("UT_NOFLIP") != NULL;
+    if (noFlip) return;
+#endif
+    of_video_flip();
+}
+
+static void runMenu(void) {
+    /* Over the picture last shown, at the size it was shown. */
+    if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
+    static const UtMenu menu = {
+        "Butterscotch", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])), menuStatus, menuPresent, platformBusyTick,
+    };
+    AudioSystem *audio = g_runner->audioSystem;
+    bool wasPaused = g_runner->paused;
+    if (!wasPaused) audio->vtable->pauseAll(audio);
+    logInfo("Menu\n");
+    if (!utMenuRun(&menu, g_nextFb, g_nextW, g_nextH)) logWarn("Menu: no memory for it\n");
+    /* The menu drew into the display's buffers, which can include the one
+     * the last frame was drawn in; the game's picture is now in the buffer it
+     * showed last. A paused game shows that one again (the log screen too). */
+    if (g_menuShownIn != NULL && g_modeStride == g_nextW * (int) sizeof(uint16_t)) g_nextFb = (uint16_t *) (void *) g_menuShownIn;
+    if (!wasPaused) audio->vtable->resumeAll(audio);
+    /* The time the menu was up is not a slow frame to report or catch up on. */
+    utPerfRestartClock();
+    g_menuClosed = true;
+}
+
 /* Returns true when the app should quit; a Pocket core never does. */
 bool platformHandleEvents(void) {
     utPerfPhase(UT_PHASE_STEP);
@@ -647,31 +837,25 @@ bool platformHandleEvents(void) {
 
     static bool chordUsed = false;
     static int32_t keyToRelease = 0;
-    static uint64_t selectDownAt = 0;
-    bool debugNow = g_debugMode;
-    bool byHold = false;
     if (g_debugRequested) {
-        debugNow = true;
         g_debugRequested = false;
+        setDebugMode(true);
     }
-    if (of_btn_pressed(OF_BTN_SELECT)) {
-        selectDownAt = nowNanos();
-        chordUsed = false;
+    if (of_btn_pressed(OF_BTN_SELECT)) chordUsed = false;
+    /* Select on its own, let go: the menu. */
+    bool openMenu = of_btn_released(OF_BTN_SELECT) && !chordUsed;
+#ifdef OF_PC
+    /* UT_MENU="<frame>[:<buttons>]" opens the menu on that frame and presses the buttons in it, one a frame
+     * (U D L R, A B); with UT_DUMP_PATH the menu as the buttons leave it is written there and the run ends. */
+    static int menuFrame = 0;
+    const char *menuAt = getenv("UT_MENU");
+    if (menuAt != NULL && ++menuFrame == atoi(menuAt)) {
+        openMenu = true;
+        const char *colon = strchr(menuAt, ':');
+        utMenuScript(colon != NULL ? colon + 1 : "");
+        g_menuDump = getenv("UT_DUMP_PATH") != NULL;
     }
-    if (of_btn(OF_BTN_SELECT) && !chordUsed && selectDownAt != 0 && nowNanos() - selectDownAt >= UT_DEBUG_HOLD_NANOS) {
-        debugNow = !g_debugMode;
-        byHold = true;
-        chordUsed = true; /* this hold is spent: its release does nothing more */
-    }
-    if (debugNow != g_debugMode) {
-        g_debugMode = debugNow;
-        utPerfHideOverlays();
-        if (!debugNow) setScriptProfile(false);
-        /* The frame times coming up are the sign that the hold took. */
-        if (debugNow && byHold) utPerfToggle();
-        showNotice(debugNow ? "Debug mode on" : "Debug mode off");
-        logInfo("Debug mode %s\n", debugNow ? "on: Select times, R log; Select + Right/Left room, Start pause, A step, B unstick, X script times" : "off");
-    }
+#endif
     /* Frame stepping is the one hotkey the runner itself gates on this. */
     if (g_runner != NULL) g_runner->debugMode = g_debugMode;
     if (g_runner != NULL && keyToRelease != 0) {
@@ -679,15 +863,8 @@ bool platformHandleEvents(void) {
         keyToRelease = 0;
     }
     bool chording = g_debugMode && of_btn(OF_BTN_SELECT);
-    if (g_debugMode) {
-        if (of_btn_released(OF_BTN_SELECT) && !chordUsed) utPerfToggle();
-        if (of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
-    }
-    if (of_btn_pressed(OF_BTN_L1)) {
-        g_smoothLowres = !g_smoothLowres;
-        g_modeShownUntil = nowNanos() + UT_MODE_SHOWN_NANOS;
-        logInfo("Video: %s\n", g_smoothLowres ? "speed (640x480 rooms at 320x240, faint layers left out, frame skipping)" : "accuracy");
-    }
+    if (g_debugMode && of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
+    if (of_btn_pressed(OF_BTN_L1)) toggleSpeed();
     runInputScript();
     decideFrameSkip();
     if (g_runner == NULL) return false;
@@ -696,14 +873,26 @@ bool platformHandleEvents(void) {
         setScriptProfile(true);
     }
 
+    if (openMenu) {
+        runMenu();
+#ifdef OF_PC
+        if (g_menuDump) exit(0);
+#endif
+        /* What was pressed in the menu is not for the game. */
+        of_input_poll();
+        chording = false;
+        if (g_menuKey != 0) {
+            RunnerKeyboard_onKeyDown(g_runner->keyboard, g_menuKey);
+            keyToRelease = g_menuKey;
+            g_menuKey = 0;
+        }
+        g_runner->debugMode = g_debugMode;
+    }
+
     if (chording && of_btn_pressed(OF_BTN_X)) {
-        /* The report goes to the log, so bring that up with it. */
-        bool enable = !scriptProfileOn();
-        setScriptProfile(enable);
-        if (enable) utPerfShowLog();
+        toggleScriptTimes();
         chordUsed = true;
-        showNotice(enable ? "Script times on" : "Script times off");
-        logInfo("Debug: script times %s\n", enable ? "on, every 2 s" : "off");
+        showNotice(scriptProfileOn() ? "Script times on" : "Script times off");
     }
     if (chording && of_btn_pressed(OF_BTN_Y)) {
         bool saved = utLogDump();
@@ -736,7 +925,8 @@ bool platformHandleEvents(void) {
 void platformSleepUntil(uint64_t time) {
     if (g_uncapped) return;
     uint64_t start = nowNanos();
-    if (!g_smoothLowres) {
+    if (!g_smoothLowres || g_menuClosed) {
+        g_menuClosed = false;
         g_debtNanos = 0;
     } else if (start > time) {
         g_debtNanos += start - time;

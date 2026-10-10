@@ -50,7 +50,7 @@ bool swrFavorSpeed = false;
 // need it; a draw at the other phase keeps the averaging path. A block cut
 // by the texture's edge is whatever part of it there is. Full-size texel x
 // belongs to half-size texel (x + phase) / 2.
-static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
+MAYBE_UNUSED static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
 {
 #if PIXEL_SIZE != 16
     (void) texture; (void) wantX; (void) wantY;
@@ -126,7 +126,7 @@ static bool swrHalfTexture(SWTexture* texture, int wantX, int wantY)
 }
 
 // The row bounds of an immutable texture (see SWTexture), or NULL.
-static const uint16_t* swrRowBounds(SWTexture* texture)
+MAYBE_UNUSED static const uint16_t* swrRowBounds(SWTexture* texture)
 {
     if (texture->rowBounds != NULL) return texture->rowBounds;
     if (!texture->immutable) return NULL;

@@ -10,6 +10,14 @@ void utPerfToggle(void);
 void utPerfToggleLog(void);
 void utPerfHideOverlays(void);
 void utPerfShowLog(void);
+bool utPerfOverlayOn(void);
+bool utPerfLogOn(void);
+/* The four numbers the frame-time overlay shows (see of_perf.c), whether or
+ * not it is showing. */
+void utPerfShown(unsigned *average, unsigned *worstWork, unsigned *worstPeriod, unsigned *skipped);
+/* Forgets when the last frame was, so time spent with the game stopped (the
+ * menu) is not counted as one long frame. */
+void utPerfRestartClock(void);
 
 /* Logs where game-script time went over the last `frames` frames, short
  * enough for the log overlay:
@@ -39,6 +47,12 @@ void utLogPrint(const char *format, ...) __attribute__((format(printf, 1, 2)));
 const char *utLogLoadSummary(void);
 /* The loader's "phases: alloc ..., read ..., parse ..., free ..." totals. */
 const char *utLogLoadPhases(void);
+
+/* The log overlay's font: a 6x12 cell. */
+#define UT_LOG_CELL_W 6
+#define UT_LOG_CELL_H 12
+/* One line in the log overlay's font; returns the x after it. */
+int utPerfDrawLogText(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color);
 
 /* Fills the frame with the most recent log lines on black. */
 void utPerfDrawLogScreen(uint16_t *fb, int width, int height);
@@ -81,8 +95,8 @@ void utPerfTakeTotals(UtPerfTotals *out);
  * phase that was running. */
 void utPerfPhase(UtPhase phase);
 void utPerfFrame(uint16_t *fb, int width, int height);
-/* Writes a word in the top right corner: which way L's speed/accuracy
- * toggle is set. */
+/* Writes a few words in the top right corner, in the game's font (see
+ * ut_font.h): which way L's speed/accuracy toggle is set, or a notice. */
 void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label);
 
 #endif /* UT_OF_PERF_H */

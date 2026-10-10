@@ -3854,9 +3854,9 @@ uint64_t VM_codeHash(VMContext* ctx, const char* codeName, uint32_t* length) {
     if (0 > codeIndex) return 0;
     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
     const uint8_t* base = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase);
-    uint64_t hash = 14695981039346656037ull;
+    uint64_t hash = BS_FNV64_OFFSET;
     // The same bytes VM_executeCode runs: [offset, length) of the entry's bytecode.
-    for (uint32_t i = code->offset; code->length > i; i++) hash = (hash ^ base[i]) * 1099511628211ull;
+    for (uint32_t i = code->offset; code->length > i; i++) hash = (hash ^ base[i]) * BS_FNV64_PRIME;
     if (length != nullptr) *length = code->length;
     return hash;
 }

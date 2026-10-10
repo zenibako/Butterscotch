@@ -15,7 +15,7 @@
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
 static void swrFlushPendingClear(SWRenderer* swr);
-static int swrPendingCount; // tile pictures being held (see the tile run cache)
+static int swrPendingCount = 0; // tile pictures being held (see the tile run cache)
 
 // ===[ Call notes ]===
 // See sw_call_notes.h.
@@ -1867,7 +1867,6 @@ static struct {
     int32_t subimgs[SWR_GRID_MAX_CELLS];
 } swrGrid;
 
-static int swrPendingCount; // tile pictures being held (see the tile run cache below)
 
 bool swrGridHeld(void) { return swrGrid.count > 0; }
 
@@ -2000,8 +1999,7 @@ static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 // are held and drawn together (swrTileRunsFlush): for each block of the
 // screen, drawing starts at the topmost picture that is solid there, since
 // nothing under it can show.
-static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES];
-static int swrPendingCount = 0;
+static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES]; // swrPendingCount, at the top of the file, counts them
 static SWRenderer* swrPendingOwner = NULL;
 
 // The same pictures held together frame after frame are flattened into one,
@@ -2027,7 +2025,7 @@ static uint8_t swrRunBlockKind(const SWTileRun* run, int unitX, int unitY)
 static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
 {
     const uint8_t* at = (const uint8_t*) data;
-    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * 1099511628211ull;
+    for (size_t i = 0; i < bytes; i++) hash = (hash ^ at[i]) * BS_FNV64_PRIME;
     return hash;
 }
 
@@ -2089,9 +2087,9 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
                     swrFillPixels(&pixels[(y - top) * pitch + (tx0 - left)], (size_t) (tx1 - tx0), *under);
             }
             if (underOnly) continue; // the pictures themselves come in a second pass
-            for (int i = first; i < count; i++)
+            for (int r = first; r < count; r++)
             {
-                const SWTileRun* run = runs[i];
+                const SWTileRun* run = runs[r];
                 uint8_t kind = swrRunBlockKind(run, bx, by);
                 if (kind == SWR_BLOCK_EMPTY) continue;
                 
@@ -2121,7 +2119,7 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
 // been held together before, are too big together, or there is no room.
 static SWTileRun* swrPendingFlattened(SWRenderer* swr)
 {
-    uint64_t key = 14695981039346656037ull;
+    uint64_t key = BS_FNV64_OFFSET;
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
     for (int i = 0; i < swrPendingCount; i++) {
         const SWTileRun* run = swrPendingRuns[i];
@@ -2273,7 +2271,7 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     else if (swr->scaleX == 0.5f && swr->scaleY == 0.5f) shift = 1;
     else return false;
     
-    uint64_t key = 14695981039346656037ull;
+    uint64_t key = BS_FNV64_OFFSET;
     int32_t mode[2] = { shift, swrFavorSpeed ? 1 : 0 };
     key = swrTileRunHash(key, mode, sizeof(mode));
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
@@ -2300,7 +2298,7 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
             (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height, 0, 0,
         };
         memcpy(&words[9], &offsets[t * 2], 2 * sizeof(float));
-        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * 1099511628211ull;
+        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * BS_FNV64_PRIME;
     }
     
     // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
@@ -2327,8 +2325,8 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
             spare = entry;
         }
     }
-    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++) {
-        SWTileRun* entry = &swrFlatRuns[e];
+    for (int f = 0; f < SWR_TILE_FLAT_ENTRIES; f++) {
+        SWTileRun* entry = &swrFlatRuns[f];
         if (entry->pixels != NULL && swr->frameCounter - entry->lastUsedFrame > SWR_TILE_RUN_IDLE_FRAMES) {
             free(entry->pixels);
             entry->pixels = NULL;
@@ -2440,7 +2438,7 @@ typedef struct {
 static SWTileset swrTilesets[SWR_TILESETS];
 bool swrTileLayerFast = true;
 
-static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
+MAYBE_UNUSED static uint8_t* swrTileKinds(SWRenderer* swr, int32_t tpagIndex, uint32_t count)
 {
     SWTileset* spare = &swrTilesets[0];
     for (int e = 0; e < SWR_TILESETS; e++) {
@@ -2470,7 +2468,7 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
     if (SWR_SKIPPED((SWRenderer*) renderer)) return true;
     SWRenderer* swr = (SWRenderer*) renderer;
 #if PIXEL_SIZE != 16
-    (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
+    (void) swr; (void) tileset; (void) cells; (void) tilesX; (void) tilesY; (void) offsetX; (void) offsetY;
     return false;
 #else
     DataWin* dwin = renderer->dataWin;

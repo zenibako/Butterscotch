@@ -2861,7 +2861,7 @@ void platformBusyTick(void);
 #endif
 
 static bool bulkReadAt(FILE* bulkFile, size_t offset, uint8_t* dest, size_t bytes) {
-    static uint8_t piece[BULK_READ_PIECE] __attribute__((aligned(512)));
+    static uint8_t piece[BULK_READ_PIECE] BS_ALIGN(512);
 
     if (bulkFile == nullptr || fseek(bulkFile, (long) offset, SEEK_SET) != 0) return false;
     size_t done = 0;
