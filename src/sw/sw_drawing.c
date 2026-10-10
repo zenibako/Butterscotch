@@ -2235,7 +2235,9 @@ bool swrFillHold(SWRenderer* swr, uintpixel_t pxcolor, int alphaInt)
 
 void swrFillHeldDrop(void)
 {
+#if PIXEL_SIZE == 16 && defined SW_HAS_PREMUL_BLEND && !defined SW_DITHERED_BLENDING
     swrFillHeldCount = 0;
+#endif
 }
 
 // Writes the held clear's colour over the whole main buffer, the tiled passes
