@@ -124,7 +124,9 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
 # get a benchmark entry for it. Tried on the Pocket, 2026-10-09: -O3 and
 # -O3 -flto change nothing; -Os is 16 to 22% slower; taking off the SDK's
 # 64-byte alignment of functions and loops is 2 to 4% slower.
-# Experiments ride the same way as defines: -DUT_FRAME_POOL (see vm.c).
+# Experiments ride the same way as defines. Tried so and dropped: a pool for
+# script call frames in place of calloc and free (0.2 to 0.3 ms of a 46 ms
+# undrawn battle frame, within run-to-run variation).
 UT_OPT ?=
 CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
 LDFLAGS += $(UT_OPT)
@@ -243,8 +245,7 @@ OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-DUT_FRAME_POOL" OBJ_DIR=$(ROOT)/.obj/deltarune-framepool BUILD_DIR=$(ROOT)/.obj/deltarune-framepool $(ROOT)/.obj/deltarune-framepool/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "frame pool:$(ROOT)/.obj/deltarune-framepool/app.elf"
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.

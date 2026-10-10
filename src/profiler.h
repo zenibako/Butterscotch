@@ -13,6 +13,7 @@
 typedef struct {
     uint64_t nanos; // accumulated self-time in nanoseconds
     uint64_t ops;   // accumulated self-count of VM instructions executed
+    uint64_t calls; // how many times it was entered
 } ProfilerStats;
 
 typedef struct {

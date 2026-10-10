@@ -119,7 +119,7 @@ void utPerfShowLog(void) {
 /* Butterscotch's own report is a line per script too wide for a 320-pixel
  * log, so this writes its own: ms per frame and instructions per frame for
  * the heaviest few, names without the "gml_Object_"/"gml_Script_" prefix. */
-#define UT_SCRIPT_TOP 8
+#define UT_SCRIPT_TOP 20 /* scripts and the built-in functions they call share the list */
 
 void utPerfScriptReport(const Profiler *profiler, int frames) {
     if (profiler == NULL || frames <= 0) return;
@@ -148,7 +148,10 @@ void utPerfScriptReport(const Profiler *profiler, int frames) {
         const char *name = entry->key;
         if (strncmp(name, "gml_Object_", 11) == 0 || strncmp(name, "gml_Script_", 11) == 0) name += 11;
         perFrame = (unsigned) (entry->value.nanos / 100000u / (unsigned) frames);
-        logInfo(" %2u.%u %5u %s\n", perFrame / 10, perFrame % 10, (unsigned) (entry->value.ops / (unsigned) frames), name);
+        /* ms, instructions and calls per frame (calls in tenths). A built-in function has no instructions. */
+        unsigned callTenths = (unsigned) (entry->value.calls * 10u / (unsigned) frames);
+        logInfo(" %2u.%u %5u %3u.%u %s\n", perFrame / 10, perFrame % 10, (unsigned) (entry->value.ops / (unsigned) frames),
+                callTenths / 10, callTenths % 10, name);
     }
 }
 

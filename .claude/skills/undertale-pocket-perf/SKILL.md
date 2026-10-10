@@ -145,6 +145,13 @@ app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`).
 47.2, 47.5 became 45.3, 46.2, 46.4). Kept as the default, but it shows the
 loop itself is not where a script operation's time goes; the desktop
 profile, which put more than half in the loop, does not carry over.
+A pool for script call frames in place of calloc and free
+gained 0.2 to 0.3 ms, within noise, and was dropped. With the script
+profiler on and nothing drawn, scripts are 35 to 39 ms of a battle frame;
+plain scripts run at about 1.9 microseconds an instruction and `scr_charbox`
+at 4.8, about 10 ms a frame, so its time is not all interpretation. The
+profiler now times built-in functions under their own names, with calls per
+frame, to say what the rest is.
 *Measured the same day:* the collision-threshold fix took 3.4 ms off the
 dodging section's step time; the other three double-precision fixes showed
 nothing.

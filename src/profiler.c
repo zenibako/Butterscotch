@@ -61,10 +61,12 @@ void Profiler_exit(Profiler* p) {
         ProfilerStats stats = {0};
         stats.nanos = selfNanos;
         stats.ops = selfOps;
+        stats.calls = 1;
         shput(p->entries, f->name, stats);
     } else {
         p->entries[i].value.nanos += selfNanos;
         p->entries[i].value.ops += selfOps;
+        p->entries[i].value.calls++;
     }
 
     if (p->frameDepth > 0) {
