@@ -54,6 +54,10 @@ if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
     write_ini deltarune_bspd.ini deltarune.elf --bench-smooth os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bspd.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark speed.json"
+    # Speed with nearly every frame skipped: what the game costs when nothing is drawn.
+    write_ini deltarune_bnod.ini deltarune.elf "--bench-smooth --draw-every 100000" os25
+    sed -e 's/"deltarune_os\.ini"/"deltarune_bnod.ini"/' "$DR_INSTANCE" \
+        > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing.json"
     # The same program built with other optimisation flags, to see what the compiler alone can do.
     for build in "O3:$ELF_O3" "LTO:$ELF_LTO"; do
         tag="${build%%:*}"; elf="${build#*:}"

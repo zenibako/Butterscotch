@@ -268,8 +268,10 @@ void utBenchFrame(void) {
 #ifdef UT_BUILD_NOTE
     note = UT_BUILD_NOTE;
 #endif
-    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s%s%s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy",
-               note[0] != '\0' ? ", " : "", note);
+    char drawn[40] = "";
+    if (utPlatformForcedSkip() > 0) snprintf(drawn, sizeof(drawn), ", drawing 1 frame in %d", utPlatformForcedSkip());
+    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s%s%s%s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy",
+               note[0] != '\0' ? ", " : "", note, drawn);
 #ifndef OF_PC
     {
         /* Say which OS and bitstream this ran on; tables look alike otherwise. */

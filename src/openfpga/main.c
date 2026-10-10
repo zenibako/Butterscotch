@@ -82,6 +82,9 @@ int main(int argc, char **argv) {
          * "step" and unexplained "draw" time are. Timing every script call slows the run, so a benchmark
          * with this on is for the names, not for its totals. */
         if (strcmp(argv[i], "--scripts") == 0) utPlatformSetScriptProfile(150);
+        /* --draw-every <n>: only every nth frame is drawn, the rest skipped as speed mode skips them. With a
+         * benchmark and a large n this times everything but the drawing: what a skipped frame costs. */
+        if (strcmp(argv[i], "--draw-every") == 0 && i + 1 < argc) utPlatformSetForcedSkip(atoi(argv[++i]));
     }
 
 #ifdef OF_PC

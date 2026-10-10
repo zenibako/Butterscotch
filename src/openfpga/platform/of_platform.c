@@ -227,6 +227,10 @@ void utPlatformSetForcedSkip(int every) {
     g_forceSkip = every;
 }
 
+int utPlatformForcedSkip(void) {
+    return g_forceSkip;
+}
+
 static void decideFrameSkip(void) {
     static bool lastSkipped = false;
     static int32_t lastShown = 0;

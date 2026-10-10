@@ -43,5 +43,6 @@ void utPlatformSetScriptProfile(int frames);
 void utPlatformSetUncapped(bool uncapped);
 void utPlatformSetMirrorFaint(int alpha);
 void utPlatformSetForcedSkip(int every);
+int utPlatformForcedSkip(void);
 
 #endif /* UT_BENCH_H */
