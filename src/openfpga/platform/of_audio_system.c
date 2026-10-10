@@ -465,16 +465,23 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
     static int16_t out[UT_MIX_CHUNK_PAIRS * 2];
     int32_t master = (int32_t) (ut->masterGain * (float) UT_GAIN_ONE);
     uint64_t mixStart = nowNanos();
+    uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0;
+    int allPairs = pairs;
 
     while (pairs > 0) {
         int chunk = pairs < UT_MIX_CHUNK_PAIRS ? pairs : UT_MIX_CHUNK_PAIRS;
         memset(mix, 0, (size_t) chunk * sizeof(int32_t));
 
         if (!ut->allPaused) {
+            uint64_t voicesStart = nowNanos();
             for (int v = 0; v < UT_MAX_VOICES; v++) {
                 UtVoice *voice = &ut->voices[v];
-                if (voice->active && !voice->paused) mixVoice(ut, voice, mix, chunk);
+                if (voice->active && !voice->paused) {
+                    mixVoice(ut, voice, mix, chunk);
+                    voicePairs += (uint64_t) chunk;
+                }
             }
+            voicesNanos += nowNanos() - voicesStart;
         }
 
         for (int i = 0; i < chunk; i++) {
@@ -490,10 +497,16 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
         }
 
         if (ut->dump != NULL) fwrite(out, sizeof(int16_t) * 2, (size_t) chunk, ut->dump);
+        uint64_t writeStart = nowNanos();
         of_audio_write(out, chunk);
+        writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
     }
     utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
+    utPerfAddLoad(UT_LOAD_MIX_VOICES, voicesNanos);
+    utPerfAddLoad(UT_LOAD_MIX_WRITE, writeNanos);
+    utPerfAddLoad(UT_LOAD_MIX_PAIRS, (uint64_t) allPairs);
+    utPerfAddLoad(UT_LOAD_MIX_VOICE_PAIRS, voicePairs);
 }
 
 /* Keeps the output queue topped up to the target. Does no file I/O, so it is

@@ -78,7 +78,12 @@ void platformDrawProfile(int kind, uint64_t nanos);
 #define UT_DRAW_TICK_NANOS 5000000u
 void platformBusyTick(void);
 void utAudioRoomChange(void);
-typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOAD_MUSIC, UT_LOAD_KINDS } UtLoadKind;
+/* UT_LOAD_MIX is all of mixing, wherever in the frame it ran; MIX_VOICES
+ * (decoding and summing the voices) and MIX_WRITE (handing the samples to
+ * the OS) are parts of it. The last two are counts, not times: output sample
+ * pairs mixed, and those times the voices playing. */
+typedef enum { UT_LOAD_ROOM, UT_LOAD_TEXTURE, UT_LOAD_SOUND, UT_LOAD_MIX, UT_LOAD_MUSIC,
+               UT_LOAD_MIX_VOICES, UT_LOAD_MIX_WRITE, UT_LOAD_MIX_PAIRS, UT_LOAD_MIX_VOICE_PAIRS, UT_LOAD_KINDS } UtLoadKind;
 typedef enum { UT_PHASE_OTHER, UT_PHASE_STEP, UT_PHASE_AUDIO, UT_PHASE_DRAW, UT_PHASE_OUT, UT_PHASES } UtPhase;
 #define UT_PERF_SLOW_FRAME_MS 150
 void utPerfAddLoad(UtLoadKind kind, uint64_t nanos);

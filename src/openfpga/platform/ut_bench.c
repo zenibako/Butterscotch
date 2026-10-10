@@ -319,6 +319,25 @@ void utBenchFrame(void) {
                    TENTHS(t->phaseNanos[UT_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[UT_PHASE_OUT], frames));
         firstFrame = g_sections[i].lastFrame;
     }
+    /* Sound, in ms per frame wherever in the frame it ran (the draw profiler
+     * feeds the queue too, so this is not the snd column): mix is all of
+     * mixing, of which voices is decoding and summing them and write is
+     * handing the samples to the OS; music is reading it from the card; fx
+     * is loading sound effects. Then output sample pairs per frame, and how
+     * many voices were playing on average, in tenths. */
+    utLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
+    firstFrame = 0;
+    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+        const UtPerfTotals *t = &g_sectionTotals[i];
+        int frames = g_sections[i].lastFrame - firstFrame;
+        uint64_t pairs = t->loadNanos[UT_LOAD_MIX_PAIRS];
+        unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[UT_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
+        utLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", g_sections[i].tag,
+                   TENTHS(t->loadNanos[UT_LOAD_MIX], frames), TENTHS(t->loadNanos[UT_LOAD_MIX_VOICES], frames),
+                   TENTHS(t->loadNanos[UT_LOAD_MIX_WRITE], frames), TENTHS(t->loadNanos[UT_LOAD_MUSIC], frames),
+                   TENTHS(t->loadNanos[UT_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
+        firstFrame = g_sections[i].lastFrame;
+    }
     #undef TENTHS
     utLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
     firstFrame = 0;
