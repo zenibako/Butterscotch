@@ -154,13 +154,12 @@ static bool viewGet(VMContext *ctx, RValue *args, int32_t argCount, RValue *resu
  *
  *   return ds_map_find_value(global.chemg_sprite_map, name)
  */
+static int32_t g_spriteMapVar = -1; /* the VM's own id for the name; utNativeInstall forgets it for each new VM */
 static bool get84Sprite(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
     static BuiltinFunc find = NULL;
-    static int32_t mapVar = -1;
-    if (find == NULL) {
-        find = VM_findBuiltin(ctx, "ds_map_find_value");
-        mapVar = VM_getOrAllocateVarID(ctx, "chemg_sprite_map");
-    }
+    if (find == NULL) find = VM_findBuiltin(ctx, "ds_map_find_value");
+    if (g_spriteMapVar < 0) g_spriteMapVar = VM_getOrAllocateVarID(ctx, "chemg_sprite_map");
+    int32_t mapVar = g_spriteMapVar;
     if (find == NULL || argCount < 1 || args == NULL || ctx->globalScopeInstance == NULL) return false;
     RValue call[2] = { Instance_getSelfVar(ctx->globalScopeInstance, mapVar), args[0] };
     *result = find(ctx, call, 2);
@@ -189,6 +188,7 @@ static const struct {
 void utNativeInstall(Runner *runner) {
     VMContext *vm = runner->vmContext;
     if (vm == NULL) return;
+    g_spriteMapVar = -1; /* a game_change gives a new VM, with ids of its own */
 #ifdef OF_PC
     /* UT_CODEHASH=<code entry> prints what a table row needs; UT_NO_NATIVE=1 leaves the bytecode in charge. */
     const char *ask = getenv("UT_CODEHASH");

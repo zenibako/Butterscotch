@@ -3959,7 +3959,7 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
 #ifdef ENABLE_VM_GML_PROFILER
         Profiler_exit(ctx->profiler);
 #endif
-        if (done) return nativeResult;
+        if (done) return RValue_stealOwnershipOrCopy(nativeResult); // as a script's own return value is, below
     }
 
     // Save current frame

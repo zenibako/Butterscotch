@@ -2661,7 +2661,8 @@ void swrSpriteCostProbe(Renderer* renderer, int calls, int32_t* width, int32_t* 
     int32_t sprite = -1;
     if (swrProbeGridSprite >= 0 && (uint32_t) swrProbeGridSprite < dw->sprt.count && Renderer_resolveTPAGIndex(dw, swrProbeGridSprite, 0) >= 0)
         sprite = swrProbeGridSprite;
-    for (uint32_t s = 0; sprite != swrProbeGridSprite && s < dw->sprt.count; s++) {
+    bool fromGrid = sprite >= 0;
+    for (uint32_t s = 0; !fromGrid && s < dw->sprt.count; s++) {
         const Sprite* candidate = &dw->sprt.sprites[s];
         if (candidate->textureCount == 0 || Renderer_resolveTPAGIndex(dw, (int32_t) s, 0) < 0) continue;
         if (sprite < 0) sprite = (int32_t) s;
