@@ -399,3 +399,20 @@ returns says which a build has.) What follows from it:
 - If reads must happen, two pixels per 32-bit load halves them.
 - Scattered single-pixel stores are each a round trip too; consecutive
   stores are what is cheap.
+
+## Sprite-path layout experiment closed (2026-10-10)
+
+*Measured on the Pocket, f42a23c, v0.7/os25, Deltarune Speed benchmark:*
+the ordinary build's 40x40 sprite probe was 19.87 us outside the view and
+73.48 us inside; the adjacent-function build was 19.56 us and 78.34 us.
+Battle work changed from 67.8/80.2/62.8 to 67.5/80.0/62.7 ms; field work
+stayed at 44.4 ms. The hot build booted and completed. One probe-bearing
+run per build, so there is no run-to-run variance estimate.
+
+The proposed criterion was a result well below 19.9 us outside the view;
+this layout failed it and is dropped as a performance direction. It does
+not establish that instruction-cache misses are absent elsewhere: the
+probe is 2000 repeated renderer calls after warming the sprite, bypassing
+the GML builtin and VM. No cache-miss counters are measured.
+
+See the [result and exact device-report excerpts](../../../src/openfpga/docs/2026-10-10-sprite-layout-results.md).
