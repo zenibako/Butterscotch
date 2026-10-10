@@ -47,7 +47,7 @@ device):
 | `UT_SKIP=n` | draw only every nth frame, whatever the mode. A frame captured this way must be identical to one from a run without it: a difference means something drawn on a skipped frame mattered to a later one |
 | `UT_MIRROR_FAINT=a`, `UT_NO_MIRROR=1` | fix the faint-layer threshold (of 256) whatever the mode; draw mirrored layers the ordinary way |
 | `UT_OVERLAY=1` | turn on the frame-time and log overlays |
-| `UT_DEBUG=1` | debug mode, as the menu's "Debug buttons" sets it on the device: the Accuracy/Speed mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
+| `UT_DEBUG=1` | debug mode, as the menu's "Enable debug buttons" sets it on the device: the Accuracy/Speed mark in 640x480 rooms, and the runner's debug hotkeys. Script them by key code: `!` next room, `"` previous room, `w` pause, `O` step, `y` clear `global.interact` |
 | `UT_AUDIO_DUMP=f.raw` | write the mixed output, 48 kHz stereo s16le |
 | `UT_AUDIO_LOG=1` | log every sound effect as it starts |
 | `UT_DUMP_STATE=n` | print every instance and its variables at frame n |
@@ -56,7 +56,7 @@ device):
 | `UT_NOFLIP=1` | never present to the window; without it a run is capped at the display's 60 fps even with `UT_UNCAPPED` |
 | `UT_RECORD=f.json` | write every key press and release, by frame, when the run ends (Butterscotch's `--record-inputs`) |
 | `UT_PLAYBACK=f.json` | replay a recording (`--playback-inputs`). With `UT_RECORD` as well it replays, then records what follows, so a recording can be extended |
-| `UT_PROFILE=n` | log the heaviest game scripts every n frames; the report the menu's "Script times" gives on the device (see the perf skill) |
+| `UT_PROFILE=n` | log the heaviest game scripts every n frames; the report the menu's "Show script times in log" gives on the device (see the perf skill) |
 | `UT_MENU="frame:buttons"` | open the Select menu on that frame and press the buttons in it, one a frame (U D L R, A B). With `UT_DUMP_PATH` the menu as they leave it is written there and the run ends; without, the game goes on once the menu is closed (end with B) |
 | `UT_EXIT_FRAME=n` | leave the main loop at frame n, the ordinary way out (a frame dump exits on the spot) |
 | `UT_NO_NATIVE=1` | run every game script in the interpreter, leaving out the native stand-ins of `platform/ut_native.c`; frames must match with and without |

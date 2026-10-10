@@ -263,7 +263,7 @@ calls per frame, name (without `gml_Object_`/`gml_Script_`). Reading it:
   instruction) has not been measured on the device.
 - The report is up to 21 log lines every two seconds, more than the
   overlay shows: read it from the log file, not a screenshot.
-When asking the user for it: go to the scene, Select, "Script times" (the
+When asking the user for it: go to the scene, Select, "Show script times in log" (the
 log comes up with it), close the menu, wait a few seconds, screenshot.
 
 **Opcode ranking** (desktop only: `make ops`, then run `undertale_pc_ops`
@@ -299,8 +299,8 @@ Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
-**Overlays** (switched on in the menu: press Select, then "Frame times"
-or "Log"): frame times are four numbers over 30 frames (average work,
+**Overlays** (switched on in the menu: press Select, then "Show frame times"
+or "Show log overlay"): frame times are four numbers over 30 frames (average work,
 worst work and worst frame period in ms, then frames skipped); the menu's
 bottom line gives the same numbers in words whether or not the overlay is
 on. The log shows the last log lines over the game; R toggles it too with
