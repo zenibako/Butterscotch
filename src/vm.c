@@ -2893,6 +2893,14 @@ static void unwindVMStack(VMContext* ctx, int32_t newStackTop) {
     ctx->stack.top = newStackTop;
 }
 
+// UT_FAST_LOOP (openfpgaOS only): the interpreter's loop goes into the app's
+// 14 KB of zero-wait, uncached block RAM (of_fastram.h), not into SDRAM
+// behind the instruction cache. An experiment: built as its own benchmark
+// entry, to be kept only if the device says so.
+#ifdef UT_FAST_LOOP
+#include "of_fastram.h"
+OF_FASTTEXT
+#endif
 static RValue executeLoop(VMContext* ctx) {
     // codeEnd and bytecodeBase are invariant for the lifetime of this executeLoop call, so let's hoist them to avoid the compiler emitting code to
     // reload the values at the end of every iteration.

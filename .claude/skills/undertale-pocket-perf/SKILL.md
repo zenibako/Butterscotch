@@ -135,9 +135,13 @@ brought in (`swrTiledHold`).
 the "no drawing" benchmark entry) a Deltarune battle frame still takes 46 to
 50 ms: draw-event scripts about 24 to 30, step 7 to 21, sound 6 to 12. So
 battles cannot reach full speed by drawing less or skipping frames; the
-field (24 ms undrawn) can. Code size is not the reason: `-Os` (768 KB of
-code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower,
-so the 32 KB instruction cache is not what holds the scripts back.
+field (24 ms undrawn) can. Making the code smaller does not help: `-Os` (768 KB of
+code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower.
+That does not settle whether fetching code from SDRAM is what holds the
+scripts back: `-Os` also inlines less, and neither build moved the hot code
+out of SDRAM. The direct test is the interpreter's loop (8.9 KB) in the
+app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`, the
+"no drawing fast loop" benchmark entry); not yet measured.
 
 *Found by reading the device build's disassembly, effect not yet measured:*
 places that fall into software double precision on this single-precision
