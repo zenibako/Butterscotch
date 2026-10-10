@@ -379,3 +379,23 @@ illegal instructions), so there is no cheaper clock. Consequences:
   script profiler (Select + X, `--scripts`) pays two per script and built-in
   call, about 18 us with its lookup: its times rank things, nothing more.
 - `of_audio_free()` is 0.5 us, so the audio queue can be polled freely.
+
+## Why reading the frame buffer is slow (2026-10-10)
+
+*From the OS source, not yet confirmed for the v0.7 runtime on the card:*
+`openfpgaOS/src/firmware/os/targets/pocket/target_platform.h` says app frame
+buffers live at the **uncached** SDRAM alias (`0x50xxxxxx`) so that pixel
+writes do not push the app's data out of the cache; every load from one is
+then an AXI round trip, whatever its width. That fits the measured 245 ns a
+pixel to read against 27 ns to write. (The newer OS in that clone moves them
+to the cached alias with a flush at the flip; the address `of_video_surface()`
+returns says which a build has.) What follows from it:
+
+- Anything that reads the frame buffer per pixel is the expensive kind of
+  draw: translucent fills and sprites, text edges, a pass over another.
+  Work out the colour without reading where the layers under it are known
+  (`swrFillHold`, the held clear, `swrTiledHeldWrite`'s row buffer), or put
+  the rows together in ordinary memory and copy them out.
+- If reads must happen, two pixels per 32-bit load halves them.
+- Scattered single-pixel stores are each a round trip too; consecutive
+  stores are what is cheap.
