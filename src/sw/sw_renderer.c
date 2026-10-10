@@ -23,9 +23,9 @@ static int swrPendingCount = 0; // tile pictures being held (see the tile run ca
 bool swrCallNotes = false;
 bool swrDrawTimed = true;
 int swrProbeStop = 0, swrProbePath = 0;
+#ifdef SW_DRAW_PROFILE
 static bool swrProbing = false;   // no counting of calls, and so no audio top-ups, while the probe times them
 static int32_t swrProbeGridSprite = -1;
-#ifdef SW_DRAW_PROFILE
 #include "gettime.h"
 #define SWR_NOTE_MAX 192
 // A call is noted as numbers and only put into words when the notes are
@@ -2025,7 +2025,9 @@ static bool SWRenderer_drawSpriteGrid(Renderer* renderer, int32_t spriteIndex, c
     swrGrid.owner = swr;
     int g = swrGrid.count++;
     swrGrid.grids[g].sprite = spriteIndex;
+#ifdef SW_DRAW_PROFILE
     swrProbeGridSprite = spriteIndex;
+#endif
     swrGrid.grids[g].cols = cols; swrGrid.grids[g].rows = rows;
     swrGrid.grids[g].first = swrGrid.cells;
     swrGrid.grids[g].x = x; swrGrid.grids[g].y = y;
