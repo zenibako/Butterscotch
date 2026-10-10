@@ -2087,9 +2087,9 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
                     swrFillPixels(&pixels[(y - top) * pitch + (tx0 - left)], (size_t) (tx1 - tx0), *under);
             }
             if (underOnly) continue; // the pictures themselves come in a second pass
-            for (int i = first; i < count; i++)
+            for (int r = first; r < count; r++)
             {
-                const SWTileRun* run = runs[i];
+                const SWTileRun* run = runs[r];
                 uint8_t kind = swrRunBlockKind(run, bx, by);
                 if (kind == SWR_BLOCK_EMPTY) continue;
                 
@@ -2325,8 +2325,8 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
             spare = entry;
         }
     }
-    for (int e = 0; e < SWR_TILE_FLAT_ENTRIES; e++) {
-        SWTileRun* entry = &swrFlatRuns[e];
+    for (int f = 0; f < SWR_TILE_FLAT_ENTRIES; f++) {
+        SWTileRun* entry = &swrFlatRuns[f];
         if (entry->pixels != NULL && swr->frameCounter - entry->lastUsedFrame > SWR_TILE_RUN_IDLE_FRAMES) {
             free(entry->pixels);
             entry->pixels = NULL;

@@ -63,14 +63,14 @@ static bool evictLeastRecentlyUsed(SWRenderer* swr, bool includeCurrentFrame)
             oldest = age;
         }
     }
-    for (size_t i = 0; i < swr->itemCount && swr->itemBytes > 0; i++) {
-        const SWTexture* texture = swr->itemTextures[i];
+    for (size_t j = 0; j < swr->itemCount && swr->itemBytes > 0; j++) {
+        const SWTexture* texture = swr->itemTextures[j];
         if (!texture) continue;
         if (!includeCurrentFrame && texture->lastUsedFrame == swr->frameCounter) continue;
         
         uint32_t age = swr->frameCounter - texture->lastUsedFrame;
         if (victim == -1 || age > oldest) {
-            victim = (int) i;
+            victim = (int) j;
             victimIsItem = true;
             oldest = age;
         }
