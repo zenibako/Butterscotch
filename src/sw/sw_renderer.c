@@ -15,6 +15,7 @@
 void platformSetNextFramebuffer(uintpixel_t* framebuffer, int width, int height, int bpp);
 
 static void swrFlushPendingClear(SWRenderer* swr);
+static int swrPendingCount; // tile pictures being held (see the tile run cache)
 
 // ===[ Call notes ]===
 // See sw_call_notes.h.
@@ -682,14 +683,10 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return;
     SWRenderer* swr = (SWRenderer*) renderer;
-    // What is known about the main buffer before this draw lets out what is
-    // held (which then is at most a clear): that it is one colour, or that a
-    // tiled pass over one colour was the last thing drawn on it.
-    bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0 && !swrGridHeld();
-    bool uniformBefore = nothingHeld && swr->uniformValid && swr->fb == swr->mainFb;
-    bool afterTiled = nothingHeld && swr->tiledPrevValid && swr->fb == swr->mainFb;
-    uintpixel_t uniformColor = swr->uniformColor;
-    swrOverlayFlush(swr);
+    // A clear of the whole main buffer still held, with nothing over it but
+    // tiled passes held already: this one can be held with them.
+    bool canHold = swr->clearHeld && swr->fb == swr->mainFb && swrPendingCount == 0 && !swrGridHeld() &&
+                   swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
     DataWin* dwin = renderer->dataWin;
 
     if (0 > tpagIndex || dwin->tpag.count <= (uint32_t) tpagIndex) return;
@@ -753,9 +750,16 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
         for (int dx = startX; endX > dx; dx += tileW) countX++;
         for (int dy = startY; endY > dy; dy += tileH) countY++;
         int firstX = (int) startX + (int) originX + sx0, firstY = (int) startY + (int) originY + sy0;
+        if (canHold && swrTiledHold(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha)) {
+            swr->uniformValid = false; // one colour no longer, though nothing is written yet
+            return;
+        }
+        swrOverlayFlush(swr);
         bool drawn;
-        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha, uniformBefore ? &uniformColor : NULL, afterTiled));
+        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha));
         if (drawn) return;
+    } else {
+        swrOverlayFlush(swr);
     }
     
     for (int dy = startY; endY > dy; dy += tileH) {
@@ -859,7 +863,11 @@ void swrClearSettle(SWRenderer* swr)
 {
     if (!swr->clearHeld) return;
     swr->clearHeld = false;
-    if (!swr->mainFb) return;
+    if (!swr->mainFb) { swr->tiledHeldCount = 0; return; }
+    if (swr->tiledHeldCount > 0) {
+        SWR_NOTED("  of which: held clear and tiled written", swrTiledHeldWrite(swr, swr->clearHeldColor));
+        return;
+    }
     SWR_NOTED("  of which: held clear written", swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, swr->clearHeldColor));
 }
 
@@ -2163,6 +2171,7 @@ static void swrTileRunsDrawPending(SWRenderer* swr)
     int shift = swrPendingRuns[0]->shift;
     int32_t viewX = (int32_t) swr->viewX, viewY = (int32_t) swr->viewY;
     int left = shift == 0 ? viewX : (viewX + 1) >> 1, top = shift == 0 ? viewY : (viewY + 1) >> 1;
+    if (swr->tiledHeldCount > 0) swrClearSettle(swr); // a clear with tiled passes over it is written as it is, not worked in below
     uintpixel_t* target = &swr->fb[swr->portY * swr->fbPitch + swr->portX];
     int width = swr->maxX - swr->portX, height = swr->maxY - swr->portY;
     
@@ -2221,7 +2230,11 @@ void swrTileRunsFlush(SWRenderer* swr)
 // paints may be worked out from the clear's colour.
 void swrHeldUnderDiscard(SWRenderer* swr)
 {
-    (void) swr;
+    // Tiled passes held over the clear go, and that clear with them: it is no longer one colour to work from.
+    if (swr->tiledHeldCount > 0) {
+        swr->tiledHeldCount = 0;
+        swr->clearHeld = false;
+    }
     swrPendingCount = 0;
     swrGrid.count = 0;
     swrGrid.cells = 0;

@@ -118,21 +118,25 @@ no write): about 245 ns a pixel just to read the framebuffer. A fill that
 only writes is about 2 ms. Copying a cached tile picture to the screen costs
 about 110 ns a pixel. `-O3` and LTO changed nothing (within 2%).
 
-*Measured, and it corrected a wrong conclusion:* a tiled pass blending about
-6,000 scattered pixels took 6 ms. Taking the buffer out of it (the colour
-under each pixel known, nothing read) left it at 6.4 ms; working that colour
-out with two divisions a pixel made it 15 ms. So that pass was paying for
-arithmetic, about 100 cycles a blended pixel, not for reads. *Inferred:*
-multiplies and divides are slow on this CPU (a blend is four or five
-multiplies), which also fits the 37 ms a full-screen blend costs.
+*Measured, and it overturned two conclusions in a row:* a tiled pass that
+put down about 6,000 scattered pixels (one per row per copy of a tile of
+thin lines) took 6 ms. Taking the buffer reads out of it (the colour under
+each pixel known) left it at 6.4 ms. Taking the blend's arithmetic out of it
+as well (the last answer kept) left it at 5.9 ms. Two divisions a pixel, by
+contrast, made it 15 ms, so divisions are dear. *Inferred, not yet confirmed
+on the device:* what is left is the store itself: each pixel is on a cache
+line of its own, and a store to a line not in the cache costs about a
+microsecond, where a fill of consecutive pixels costs about 27 ns each. The
+change made on that inference writes such a pass together with the clear
+under it, row by row, so that its pixels land on lines the fill has just
+brought in (`swrTiledHold`).
 
 So, before optimising a draw, find out which it is. The benchmark report's
 "costliest draws" list (`sw_call_notes.h`) names the calls and times parts
 of them; three guesses at the tiled background were wrong before that list
 existed, and one after. What has worked: not drawing at all (held layers
-dropped under an opaque full-screen fill), fewer passes over the screen,
-keeping the last blend's answer when the same one is asked for again, and
-no division or multiply per pixel where a running value will do.
+dropped under an opaque full-screen fill), fewer passes over the screen, and
+no division per pixel where a running value will do.
 
 ## Findings from play sessions (2026-10-07)
 

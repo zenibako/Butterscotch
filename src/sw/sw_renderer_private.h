@@ -123,18 +123,9 @@ typedef struct
     uintpixel_t pendingClearColor;
     bool clearHeld;         // a clear of the whole main buffer is still to be done (see swrClearSettle)
     uintpixel_t clearHeldColor;
-    // The tiled pass that was last drawn over a buffer of one known colour,
-    // with nothing drawn since: a second pass can then work out what is under
-    // each of its pixels instead of reading it (see swrDrawSpriteTiledRows).
-    bool tiledPrevValid;
-    struct {
-        const SWTexture* texture;
-        const uintpixel_t* buffer;
-        const uint8_t* coverage;
-        int pitch, srcX, srcY, width, height, stepX, stepY, originX, originY, countX, countY, alpha;
-        int minX, minY, maxX, maxY;
-        uintpixel_t under;
-    } tiledPrev;
+    // Tiled passes held over the held clear, to be written with it row by row
+    // (see swrTiledHold); only ever non-zero while clearHeld is set.
+    int tiledHeldCount;
     bool clearHeldForFill;  // SWRenderer_drawRectangle took the held clear for the swrFillRectangle call it is making
     bool fbIsPlatform; // mainFb belongs to the platform (SW_PLATFORM_FRAMEBUFFER), not to us
     
