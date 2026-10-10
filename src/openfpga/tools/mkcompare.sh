@@ -10,11 +10,11 @@
 # All three share Assets/butterscotch/common (data.win, textures.bin,
 # music.bin); the v0.9 cores use their own os09.bin and undertale09.elf.
 #
-# Usage: mkcompare.sh <build tree> <v0.9 runtime/pocket dir> <v0.9 app.elf> [Deltarune -O3 app.elf] [Deltarune LTO app.elf]
+# Usage: mkcompare.sh <build tree> <v0.9 runtime/pocket dir> <v0.9 app.elf> ["<name>:<Deltarune app.elf built another way>" ...]
 #
 set -e
 
-OUT="$1"; RT09="$2"; ELF09="$3"; ELF_O3="${4:-}"; ELF_LTO="${5:-}"
+OUT="$1"; RT09="$2"; ELF09="$3"; shift 3 # the rest: "<name>:<app.elf>" for each other build of Deltarune
 [ -d "$OUT/Cores/zenibako.Butterscotch" ] || { echo "mkcompare: $OUT is not an assembled tree"; exit 1; }
 [ -f "$RT09/os.bin" ] || { echo "mkcompare: no os.bin in $RT09"; exit 1; }
 [ -f "$ELF09" ] || { echo "mkcompare: $ELF09 not found"; exit 1; }
@@ -58,15 +58,16 @@ if [ -f "$DR_INSTANCE" ] && [ -f "$COMMON/deltarune.elf" ]; then
     write_ini deltarune_bnod.ini deltarune.elf "--bench-smooth --draw-every 100000" os25
     sed -e 's/"deltarune_os\.ini"/"deltarune_bnod.ini"/' "$DR_INSTANCE" \
         > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing.json"
-    # The same program built with other optimisation flags, to see what the compiler alone can do.
-    for build in "O3:$ELF_O3" "LTO:$ELF_LTO"; do
+    # The same program built with other compiler flags, timed without its drawing (see above): the
+    # game's scripts are what holds battles back, and this is the shortest run that shows them.
+    for build in "$@"; do
         tag="${build%%:*}"; elf="${build#*:}"
         [ -n "$elf" ] && [ -f "$elf" ] || continue
-        lower=$(printf '%s' "$tag" | tr 'A-Z' 'a-z')
+        lower=$(printf '%s' "$tag" | tr 'A-Z' 'a-z' | tr -d ' ')
         cp "$elf" "$COMMON/deltarune_$lower.elf"
-        write_ini "deltarune_b$lower.ini" "deltarune_$lower.elf" --bench-smooth os25
+        write_ini "deltarune_b$lower.ini" "deltarune_$lower.elf" "--bench-smooth --draw-every 100000" os25
         sed -e "s/\"deltarune_os\.ini\"/\"deltarune_b$lower.ini\"/" -e "s/\"deltarune\.elf\"/\"deltarune_$lower.elf\"/" "$DR_INSTANCE" \
-            > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark speed $tag.json"
+            > "$OUT/Assets/butterscotch/zenibako.Butterscotch/Deltarune Benchmark no drawing $tag.json"
     done
 fi
 

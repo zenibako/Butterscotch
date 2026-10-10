@@ -120,7 +120,10 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
 
 # UT_OPT: extra optimisation flags for the device build, after the SDK's -O2
 # (the last -O wins); `make compare` builds Deltarune again with some, as
-# benchmark entries of their own.
+# benchmark entries of their own. The CPU has a 32 KB instruction cache, and
+# the SDK aligns every function and loop to its 64-byte lines: the variants
+# are there to find out whether smaller or denser code runs the game's
+# scripts faster.
 UT_OPT ?=
 CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
 LDFLAGS += $(UT_OPT)
@@ -239,9 +242,9 @@ OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-O3" OBJ_DIR=$(ROOT)/.obj/deltarune-o3 BUILD_DIR=$(ROOT)/.obj/deltarune-o3 $(ROOT)/.obj/deltarune-o3/app.elf
-	$(MAKE) GAME=deltarune UT_OPT="-O3 -flto" OBJ_DIR=$(ROOT)/.obj/deltarune-lto BUILD_DIR=$(ROOT)/.obj/deltarune-lto $(ROOT)/.obj/deltarune-lto/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "$(ROOT)/.obj/deltarune-o3/app.elf" "$(ROOT)/.obj/deltarune-lto/app.elf"
+	$(MAKE) GAME=deltarune UT_OPT="-Os" OBJ_DIR=$(ROOT)/.obj/deltarune-os BUILD_DIR=$(ROOT)/.obj/deltarune-os $(ROOT)/.obj/deltarune-os/app.elf
+	$(MAKE) GAME=deltarune UT_OPT="-falign-functions=4 -falign-loops=4" OBJ_DIR=$(ROOT)/.obj/deltarune-dense BUILD_DIR=$(ROOT)/.obj/deltarune-dense $(ROOT)/.obj/deltarune-dense/app.elf
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "Os:$(ROOT)/.obj/deltarune-os/app.elf" "dense:$(ROOT)/.obj/deltarune-dense/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.
