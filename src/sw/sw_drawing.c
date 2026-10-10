@@ -2,6 +2,7 @@
 #include <limits.h>
 #include <float.h>
 #include "sw_renderer_private.h"
+#include "sw_call_notes.h"
 
 // ==== Internal functions ====
 
@@ -896,6 +897,7 @@ static void swrDrawSpriteInternal(
 )
 {
     SWRenderer *swr = (SWRenderer*) renderer;
+    SWR_PROBE_STOP(3);
 #ifdef SW_HAS_PREMUL_BLEND
     const SWSpriteCall asked = { dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha };
 #endif
@@ -945,6 +947,7 @@ static void swrDrawSpriteInternal(
     if (sx + sw >= texture->width)  { sw = texture->width  - sx; }
     if (sy + sh >= texture->height) { sh = texture->height - sy; }
     if (sw <= 0 || sh <= 0) return;
+    SWR_PROBE_STOP(4);
     
 #ifdef SW_HAS_PREMUL_BLEND
     // Drawn at half size with speed favoured: take the texels from the
@@ -981,7 +984,10 @@ static void swrDrawSpriteInternal(
         
         if (coverage != NULL)
         {
+            SWR_PROBE_STOP(5);
+            SWR_PROBE_PATH(1);
             swrOverlayFlush(swr);
+            SWR_PROBE_STOP(6);
             uint32_t lastColor = 0xFFFFFFFF;
             uintpixel_t lastTinted = 0;
             for (int y = 0; y < dh; y++)
@@ -1030,6 +1036,7 @@ static void swrDrawSpriteInternal(
 #endif
     
     //okay, now we can finally get on with rendering
+    SWR_PROBE_STOP(5);
     
     int ixs = 0, oxs = 1, iys = 0, oys = 1;
     if (flipX) ixs = dw - 1, oxs = -1;
@@ -1075,6 +1082,7 @@ static void swrDrawSpriteInternal(
     }
     swrOverlayFlush(swr);
 #endif
+    SWR_PROBE_STOP(6);
     
 #ifdef SW_HAS_PREMUL_BLEND
     // Shrinking by about half with nearest-neighbour sampling drops every
@@ -1087,6 +1095,7 @@ static void swrDrawSpriteInternal(
         int srcRight = sx + sw - 1, srcBottom = sy + sh - 1;
         uint32_t lastColor = 0xFFFFFFFF;
         uintpixel_t lastTinted = 0;
+        SWR_PROBE_PATH(5);
         
         fixedp_t ys2 = iys2;
         for (int y = 0; y < dh; y++, ys2 += oys2)
@@ -1159,6 +1168,7 @@ static void swrDrawSpriteInternal(
         uint32_t dstalpha = 256 - alpha;
         uint32_t lastPixel = 0xFFFFFFFF;
         uint32_t srcRedBlue = 0, srcGreen = 0;
+        SWR_PROBE_PATH(4);
         
         fixedp_t ys2 = iys2;
         for (int y = 0, ys = iys; y < dh; y++, ys += oys, ys2 += oys2)
@@ -1217,6 +1227,7 @@ static void swrDrawSpriteInternal(
             texture->solid = opaque == count ? 1 : 2;
         }
         bool solid = texture->solid == 1;
+        SWR_PROBE_PATH(solid ? 2 : 3);
         const uint16_t* rowBounds = NULL;
         if (!solid && untinted && !flipX && xstep == (1 << fp_prec) && dh == sh)
             rowBounds = texture->buffer == texture->halfBuffer ? texture->halfRowBounds : swrRowBounds(texture); // the half-size copy stands in as a texture of its own
