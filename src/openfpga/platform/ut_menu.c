@@ -5,8 +5,9 @@
  *
  *   Up/Down   choose a row (held, it repeats)
  *   Left/Right  change a setting
- *   A         change a setting, or do what the row says
- *   B, Select, Start  close
+ *   A         change a setting, open a sub-menu, or do what the row says
+ *   B         back out of a sub-menu, or close
+ *   Select, Start  close
  *
  * The layout is worked out at 320x240 and doubled for a 640x480 frame, the
  * way utFontScale does the text, and rows scroll if the font is too tall for
@@ -103,8 +104,8 @@ static void draw(const UtMenu *menu, const MenuState *state, uint16_t *fb, const
         bool chosen = index == state->cursor;
         if (chosen) drawSoul(fb, width, height, left, y + (line - UT_SOUL_H * s) / 2, s);
         utFontDraw(fb, width, height, textX, y, row->label, chosen ? UT_YELLOW : UT_WHITE, s);
-        if (row->value != NULL) {
-            const char *value = row->value();
+        if (row->value != NULL || row->submenu != NULL) {
+            const char *value = row->value != NULL ? row->value() : ">";
             utFontDraw(fb, width, height, right - utFontWidth(value, s), y, value, chosen ? UT_YELLOW : UT_WHITE, s);
         }
         y += line;
@@ -166,6 +167,13 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
     }
     memcpy(game, frame, pixels * sizeof(uint16_t));
 
+    /* The menus opened on the way to this one, and where each was left. */
+    enum { UT_MENU_DEPTH = 4 };
+    const UtMenu *parents[UT_MENU_DEPTH];
+    MenuState parentStates[UT_MENU_DEPTH];
+    int depth = 0;
+    const UtMenu *const top = menu;
+
     MenuState state = { 0, 0, 0 };
     bool open = true;
     while (open) {
@@ -186,12 +194,29 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
 
         const UtMenuRow *row = &menu->rows[state.cursor];
         int direction = (pressed & (1u << BTN_LEFT)) ? -1 : (pressed & (1u << BTN_RIGHT)) ? 1 : 0;
-        if (pressed & (1u << BTN_A)) {
+        if ((pressed & (1u << BTN_A)) && row->submenu != NULL) {
+            if (depth < UT_MENU_DEPTH && row->submenu->count > 0) {
+                parents[depth] = menu;
+                parentStates[depth] = state;
+                depth++;
+                menu = row->submenu;
+                state = (MenuState) { 0, 0, 0 };
+            }
+        } else if (pressed & (1u << BTN_A)) {
             if (row->choose(0)) open = false;
         } else if (direction != 0 && row->value != NULL) {
             if (row->choose(direction)) open = false;
         }
-        if (pressed & ((1u << BTN_B) | (1u << BTN_SELECT) | (1u << BTN_START))) open = false;
+        if (pressed & ((1u << BTN_SELECT) | (1u << BTN_START))) open = false;
+        if (pressed & (1u << BTN_B)) {
+            if (depth == 0) {
+                open = false;
+            } else {
+                depth--;
+                menu = parents[depth];
+                state = parentStates[depth];
+            }
+        }
 
         /* Keep the chosen row in view. */
         int s = utFontScale(width), line = utFontLineHeight(s);
@@ -203,8 +228,8 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
 
         if (!open) break;
         draw(menu, &state, fb, game, width, height);
-        menu->present(fb);
-        if (menu->idle != NULL) menu->idle();
+        top->present(fb);
+        if (top->idle != NULL) top->idle();
 #ifdef OF_PC
         if (g_script != NULL) continue;
 #endif
@@ -216,7 +241,7 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
         g_script = NULL;
         if (open) {
             draw(menu, &state, fb, game, width, height);
-            menu->present(fb);
+            top->present(fb);
             free(game);
             free(fb);
             return true;
@@ -224,7 +249,7 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
     }
 #endif
     /* The game's picture back: a paused game shows no new one by itself. */
-    menu->present(game);
+    top->present(game);
     free(game);
     free(fb);
     return true;

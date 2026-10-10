@@ -805,18 +805,17 @@ static bool menuSaveLog(int direction) {
     return true;
 }
 
-static const UtMenuRow g_menuRows[] = {
-    { "Resume",                    NULL,                 menuResume },
-    { "Performance Mode",          menuVideoValue,       menuVideo },
-    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes },
-    { "Show log overlay",          menuLogValue,         menuLog },
-    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes },
-    { "Enable debug buttons",      menuDebugValue,       menuDebug },
-    { "Next room",                 NULL,                 menuNextRoom },
-    { "Previous room",             NULL,                 menuPreviousRoom },
-    { "Clear interact",            NULL,                 menuUnstick },
-    { "Save log",                  NULL,                 menuSaveLog },
-};
+static const char *menuAudioValue(void) {
+    return utAudioModeName(utAudioMode());
+}
+
+/* A and Right step forward through the modes, Left back. */
+static bool menuAudio(int direction) {
+    int mode = ((int) utAudioMode() + (direction < 0 ? UT_AUDIO_MODE_COUNT - 1 : 1)) % UT_AUDIO_MODE_COUNT;
+    utAudioSetMode((UtAudioMode) mode);
+    logInfo("Debug: audio %s\n", utAudioModeName((UtAudioMode) mode));
+    return false;
+}
 
 /* The frame-time overlay's numbers, in words. */
 static void menuStatus(char *out, size_t size) {
@@ -825,6 +824,29 @@ static void menuStatus(char *out, size_t size) {
     (void) worstPeriod;
     snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
 }
+
+static const UtMenuRow g_debugRows[] = {
+    { "Audio mode",                menuAudioValue,       menuAudio,        NULL },
+    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes,   NULL },
+    { "Show log overlay",          menuLogValue,         menuLog,          NULL },
+    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes,  NULL },
+    { "Enable debug buttons",      menuDebugValue,       menuDebug,        NULL },
+    { "Next room",                 NULL,                 menuNextRoom,     NULL },
+    { "Previous room",             NULL,                 menuPreviousRoom, NULL },
+    { "Clear interact",            NULL,                 menuUnstick,      NULL },
+    { "Save log",                  NULL,                 menuSaveLog,      NULL },
+};
+
+/* The sub-menu is shown and kept fed by the top menu's present and idle. */
+static const UtMenu g_debugMenu = {
+    "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])), menuStatus, NULL, NULL,
+};
+
+static const UtMenuRow g_menuRows[] = {
+    { "Resume",                    NULL,                 menuResume,       NULL },
+    { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
+    { "Debug",                     NULL,                 NULL,             &g_debugMenu },
+};
 
 #ifdef OF_PC
 static bool g_menuDump = false;
@@ -934,8 +956,8 @@ bool platformHandleEvents(void) {
         showNotice(scriptProfileOn() ? "Script times on" : "Script times off");
     }
     if (chording && of_btn_pressed(OF_BTN_DOWN)) {
-        bool mute = !utAudioMuted();
-        utAudioSetMuted(mute);
+        bool mute = utAudioMode() == UT_AUDIO_NORMAL;
+        utAudioSetMode(mute ? UT_AUDIO_DISABLED : UT_AUDIO_NORMAL);
         chordUsed = true;
         showNotice(mute ? "Sound off" : "Sound on");
         logInfo("Debug: sound %s\n", mute ? "off" : "on; what was playing is rough until it next starts");

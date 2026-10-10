@@ -23,9 +23,12 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize);
 bool utAudioHasPackFile(const char *path);
 
-/* Sound off or on (a debug switch): muted, sounds run their course unheard and cost almost nothing. */
-void utAudioSetMuted(bool muted);
-bool utAudioMuted(void);
+/* What is heard (a debug setting). Sounds left unheard still run their course
+ * and cost almost nothing; with everything off nothing is mixed at all. */
+typedef enum { UT_AUDIO_NORMAL, UT_AUDIO_DISABLED, UT_AUDIO_MUSIC_ONLY, UT_AUDIO_SOUND_ONLY, UT_AUDIO_MODE_COUNT } UtAudioMode;
+void utAudioSetMode(UtAudioMode mode);
+UtAudioMode utAudioMode(void);
+const char *utAudioModeName(UtAudioMode mode);
 void platformLog(const logType type, const char *format, va_list va) __attribute__((format(printf, 2, 0)));
 
 #endif
