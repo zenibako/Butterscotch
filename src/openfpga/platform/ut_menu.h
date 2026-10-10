@@ -6,8 +6,11 @@
 #include <stdint.h>
 
 /* The port's menu: Select opens it over the paused game. It lists the
- * debug and performance settings, each a row; see of_platform.c for the
- * rows themselves. This module draws the menu and moves through it. */
+ * debug and performance settings, each a row, some of them on a page of
+ * their own that a row opens; see of_platform.c for the rows themselves.
+ * This module draws the menu and moves through it. */
+
+typedef struct UtMenuPage UtMenuPage;
 
 typedef struct {
     const char *label;
@@ -17,12 +20,19 @@ typedef struct {
     /* A on the row (direction 0), or Left/Right on a setting (-1, +1).
      * Returns true when the menu should close. */
     bool (*choose)(int direction);
+    /* The page of rows A opens from this one, or NULL; `value` and `choose`
+     * are not used on a row that has one. B on that page comes back here. */
+    const UtMenuPage *opens;
 } UtMenuRow;
 
-typedef struct {
+struct UtMenuPage {
     const char *title;
     const UtMenuRow *rows;
     int count;
+};
+
+typedef struct {
+    UtMenuPage page; /* the first page */
     /* A line under the rows, written fresh each frame (the frame times). */
     void (*status)(char *out, size_t size);
     /* Shows a finished frame of `width` x `height` pixels. */
@@ -39,7 +49,7 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
 
 #ifdef OF_PC
 /* Desktop test aid: the next utMenuRun takes these buttons from `moves`
- * instead of the pad, one per frame (U D L R, A B), draws the menu after the
+ * instead of the pad, one per frame (U D L R, A B, S for Select, E for Start), draws the menu after the
  * last one, and returns. */
 void utMenuScript(const char *moves);
 #endif
