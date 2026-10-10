@@ -253,16 +253,9 @@ copy: all
 SDK09   ?= $(abspath $(CURDIR)/../../../Diablo)
 OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
-# An experiment rides along: Deltarune linked with the functions of a sprite
-# draw side by side (tools/hot-sprites.ld), to see what the instruction cache
-# costs them. It gets a "Deltarune Benchmark speed hot" entry.
-OBJHOT   = $(ROOT)/.obj/deltarune-hot
-HOT_OPT  = -Wl,--section-ordering-file=tools/hot-sprites.ld
-
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	$(MAKE) GAME=deltarune OBJ_DIR=$(OBJHOT) BUILD_DIR=$(OBJHOT) UT_OPT="$(HOT_OPT)" $(OBJHOT)/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "hot:$(OBJHOT)/app.elf"
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.
