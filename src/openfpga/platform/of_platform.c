@@ -23,6 +23,7 @@
 #include "ut_menu.h"
 #include "ut_strings.h"
 #include "ut_native.h"
+#include "sw_call_notes.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -262,6 +263,13 @@ void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skipp
     volatile int sink = 0;
     for (int i = 0; i < CALLS; i++) sink += of_audio_free();
     *audioFree = (unsigned) ((nowNanos() - start) / CALLS);
+}
+
+void utPlatformSpriteCosts(int *width, int *height, unsigned *outside, unsigned *inside) {
+    int32_t w = 0, h = 0;
+    uint32_t out = 0, in = 0;
+    if (g_runner != NULL && g_runner->renderer != NULL) swrSpriteCostProbe(g_runner->renderer, 2000, &w, &h, &out, &in);
+    *width = (int) w; *height = (int) h; *outside = (unsigned) out; *inside = (unsigned) in;
 }
 
 static void decideFrameSkip(void) {

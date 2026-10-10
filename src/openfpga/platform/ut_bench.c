@@ -385,5 +385,15 @@ void utBenchFrame(void) {
         }
     }
     utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
+    /* One more measurement, after the report is safely in the file: it draws
+     * outside a frame, and a report must not be lost to it. */
+    utLogDump();
+    {
+        int width, height;
+        unsigned outside, inside;
+        utPlatformSpriteCosts(&width, &height, &outside, &inside);
+        utLogPrint("sprite %dx%d draw, us: outside the view %u.%02u, inside it %u.%02u\n", width, height,
+                   outside / 1000, outside % 1000 / 10, inside / 1000, inside % 1000 / 10);
+    }
     utDiagHalt("benchmark finished");
 }

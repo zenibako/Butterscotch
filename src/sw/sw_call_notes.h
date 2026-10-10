@@ -27,4 +27,9 @@ extern bool swrDrawTimed;
 // full, the one with the least time makes way for a new one.
 int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed);
 
+
+// See sw_renderer.c.
+struct Renderer;
+void swrSpriteCostProbe(struct Renderer* renderer, int calls, int32_t* width, int32_t* height, uint32_t* outside, uint32_t* inside);
+
 #endif

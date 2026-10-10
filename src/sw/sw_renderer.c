@@ -2639,6 +2639,48 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
 #endif
 }
 
+// What a small sprite draw costs here, for a benchmark to print: `calls`
+// draws of the first 40x40 sprite (else the first sprite with a picture),
+// once where it is wholly outside the view, so that the draw gets as far as
+// finding that out, and once inside it. Nanoseconds per call; the sprite's
+// size goes to *width and *height. Leaves the pixels it drew in the buffer.
+void swrSpriteCostProbe(Renderer* renderer, int calls, int32_t* width, int32_t* height, uint32_t* outside, uint32_t* inside)
+{
+    *width = *height = 0;
+    *outside = *inside = 0;
+#ifdef SW_DRAW_PROFILE
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    if (swr->fb == NULL || calls <= 0) return;
+    int32_t sprite = -1;
+    for (uint32_t s = 0; s < dw->sprt.count; s++) {
+        const Sprite* candidate = &dw->sprt.sprites[s];
+        if (candidate->textureCount == 0 || Renderer_resolveTPAGIndex(dw, (int32_t) s, 0) < 0) continue;
+        if (sprite < 0) sprite = (int32_t) s;
+        if (candidate->width == 40 && candidate->height == 40) { sprite = (int32_t) s; break; }
+    }
+    if (sprite < 0) return;
+    *width = (int32_t) dw->sprt.sprites[sprite].width;
+    *height = (int32_t) dw->sprt.sprites[sprite].height;
+    
+    bool skipped = swrSkipFrame, timed = swrDrawTimed, noted = swrCallNotes;
+    swrSkipFrame = false; swrDrawTimed = false; swrCallNotes = false;
+    swrOverlayFlush(swr);
+    Renderer_drawSprite(renderer, sprite, 0, (float) swr->viewX + 60.0f, (float) swr->viewY + 60.0f); // its texture loaded, its copies made
+    uint64_t start = nowNanos();
+    for (int i = 0; i < calls; i++) Renderer_drawSprite(renderer, sprite, 0, (float) swr->viewX - 10000.0f, (float) swr->viewY + 60.0f);
+    uint64_t between = nowNanos();
+    for (int i = 0; i < calls; i++) Renderer_drawSprite(renderer, sprite, 0, (float) swr->viewX + 60.0f, (float) swr->viewY + 60.0f);
+    uint64_t end = nowNanos();
+    swrOverlayFlush(swr);
+    *outside = (uint32_t) ((between - start) / (uint64_t) calls);
+    *inside = (uint32_t) ((end - between) / (uint64_t) calls);
+    swrSkipFrame = skipped; swrDrawTimed = timed; swrCallNotes = noted;
+#else
+    (void) renderer; (void) calls;
+#endif
+}
+
 #ifdef SW_DRAW_PROFILE
 // Times each kind of draw call and hands the totals to the platform, which
 // can then say what a slow frame was spent drawing.
