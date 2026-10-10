@@ -168,8 +168,20 @@ static void swrDrawHLineInt(Renderer* renderer, int dx, int dy, int dw, uintpixe
             uint32_t srcRedBlue = swrSpreadRedBlue(color) * alpha;
             uint32_t srcGreen = swrGreen(color) * alpha;
             uint32_t dstalpha = 256 - alpha;
-            for (int i = 0; i < dw; i++)
-                line[i] = swrBlendPremultiplied(line[i], srcRedBlue, srcGreen, dstalpha);
+            // One colour over the row: the result depends only on the pixel
+            // under it, so it is worked out again only when that changes, and
+            // written only when it differs. A fade to black over a screen
+            // that is mostly black already then mostly just reads.
+            uintpixel_t lastUnder = line[0];
+            uintpixel_t lastResult = swrBlendPremultiplied(lastUnder, srcRedBlue, srcGreen, dstalpha);
+            for (int i = 0; i < dw; i++) {
+                uintpixel_t under = line[i];
+                if (under != lastUnder) {
+                    lastUnder = under;
+                    lastResult = swrBlendPremultiplied(under, srcRedBlue, srcGreen, dstalpha);
+                }
+                if (lastResult != under) line[i] = lastResult;
+            }
             return;
         }
 #endif

@@ -118,7 +118,12 @@ endif
 BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
           -Wno-sign-compare -Wno-missing-field-initializers
 
-CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN)
+# UT_OPT: extra optimisation flags for the device build, after the SDK's -O2
+# (the last -O wins); `make compare` builds Deltarune again with some, as
+# benchmark entries of their own.
+UT_OPT ?=
+CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
+LDFLAGS += $(UT_OPT)
 
 # Data files bundled into the per-target deliverable (override per core).
 # data.win is your own copy of the game data (gitignored); when present it is
@@ -234,7 +239,9 @@ OBJ09    = $(ROOT)/.obj/$(APP)-v09
 
 compare: all
 	$(MAKE) SDK_DIR=$(SDK09)/src/sdk OBJ_DIR=$(OBJ09) BUILD_DIR=$(OBJ09) $(OBJ09)/app.elf
-	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf"
+	$(MAKE) GAME=deltarune UT_OPT="-O3" OBJ_DIR=$(ROOT)/.obj/deltarune-o3 BUILD_DIR=$(ROOT)/.obj/deltarune-o3 $(ROOT)/.obj/deltarune-o3/app.elf
+	$(MAKE) GAME=deltarune UT_OPT="-O3 -flto" OBJ_DIR=$(ROOT)/.obj/deltarune-lto BUILD_DIR=$(ROOT)/.obj/deltarune-lto $(ROOT)/.obj/deltarune-lto/app.elf
+	@tools/mkcompare.sh "$(OUT)" "$(SDK09)/runtime/pocket" "$(OBJ09)/app.elf" "$(ROOT)/.obj/deltarune-o3/app.elf" "$(ROOT)/.obj/deltarune-lto/app.elf"
 
 # Like `copy`, but without re-running the assembly step, which would remove
 # the comparison cores again.

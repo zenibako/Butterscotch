@@ -57,7 +57,11 @@ static const UtBenchSection g_sections[] = {
     { "creation screens 320", 2100, "creat" },
     { "town yard 320x240", 2600, "yard" },
     { "field (640x480)", 3050, "field" },
-    { "battle (640x480)", 3600, "battl" },
+    /* The battle in three: choosing and attacking, the enemy's turn (the
+     * heart in its box among the bullets), and the turn after. */
+    { "battle: menu, attack", 3225, "bmenu" },
+    { "battle: dodging", 3380, "dodge" },
+    { "battle: next turn", 3600, "bnext" },
 };
 /* The audio pack is about 43 MB against Undertale's 134; the read tests use the same offsets, scaled. */
 #define UT_IO_MB(n) ((n) / 3u)
@@ -249,7 +253,13 @@ void utBenchFrame(void) {
     if (++g_section < UT_BENCH_SECTIONS) return;
 
     g_running = false;
-    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy");
+    /* A build with optimisation flags of its own (UT_OPT) says so in the title. */
+    const char *note = "";
+#ifdef UT_BUILD_NOTE
+    note = UT_BUILD_NOTE;
+#endif
+    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s%s%s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy",
+               note[0] != '\0' ? ", " : "", note);
 #ifndef OF_PC
     {
         /* Say which OS and bitstream this ran on; tables look alike otherwise. */
