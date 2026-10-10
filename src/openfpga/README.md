@@ -1,4 +1,4 @@
-# Butterscotch Pocket: Undertale on openfpgaOS (Analogue Pocket / MiSTer)
+# Butterscotch Pocket: Undertale and Deltarune on openfpgaOS (Analogue Pocket / MiSTer)
 
 <p align="center"><img src="docs/banner.png" alt="Butterscotch Pocket menu banner: a pixel heart above the words BUTTERSCOTCH POCKET" width="521"></p>
 
@@ -17,9 +17,14 @@ Introduction: one short paragraph, then the game-data notice.
 -->
 
 Butterscotch built as an openfpgaOS app: this directory is the platform
-layer and the Undertale core around it. It uses Butterscotch's software
+layer and the core around it, which lists Undertale and Deltarune (one
+chapter). It uses Butterscotch's software
 renderer (draft PR #429, carried on this branch) drawing RGB555 straight
 into the openfpgaOS framebuffer, at 320x240 or 640x480 depending on the room.
+
+This file says what is here and how to use it. It carries no measurements:
+frame times, load times and sizes change from build to build, and the
+benchmark (see On-device diagnostics) reports them for the build in hand.
 
 You must supply your own `data.win` from Undertale v1.08.
 
@@ -119,25 +124,14 @@ data file names. And the game reads its text from `lang_en.json`, which
 has no data slot to live in, so it is stored in `music.bin` and the file
 layer reads it from there (`utAudioReadPackFile`).
 
-Deltarune's rooms are built from GameMaker Studio 2 tile layers, which the
-runner draws one cell at a time, the whole room every frame. The software
-renderer takes a layer whole instead (`drawTileLayer`): only the cells in
-view are drawn, and plain ones are copied straight from the tileset.
+`--bench` works for Deltarune too, and `make compare` adds its benchmark
+entries to the card (`tools/mkcompare.sh` names them; the route they play is
+in `platform/ut_bench.c`).
 
-The character creation screens stack six translucent, mirrored layers
-under a darkening fill on every frame; the renderer works such a stack out
-for one quarter of the screen in a single pass and mirrors it
-(`swrMirrorFlush`). In Speed mode it does so for every second pixel each
-way, and sprite draws at 3% opacity or less are left out.
-
-`--bench` works for Deltarune too (`make compare` adds "Deltarune
-Benchmark" entries for both of L's settings): it plays the opening into
-the character creation screens, then jumps to the yard outside Kris's
-house, a Dark World field and the battle there, and reports the time per
-frame for each.
-
-Chapter 1 plays on the desktop build through the opening and a Dark World
-battle. Fog (the hit flash) is not implemented in the software renderer.
+What the software renderer does for Deltarune's rooms and screens (tile
+layers, stacks of mirrored translucent layers, the battle background) is
+described where it is done, in the comments of `../sw/sw_renderer.c` and
+`../sw/sw_drawing.c`.
 
 ## Controls
 
@@ -227,10 +221,8 @@ benchmark never skips.
 (data slot 5): every texture page already converted to the renderer's
 16-bit format, cut into 128x128 tiles and run-length encoded tile by tile.
 The renderer then reads only the part of a page each sprite, tileset or
-font occupies, and keeps one small texture per item: the walk from the
-title screen into a first battle holds about 2 MB of textures, where whole
-pages came to 34 MB and the largest (2048x2048, 8 MB) would not fit in the
-Pocket's memory beside the others. Without the pack the renderer falls
+font occupies, and keeps one small texture per item; whole pages would not
+fit in the Pocket's memory side by side. Without the pack the renderer falls
 back to the PNGs inside `data.win`, a whole page at a time. Textures are
 kept in a least-recently-used cache that shrinks whenever less than
 `TEXTURE_RESERVE_MB` (default 4) of heap would be left for the game.
@@ -241,26 +233,26 @@ ignores an older `textures.bin`, so copy the new one with the core.
 ## Sound
 
 Decoding Vorbis live is too heavy for the 100 MHz CPU, so `make` runs
-`tools/mkmusic` to produce `music.bin` (data slot 6): every sound as 32 kHz
-mono IMA ADPCM, about 134 MB. It combines the external `.ogg` files the game
+`tools/mkmusic` to produce `music.bin` (data slot 6): every sound as mono
+IMA ADPCM at `MUSIC_RATE` (32 kHz unless set otherwise). It combines the external `.ogg` files the game
 streams (from `music/`, a directory or symlink) with the effects embedded in
 `data.win`.
 
 `platform/of_audio_system.c` plays them: long tracks stream through a
 read-ahead buffer, short ones are loaded whole on first use and cached. It
-applies pitch and gain, mixes up to 16 voices and writes 48 kHz output.
+applies pitch and gain, mixes the voices in software and writes the OS's
+output rate.
 
-About 100 ms of output is kept queued. It is topped up once per frame and
-also from `platformBusyTick`, which the loaders call between 64 KB read
-pieces and the draw profiler calls every 5 ms of drawing; without that a
-frame longer than the queue leaves a gap in the music. The OS's file idle
-hook is registered too, but the v0.7 runtime does not appear to call it.
-The read-ahead is refilled one piece per frame; a track that starts is first
-read on the following frame, so room changes do not also pay for music
-start-up. On the Pocket the pieces are read with `of_file_read_async` (4 KB,
-about 6 ms) and waited for, since `fread` costs about 28 ms for any cache
-miss; a read is never left in flight, because the OS fails ordinary reads
-while one is. Without that call it falls back to 16 KB pieces through `fread`.
+A short stretch of output is kept queued. It is topped up once per frame
+and also from `platformBusyTick`, which the loaders call between read pieces
+and the renderer calls while drawing; without that a frame longer than the
+queue leaves a gap in the music. The read-ahead is refilled a piece per
+frame, and a track that starts is first read on the following frame, so
+room changes do not also pay for music start-up. On the Pocket the pieces
+are read with `of_file_read_async` and waited for, which is much quicker
+there than `fread`; a read is never left in flight, because the OS fails
+ordinary reads while one is. The comments in `platform/of_audio_system.c`
+have the sizes and the reasons.
 
 Desktop: `UT_AUDIO_DUMP=out.raw` captures the mixed output (48 kHz stereo
 s16le) and `UT_AUDIO_LOG=1` logs every effect, for checking without speakers.
@@ -291,8 +283,8 @@ screen) are renamed to the Pocket's buttons in memory after loading; see
 
 ## On-device diagnostics
 
-**The log as a file.** A screenshot of the log overlay holds 21 short
-lines. The whole log, from start-up on, is also written as text to the
+**The log as a file.** A screenshot of the log overlay holds only the last
+few lines. The whole log, from start-up on, is also written as text to the
 game's second save slot, `undertale_1.sav` or `deltarune_1.sav`: when the
 core halts (the end of a benchmark, a fatal error), from the menu's "Save
 log", and on Select + Y with the debug buttons on. A core can only write to its save slots, so that is where it
@@ -300,17 +292,21 @@ goes; the Pocket copies the slot to `Saves/butterscotch/common/` on the
 card when the core is left through the Analogue menu. The text ends at the
 first NUL byte (`strings`, or `tr -d '\0'`, reads it).
 
-The benchmark's report ends with two tables per section: ms per frame by
-phase (game code, drawing and its five kinds of call, sound, presenting)
-and the number of draw calls of each kind per frame.
+**The benchmark.** The Benchmark entries (`make compare`) play a fixed
+route with scripted input and end by writing a report to the log: time per
+frame for each section of the route, then tables of where it went (game
+code, drawing by kind of call, sound, presenting) and the draw calls that
+cost the most. `platform/ut_bench.c` has the route and says what each
+table's columns are. Quote numbers from a report together with the commit
+it was built from.
 
 The boot log stays on screen while loading, and every Butterscotch log line
 is prefixed with seconds since start, so load stages can be timed by eye.
 If the app exits or aborts it halts with the log visible instead of
 rebooting.
 
-Any frame that takes longer than 150 ms logs three lines, kept short
-enough to fit the log overlay:
+A frame that takes much longer than it should (`UT_PERF_SLOW_FRAME_MS`)
+logs three lines, kept short enough to fit the log overlay:
 
 ```
 slow 555: step 300 draw 200 out 20 snd 10
@@ -323,39 +319,36 @@ presenting (overlays, copy, flip) and the audio update. The second gives
 time spent within those on particular jobs: loading the room, texture pages
 and sound effects, mixing audio, and reading streamed music. The third
 gives calls/ms for each kind of draw call: sprites, sprite parts (tiles),
-text, tiled backgrounds and rectangles. A room's tiles normally show as a
-single part (`p1`): Butterscotch composes each run of tiles into one picture
-and reuses it. Press R after
+text, tiled backgrounds and rectangles. Reading the clock is costly on the
+Pocket, so mixing and draw calls are only timed while debug mode or an
+overlay is on (and on some frames of a benchmark); otherwise those
+milliseconds read 0 and the draw line ends "(not timed)". Press R after
 a hitch to read it. Taking a Pocket screenshot freezes the core for a few
 seconds, which shows up here as one very slow frame.
 
 Log lines stop going to the OS console after the first frame: the console
-is hidden by then and each line written to it cost about 20 ms.
+is hidden by then and writing to it is slow.
 
 ## Status
 
 <!--
 - What works on a real Pocket today? What have you actually played through yourself?
-- Which numbers are worth quoting, and from which benchmark run? The table that was here was out of date.
-  Latest measurements (2026-10-08, v0.7 runtime, os25), for reference:
-    start-up to first frame 18.9 s
-    intro, menu, naming 28.7 ms of work per frame; first room 27.7 ms (the game needs 33.3)
-    Flowey's dialogue about 39 ms; battle at native 640x480 about 47 ms
-    battle smoothed to 320x240 (L) was 28.3 ms in an earlier run
-    Ruins outside Toriel's house about 25 ms
+- No numbers here: they go out of date within a day of work. Point at the benchmark instead.
 - What is still rough? (Which scenes run below full speed? What happens on a room change now?)
 - What is untested? (MiSTer; anything past the opening hours.)
 -->
 
-- Runs on an Analogue Pocket (firmware 2.7, os25 bitstream): boots, plays
-  the intro, name entry works, and the first room and menu are playable.
+- Runs on an Analogue Pocket with the os25 bitstream: boots, plays the
+  intro, name entry works, and the first room and menu are playable.
 - Use the os25 bitstream. The SDK's runtime `os.bin` paired with os20
   reboot-looped before the OS banner appeared.
 - Music, sound effects and saves work on hardware, including a save
   imported from the desktop game.
-- Loading `data.win` takes about 19 s on the Pocket before the first frame.
-- The ruins room outside Toriel's house runs at about 25 ms of work per frame
-  (33 ms is full speed). Each room change still has one frame of 150-250 ms.
+- Not everything runs at full speed. Which scenes do, and by how much the
+  others miss, is what the benchmark is for.
+- Deltarune Chapter 1 plays on the desktop build through the opening and a
+  Dark World battle. Fog (the hit flash) is not implemented in the software
+  renderer.
 
 ## Download
 
