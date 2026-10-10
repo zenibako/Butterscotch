@@ -98,7 +98,7 @@ battle. Fog (the hit flash) is not implemented in the software renderer.
 ## Controls
 
 D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
-Start = Enter. L is "Toggle speed/accuracy" and shows the new setting in
+Start = Enter, Select = the port's menu (below). L is "Toggle speed/accuracy" and shows the new setting in
 the top right corner for two seconds. The core starts in speed (the desktop
 build in accuracy, since frames are compared against what the game asks
 for). Accuracy is the target: when an optimisation brings accuracy up to
@@ -109,42 +109,47 @@ game asks for. Speed gives up these for time: 640x480 rooms are drawn at
 16-bit colour by more than one step are left out, and frames are skipped
 when the game is running behind (see Frame skipping).
 
-### Debug mode
+### The menu
 
-Everything for looking into the port sits behind one switch, debug mode:
-hold Select for two seconds to turn it on or off (or start with `--debug`
-in the OS config's `ARGS=`, or `UT_DEBUG=1` on desktop). The frame-time
-overlay appearing is the sign that it is on. It is off by default and off
-again at the next launch. It is not in the Pocket's core menu because the
-hardware gives a core no menu variables of its own; the Pocket's controls
-screen names the hold on Select instead. With it on:
+Select opens the port's menu over the paused game, drawn in the game's own
+font (the first of `fnt_main`, `fnt_maintext` and `fnt_small` the game has,
+copied out of its texture page the first time; see `platform/ut_font.c`).
+Up/Down choose a row, A or Left/Right change it, and B, Select or Start
+close it. The sound stops while it is open. Everything it sets lasts until
+the core is left. It is not in the Pocket's own core menu because the
+hardware gives a core no menu variables of its own.
 
-- Select toggles the frame-time overlay: four numbers over the last 30
-  frames. The first three are milliseconds (average work, worst work, worst
-  frame period; 33 means full speed); the fourth is how many of the 30
-  frames were skipped, which is always 0 in accuracy mode.
-- R shows the last log lines over the game. The log is kept whether or not
-  debug mode is on, so it can be switched on after a hitch to read it.
+| Row | What it does |
+|---|---|
+| Resume | closes the menu |
+| Video | Speed or Accuracy, as L sets it |
+| Frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
+| Log | the last log lines over the game. The log is kept whether or not this is on, so it can be switched on after a hitch to read it |
+| Script times | every two seconds the log gets the twenty game scripts and built-in functions that took the most time, as milliseconds, VM instructions and calls per frame (Butterscotch's GML profiler). The log comes up with it. Measuring slows the game a little while it is on |
+| Debug buttons | the button chords below (debug mode) |
+| Next room, Previous room | goes there as the menu closes |
+| Clear interact | sets `global.interact` to 0, for when a cutscene has left the player stuck |
+| Save log | writes the log to the spare save slot; leave through the Analogue menu to keep it |
+
+With the debug buttons on (or after starting with `--debug` in the OS
+config's `ARGS=`, or `UT_DEBUG=1` on desktop):
+
+- R toggles the log.
 - "Accuracy" or "Speed" stays in the top right corner, the way L's toggle
   is set.
 - Butterscotch's own debug hotkeys are reached with Select held, since the
   Pocket has no keyboard: Select + Right/Left goes to the next/previous
-  room, Select + Start pauses, Select + A steps one frame while paused, and
-  Select + B sets `global.interact` to 0 when a cutscene has left the player
-  stuck. Select alone acts on release. The state dumps (F11, F12) are not
-  mapped: they print far more than the device can show.
-- Select + X turns script times on or off: every two seconds the log gets
-  the twenty game scripts and built-in functions that took the most time, as
-  milliseconds, VM instructions and calls per frame (Butterscotch's GML
-  profiler). The log overlay
-  comes up with it. Measuring slows the game a little while it is on.
+  room, Select + Start pauses, Select + A steps one frame while paused,
+  Select + B clears `global.interact`, Select + X turns script times on or
+  off, and Select + Y saves the log. A Select used for one of these does not
+  open the menu. The state dumps (F11, F12) are not mapped: they print far
+  more than the device can show.
 
 Anything that would otherwise leave the screen unchanged says what it did
-in the top right corner for two seconds: "Debug mode on" and "off", "Next
-room", "Previous room", "interact = 0", "Script times on" and "off", and "Resumed". A paused game shows
-"Paused, frame N" for as long as it is paused, and each step advances N.
-
-With it off, none of those buttons do anything and nothing extra is drawn.
+in the top right corner for two seconds, in the game's font: "Next room",
+"Previous room", "interact = 0", "Script times on" and "off", "Log saved",
+and "Resumed". A paused game shows "Paused, frame N" for as long as it is
+paused, and each step advances N.
 
 ## Resolution
 
@@ -245,8 +250,8 @@ screen) are renamed to the Pocket's buttons in memory after loading; see
 **The log as a file.** A screenshot of the log overlay holds 21 short
 lines. The whole log, from start-up on, is also written as text to the
 game's second save slot, `undertale_1.sav` or `deltarune_1.sav`: when the
-core halts (the end of a benchmark, a fatal error) and on Select + Y in
-debug mode. A core can only write to its save slots, so that is where it
+core halts (the end of a benchmark, a fatal error), from the menu's "Save
+log", and on Select + Y with the debug buttons on. A core can only write to its save slots, so that is where it
 goes; the Pocket copies the slot to `Saves/butterscotch/common/` on the
 card when the core is left through the Analogue menu. The text ends at the
 first NUL byte (`strings`, or `tr -d '\0'`, reads it).

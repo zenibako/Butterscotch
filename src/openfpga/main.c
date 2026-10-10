@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
      * one would. */
     if (getenv("UT_SKIP") != NULL) utPlatformSetForcedSkip(atoi(getenv("UT_SKIP")));
     if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugMode(true);
-    /* UT_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report Select + X gives
+    /* UT_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report the menu's script times give
      * on the device). */
     if (getenv("UT_PROFILE") != NULL) utPlatformSetScriptProfile(atoi(getenv("UT_PROFILE")));
 #ifdef ENABLE_VM_OPCODE_PROFILER

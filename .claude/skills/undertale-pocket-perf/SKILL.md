@@ -9,7 +9,8 @@ description: Measure and diagnose performance of the Undertale port on the Analo
 
 Prefer the log file to screenshots: it is the whole log, not the last 21
 lines. It is written to the game's spare save slot when the core halts
-(benchmark end, fatal error) and on Select + Y in debug mode, and reaches
+(benchmark end, fatal error), from the menu's "Save log" and on Select +
+Y with the debug buttons on, and reaches
 the card when the user leaves the core through the Analogue menu:
 
 ```bash
@@ -233,7 +234,8 @@ whatever was running (a 3 s "music read" or "texture load" right after a
 screenshot is the screenshot), and the log overlay only shows the first 53 characters of a
 line, so anything longer is invisible on the device.
 
-**Script times** (Select + X in debug mode; `UT_PROFILE=n` on desktop).
+**Script times** (the menu, or Select + X with the debug buttons on;
+`UT_PROFILE=n` on desktop).
 The slow-frame line says "step 300"; this says which scripts the step
 went to. It is Butterscotch's GML profiler (`--profile-gml-scripts`),
 reported every 60 frames in a form that fits the log overlay:
@@ -261,8 +263,8 @@ calls per frame, name (without `gml_Object_`/`gml_Script_`). Reading it:
   instruction) has not been measured on the device.
 - The report is up to 21 log lines every two seconds, more than the
   overlay shows: read it from the log file, not a screenshot.
-When asking the user for it: debug mode on, go to the scene, Select + X
-(the log comes up with it), wait a few seconds, screenshot.
+When asking the user for it: go to the scene, Select, "Script times" (the
+log comes up with it), close the menu, wait a few seconds, screenshot.
 
 **Opcode ranking** (desktop only: `make ops`, then run `undertale_pc_ops`
 with `UT_EXIT_FRAME=n`, usually with `UT_PLAYBACK` or `UT_SCRIPT`). Prints
@@ -297,10 +299,12 @@ Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
-**Overlays** (only in debug mode: hold Select for two seconds; ask the
-user to switch it on first): Select shows four numbers over 30 frames
-(average work, worst work and worst frame period in ms, then frames
-skipped). R shows the last log lines over the game. The log overlay itself
+**Overlays** (switched on in the menu: press Select, then "Frame times"
+or "Log"): frame times are four numbers over 30 frames (average work,
+worst work and worst frame period in ms, then frames skipped); the menu's
+bottom line gives the same numbers in words whether or not the overlay is
+on. The log shows the last log lines over the game; R toggles it too with
+the debug buttons on. The log overlay itself
 costs a lot of frame time, so read the numbers with it off.
 
 **L, speed or accuracy.** Always ask which the user was in; numbers from

@@ -1,6 +1,7 @@
 /*
- * Frame-time overlay (Select) and log overlay (R), both in debug mode, and
- * the word that shows which way L's speed/accuracy toggle is set.
+ * Frame-time overlay and log overlay (both switched on in the menu; R also
+ * toggles the log with the debug buttons on), and the words in the top right
+ * corner: which way L's speed/accuracy toggle is set, or a notice.
  *
  * Shows four numbers in the top-left corner over the last 30 frames, the
  * first three in milliseconds:
@@ -13,6 +14,7 @@
 #include "of_perf.h"
 
 #include "debug_font.h"
+#include "ut_font.h"
 #include "gettime.h"
 #include "log.h"
 #include "profiler.h"
@@ -155,18 +157,37 @@ void utPerfScriptReport(const Profiler *profiler, int frames) {
     }
 }
 
+bool utPerfOverlayOn(void) {
+    return g_enabled;
+}
+
+bool utPerfLogOn(void) {
+    return g_logEnabled;
+}
+
+void utPerfShown(unsigned *average, unsigned *worstWork, unsigned *worstPeriod, unsigned *skipped) {
+    *average = g_shownAverage;
+    *worstWork = g_shownWork;
+    *worstPeriod = g_shownPeriod;
+    *skipped = g_shownSkipped;
+}
+
+void utPerfRestartClock(void) {
+    g_lastFrame = 0;
+    g_sleepNanos = 0;
+}
+
 void utPerfHideOverlays(void) {
     g_enabled = false;
     g_logEnabled = false;
 }
 
 /* Log overlay text: Butterscotch's debug font atlas shrunk 3:1 by averaging
- * coverage, which gives a 6x12 cell that still reads at 320x240. */
+ * coverage, which gives a 6x12 cell (UT_LOG_CELL_W, UT_LOG_CELL_H) that still
+ * reads at 320x240. */
 #define UT_LOG_SHRINK 3
-#define UT_LOG_CELL_W 6
-#define UT_LOG_CELL_H 12
 
-static void drawLogChar(uint16_t *fb, int width, int x, int y, char c) {
+static void drawLogChar(uint16_t *fb, int width, int x, int y, char c, uint16_t color) {
     if (c < DEBUGFONT_FIRST_CP || c > DEBUGFONT_LAST_CP) return;
     const DebugFontGlyphEntry *glyph = &debugFontGlyphs[c - DEBUGFONT_FIRST_CP];
 
@@ -180,9 +201,15 @@ static void drawLogChar(uint16_t *fb, int width, int x, int y, char c) {
 
             int px = x + (glyph->xoffset + gx) / UT_LOG_SHRINK;
             int py = y + (glyph->yoffset + gy) / UT_LOG_SHRINK;
-            if (px >= 0 && px < width && py >= 0) fb[py * width + px] = 0x7FFF;
+            if (px >= 0 && px < width && py >= 0) fb[py * width + px] = color;
         }
     }
+}
+
+int utPerfDrawLogText(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color) {
+    if (y < 0 || y + UT_LOG_CELL_H > height) return x + (int) strlen(text) * UT_LOG_CELL_W;
+    for (; *text != '\0'; text++, x += UT_LOG_CELL_W) drawLogChar(fb, width, x, y, *text, color);
+    return x;
 }
 
 void utPerfDrawLogScreen(uint16_t *fb, int width, int height) {
@@ -194,7 +221,7 @@ void utPerfDrawLogScreen(uint16_t *fb, int width, int height) {
     for (int row = 0; row < rows; row++) {
         const char *line = utLogLine(rows - 1 - row);
         for (int col = 0; col < columns && line[col] != '\0'; col++)
-            drawLogChar(fb, width, col * UT_LOG_CELL_W, row * UT_LOG_CELL_H, line[col]);
+            drawLogChar(fb, width, col * UT_LOG_CELL_W, row * UT_LOG_CELL_H, line[col], 0x7FFF);
     }
 }
 
@@ -214,7 +241,7 @@ static void drawLog(uint16_t *fb, int width, int height) {
         const char *line = utLogLine(rows - 1 - row);
         int y = top + row * UT_LOG_CELL_H;
         for (int col = 0; col < columns && line[col] != '\0'; col++)
-            drawLogChar(fb, width, col * UT_LOG_CELL_W, y, line[col]);
+            drawLogChar(fb, width, col * UT_LOG_CELL_W, y, line[col], 0x7FFF);
     }
 }
 
@@ -246,14 +273,17 @@ static int drawNumber(uint16_t *fb, int width, int x, int y, unsigned value) {
 }
 
 void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label) {
-    int textWidth = (int) strlen(label) * UT_LOG_CELL_W;
-    int left = width - textWidth - 4;
-    if (left < 0 || height < UT_LOG_CELL_H + 2) return;
+    int scale = utFontScale(width);
+    int pad = 2 * scale;
+    int boxW = utFontWidth(label, scale) + 2 * pad;
+    int boxH = utFontLineHeight(scale) + 2 * pad;
+    int left = width - boxW;
+    if (left < 0 || height < boxH) return;
 
-    /* A black box behind the word so it reads over any scene. */
-    for (int y = 0; y < UT_LOG_CELL_H + 2; y++)
+    /* A black box behind the words so they read over any scene. */
+    for (int y = 0; y < boxH; y++)
         for (int x = left; x < width; x++) fb[y * width + x] = 0;
-    for (int i = 0; label[i] != '\0'; i++) drawLogChar(fb, width, left + 2 + i * UT_LOG_CELL_W, 1, label[i]);
+    utFontDraw(fb, width, height, left + pad, pad, label, 0x7FFF, scale);
 }
 
 void utPerfFrame(uint16_t *fb, int width, int height) {
