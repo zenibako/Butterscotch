@@ -681,8 +681,15 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
                                        float roomW, float roomH, uint32_t color, float alpha)
 {
     if (SWR_SKIPPED((SWRenderer*) renderer)) return;
-    swrOverlayFlush((SWRenderer*) renderer);
     SWRenderer* swr = (SWRenderer*) renderer;
+    // What is known about the main buffer before this draw lets out what is
+    // held (which then is at most a clear): that it is one colour, or that a
+    // tiled pass over one colour was the last thing drawn on it.
+    bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0 && !swrGridHeld();
+    bool uniformBefore = nothingHeld && swr->uniformValid && swr->fb == swr->mainFb;
+    bool afterTiled = nothingHeld && swr->tiledPrevValid && swr->fb == swr->mainFb;
+    uintpixel_t uniformColor = swr->uniformColor;
+    swrOverlayFlush(swr);
     DataWin* dwin = renderer->dataWin;
 
     if (0 > tpagIndex || dwin->tpag.count <= (uint32_t) tpagIndex) return;
@@ -747,7 +754,7 @@ static void SWRenderer_drawSpriteTiled(Renderer* renderer, int32_t tpagIndex,
         for (int dy = startY; endY > dy; dy += tileH) countY++;
         int firstX = (int) startX + (int) originX + sx0, firstY = (int) startY + (int) originY + sy0;
         bool drawn;
-        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha));
+        SWR_NOTED("  of which: tiled rows pass", drawn = swrDrawSpriteTiledRows(swr, texture, sx, sy, sw, sh, firstX, firstY, (int) tileW, (int) tileH, countX, countY, color, alpha, uniformBefore ? &uniformColor : NULL, afterTiled));
         if (drawn) return;
     }
     
@@ -1868,11 +1875,28 @@ static void swrGridReplay(SWRenderer* swr)
         renderer->drawAlpha = swrGrid.grids[g].alpha;
         const int32_t* subimgs = &swrGrid.subimgs[swrGrid.grids[g].first];
         int32_t cols = swrGrid.grids[g].cols, rows = swrGrid.grids[g].rows;
+        // A cell whose sprite cannot reach the view is left out here: most of a
+        // room's floor is somewhere else, and a sprite draw is a long way
+        // round to find that out. The sprite's own box, with a pixel to spare.
+        int32_t spriteIndex = swrGrid.grids[g].sprite;
+        bool cull = spriteIndex >= 0 && (uint32_t) spriteIndex < renderer->dataWin->sprt.count && swr->scaleX > 0.0f && swr->scaleY > 0.0f;
+        float boxLeft = 0, boxTop = 0, boxRight = 0, boxBottom = 0, viewLeft = 0, viewTop = 0, viewRight = 0, viewBottom = 0;
+        if (cull) {
+            const Sprite* sprite = &renderer->dataWin->sprt.sprites[spriteIndex];
+            boxLeft = -(float) sprite->originX - 1.0f; boxRight = (float) sprite->width - (float) sprite->originX + 1.0f;
+            boxTop = -(float) sprite->originY - 1.0f; boxBottom = (float) sprite->height - (float) sprite->originY + 1.0f;
+            viewLeft = (float) swr->viewX; viewTop = (float) swr->viewY;
+            viewRight = viewLeft + (float) (swr->maxX - swr->portX) / swr->scaleX;
+            viewBottom = viewTop + (float) (swr->maxY - swr->portY) / swr->scaleY;
+            if (sprite->nineSliceEnabled) cull = false;
+        }
         for (int32_t i = 0; i < cols; i++) {
+            float cellX = swrGrid.grids[g].x + swrGrid.grids[g].stepX * (float) i;
+            if (cull && (cellX + boxRight < viewLeft || cellX + boxLeft > viewRight)) continue;
             for (int32_t j = 0; j < rows; j++) {
-                Renderer_drawSprite(renderer, swrGrid.grids[g].sprite, subimgs[i * rows + j],
-                                    swrGrid.grids[g].x + swrGrid.grids[g].stepX * (float) i,
-                                    swrGrid.grids[g].y + swrGrid.grids[g].stepY * (float) j);
+                float cellY = swrGrid.grids[g].y + swrGrid.grids[g].stepY * (float) j;
+                if (cull && (cellY + boxBottom < viewTop || cellY + boxTop > viewBottom)) continue;
+                Renderer_drawSprite(renderer, spriteIndex, subimgs[i * rows + j], cellX, cellY);
             }
         }
     }

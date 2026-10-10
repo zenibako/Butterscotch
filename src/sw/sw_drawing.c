@@ -726,6 +726,7 @@ static void swrMirrorFlush(SWRenderer* swr)
     swr->blendMode = blendMode;
     swr->mirrorReplaying = false;
     swr->uniformValid = false;
+    swr->tiledPrevValid = false;
 }
 
 // Holds the draw back if it can be a quarter of a mirrored layer. Takes the
@@ -873,6 +874,7 @@ void swrOverlayFlush(SWRenderer* swr)
 #endif
     swrOverlayFlushHeld(swr);
     swr->uniformValid = false; // every caller is about to draw
+    swr->tiledPrevValid = false;
 }
 
 static void swrDrawSpriteInternal(
@@ -1031,6 +1033,7 @@ static void swrDrawSpriteInternal(
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
         return;
     swr->uniformValid = false;
+    swr->tiledPrevValid = false;
     swrClearSettle(swr);
     if (swrFavorSpeed && alpha <= 8 && blendmode == bm_normal) return; // too faint to miss; see swrFavorSpeed
 #endif
@@ -1941,6 +1944,41 @@ void swrDrawSprite(
     );
 }
 
+// What one pixel of a tiled copy leaves where `under` was: the tile's texel
+// (with its coverage, for a half-size copy) put down at `alpha`, as the
+// sprite draws do it. Returns `under` where the tile has nothing.
+#if PIXEL_SIZE == 16 && defined SW_HAS_PREMUL_BLEND && !defined SW_DITHERED_BLENDING
+FORCE_INLINE uintpixel_t swrTiledPixel(uintpixel_t under, uintpixel_t pixel, const uint8_t* covered, int alpha)
+{
+    if (covered != NULL) {
+        uint32_t count = *covered;
+        if (count == 0) return under;
+        int coverageAlpha = count == 4 ? alpha : (alpha * (int) count) >> 2;
+        if (coverageAlpha > 253) return pixel;
+        if (coverageAlpha < 4) return under;
+        return swrBlendPremultiplied(under, swrSpreadRedBlue(pixel) * coverageAlpha, swrGreen(pixel) * coverageAlpha, 256 - coverageAlpha);
+    }
+    if (!swrIsOpaque(pixel)) return under;
+    if (alpha > 253) return pixel;
+    return swrBlendPremultiplied(under, swrSpreadRedBlue(pixel) * (uint32_t) alpha, swrGreen(pixel) * (uint32_t) alpha, (uint32_t) (256 - alpha));
+}
+
+// The colour the pass in swr->tiledPrev left at (x, y) of the buffer.
+static uintpixel_t swrTiledPrevAt(const SWRenderer* swr, int x, int y)
+{
+    uintpixel_t under = swr->tiledPrev.under;
+    int fromX = x - swr->tiledPrev.originX, fromY = y - swr->tiledPrev.originY;
+    if (fromX < 0 || fromY < 0) return under;
+    if (x < swr->tiledPrev.minX || x >= swr->tiledPrev.maxX || y < swr->tiledPrev.minY || y >= swr->tiledPrev.maxY) return under;
+    int copyX = fromX / swr->tiledPrev.stepX, copyY = fromY / swr->tiledPrev.stepY;
+    int column = fromX - copyX * swr->tiledPrev.stepX, row = fromY - copyY * swr->tiledPrev.stepY;
+    if (copyX >= swr->tiledPrev.countX || copyY >= swr->tiledPrev.countY) return under;
+    if (column >= swr->tiledPrev.width || row >= swr->tiledPrev.height) return under;
+    int at = (swr->tiledPrev.srcY + row) * swr->tiledPrev.pitch + swr->tiledPrev.srcX + column;
+    return swrTiledPixel(under, swr->tiledPrev.buffer[at], swr->tiledPrev.coverage != NULL ? &swr->tiledPrev.coverage[at] : NULL, swr->tiledPrev.alpha);
+}
+#endif
+
 // A sprite tiled over the room, unscaled, in one pass over the screen's rows.
 // Tile by tile it is a sprite draw for every copy in view, hundreds for a
 // small tile, and most of what each one costs is getting started. Here every
@@ -1949,16 +1987,23 @@ void swrDrawSprite(
 // texels, from the half-size copy when the room is drawn at half size with
 // speed favoured, put down with the same arithmetic.
 //
+// Reading the buffer is the slow part on the Pocket: a tile of thin lines
+// touches a different cache line for nearly every pixel, at about 2
+// microseconds a miss. So when the buffer is known to hold one colour
+// (`uniform`), what is under each pixel is that colour and is not read; and
+// when the last thing drawn was such a pass (`afterPrev`), what is under each
+// pixel is worked out from that pass.
+//
 // The texture's part (sx, sy, sw, sh) is drawn at (firstX, firstY) in the room
 // and again every tileW and tileH, countX by countY times. Returns false,
 // having drawn nothing, when the draws would not be that simple.
 bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, int sh,
                             int firstX, int firstY, int tileW, int tileH, int countX, int countY,
-                            uint32_t color, float alphaf)
+                            uint32_t color, float alphaf, const uintpixel_t* uniform, bool afterPrev)
 {
 #if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
     (void) swr; (void) texture; (void) sx; (void) sy; (void) sw; (void) sh; (void) firstX; (void) firstY;
-    (void) tileW; (void) tileH; (void) countX; (void) countY; (void) color; (void) alphaf;
+    (void) tileW; (void) tileH; (void) countX; (void) countY; (void) color; (void) alphaf; (void) uniform; (void) afterPrev;
     return false;
 #else
     int alpha = swrIntAlpha(alphaf);
@@ -2006,8 +2051,12 @@ bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy,
     if (maxX > swr->maxX) maxX = swr->maxX;
     if (maxY > swr->maxY) maxY = swr->maxY;
     
-    bool opaque = alpha > 253;
-    uint32_t dstalpha = (uint32_t) (256 - alpha);
+    // The earlier pass can only stand in for the buffer if it drew from the
+    // same texture (still loaded, then) into the same buffer.
+    afterPrev = afterPrev && uniform == NULL && swr->tiledPrev.texture == texture &&
+                (swr->tiledPrev.buffer == texture->buffer || swr->tiledPrev.buffer == texture->halfBuffer) &&
+                swr->fb == swr->mainFb;
+    
     for (int y = minY; y < maxY; y++)
     {
         int fromOrigin = y - originY;
@@ -2039,23 +2088,34 @@ bool swrDrawSpriteTiledRows(SWRenderer* swr, SWTexture* texture, int sx, int sy,
             if (x1 > maxX) x1 = maxX;
             for (int x = x0; x < x1; x++)
             {
-                uintpixel_t pixel = srcline[x - left];
-                if (covline != NULL) {
-                    uint32_t covered = covline[x - left];
-                    if (covered == 0) continue;
-                    int coverageAlpha = covered == 4 ? alpha : (alpha * (int) covered) >> 2;
-                    if (coverageAlpha > 253)
-                        dstline[x] = pixel;
-                    else if (coverageAlpha >= 4)
-                        dstline[x] = swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(pixel) * coverageAlpha,
-                                                           swrGreen(pixel) * coverageAlpha, 256 - coverageAlpha);
-                } else if (swrIsOpaque(pixel)) {
-                    dstline[x] = opaque ? pixel
-                        : swrBlendPremultiplied(dstline[x], swrSpreadRedBlue(pixel) * (uint32_t) alpha,
-                                                swrGreen(pixel) * (uint32_t) alpha, dstalpha);
+                const uint8_t* covered = covline != NULL ? &covline[x - left] : NULL;
+                if (uniform != NULL || afterPrev) {
+                    uintpixel_t under = uniform != NULL ? *uniform : swrTiledPrevAt(swr, x, y);
+                    uintpixel_t result = swrTiledPixel(under, srcline[x - left], covered, alpha);
+                    if (result != under) dstline[x] = result;
+                } else if (covered != NULL ? *covered != 0 : swrIsOpaque(srcline[x - left])) {
+                    dstline[x] = swrTiledPixel(dstline[x], srcline[x - left], covered, alpha);
                 }
             }
         }
+    }
+    
+    // A pass over one known colour can stand in for the buffer to the next one.
+    swr->tiledPrevValid = uniform != NULL && swr->fb == swr->mainFb;
+    if (swr->tiledPrevValid) {
+        swr->tiledPrev.texture = texture;
+        swr->tiledPrev.buffer = buffer;
+        swr->tiledPrev.coverage = coverage;
+        swr->tiledPrev.pitch = pitch;
+        swr->tiledPrev.srcX = srcX; swr->tiledPrev.srcY = srcY;
+        swr->tiledPrev.width = width; swr->tiledPrev.height = height;
+        swr->tiledPrev.stepX = stepX; swr->tiledPrev.stepY = stepY;
+        swr->tiledPrev.originX = originX; swr->tiledPrev.originY = originY;
+        swr->tiledPrev.countX = countX; swr->tiledPrev.countY = countY;
+        swr->tiledPrev.alpha = alpha;
+        swr->tiledPrev.minX = minX; swr->tiledPrev.minY = minY;
+        swr->tiledPrev.maxX = maxX; swr->tiledPrev.maxY = maxY;
+        swr->tiledPrev.under = *uniform;
     }
     return true;
 #endif
