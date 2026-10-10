@@ -1,5 +1,5 @@
 > [!NOTE]
-> This is the `pocket` branch of a fork of Butterscotch. The Analogue Pocket port, Butterscotch Pocket, lives in
+> This is a fork of Butterscotch. The Analogue Pocket port, Butterscotch Pocket, lives in
 > [`src/openfpga`](src/openfpga/README.md), which has its own README. Butterscotch's README follows unchanged.
 
 <div align="center">

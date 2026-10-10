@@ -7,7 +7,7 @@ Introduction: one short paragraph, then the game-data notice.
 - What is this, in one sentence? (Whose runner is it a port of, and to what device?)
 - Which game and version does it run today?
 - What is this repository in relation to Butterscotch, and where does the port live in it?
-  (A fork, on the `pocket` branch; src/openfpga/ is the port and src/openfpga/dist/ the core definition.
+  (A fork, whose `main` carries the port since 2026-10-10; src/openfpga/ is the port and src/openfpga/dist/ the core definition.
   The openfpgaOS SDK is a separate checkout the build reads.)
 - Upstream lists out-of-tree ports under "Community Ports" in its README; the two there open with a
   short note about the port and then carry the original README below. This file follows that shape.
@@ -58,7 +58,7 @@ The commands below match the layout as of 2026-10-08; check they still match how
 From nothing, with the SDK cloned next to this repository:
 
 ```bash
-git clone -b pocket https://github.com/zenibako/Butterscotch.git butterscotch-pocket
+git clone https://github.com/zenibako/Butterscotch.git butterscotch-pocket
 git clone https://github.com/openfpgaOS/openfpgaSDK.git
 cd butterscotch-pocket/src/openfpga
 

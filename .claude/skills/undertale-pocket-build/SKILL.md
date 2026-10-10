@@ -10,7 +10,7 @@ description: Build, package and deploy the Undertale port for the Analogue Pocke
 ```
 undertale-pocket/                 not a git repo; holds the pieces below
 ├── env.sh                        source before any RISC-V build on macOS
-├── butterscotch-pocket/          THIS REPOSITORY: fork of ButterscotchRunner/Butterscotch, branch `pocket`
+├── butterscotch-pocket/          THIS REPOSITORY: fork of ButterscotchRunner/Butterscotch; trunk is `main` (it was `pocket` until 2026-10-10)
 │   ├── src/                      Butterscotch itself; src/sw is the software renderer the port draws with
 │   └── src/openfpga/             THE PORT
 │       ├── main.c, Makefile, README.md
