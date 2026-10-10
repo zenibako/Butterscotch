@@ -597,6 +597,16 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
     
     // Still one colour if the flush has nothing to draw; a fill with that colour is then redundant.
     bool nothingHeld = swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0;
+#if PIXEL_SIZE == 16
+    // A translucent fill of the whole buffer over a held clear and its tiled
+    // passes, with nothing else held: it joins them (swrFillHold).
+    if (!outline && nothingHeld && swr->clearHeld && swr->tiledHeldCount > 0 && swrPendingCount == 0 && !swrGridHeld() &&
+        swr->fb == swr->mainFb && swr->fbPitch == swr->mainWidth && swr->blendMode == bm_normal &&
+        swrIntAlpha(alpha) <= 253 && swrFillCoversWhole(swr, x1, y1, x2, y2) && swrFillHold(swr, pxcolor, swrIntAlpha(alpha))) {
+        swr->uniformValid = false;
+        return;
+    }
+#endif
     bool kept = swr->uniformValid && nothingHeld;
     // A clear still held is handed to the fill, which replaces it if it covers as much.
     bool clearTaken = kept && !outline && swr->clearHeld;
@@ -912,7 +922,7 @@ void swrClearSettle(SWRenderer* swr)
 {
     if (!swr->clearHeld) return;
     swr->clearHeld = false;
-    if (!swr->mainFb) { swr->tiledHeldCount = 0; return; }
+    if (!swr->mainFb) { swr->tiledHeldCount = 0; swrFillHeldDrop(); return; }
     if (swr->tiledHeldCount > 0) {
         SWR_NOTED("  of which: held clear and tiled written", swrTiledHeldWrite(swr, swr->clearHeldColor));
         return;
@@ -2291,6 +2301,7 @@ void swrHeldUnderDiscard(SWRenderer* swr)
     // Tiled passes held over the clear go, and that clear with them: it is no longer one colour to work from.
     if (swr->tiledHeldCount > 0) {
         swr->tiledHeldCount = 0;
+        swrFillHeldDrop();
         swr->clearHeld = false;
     }
     swrPendingCount = 0;

@@ -1754,7 +1754,14 @@ void swrDrawRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
 // the main buffer opaquely: nothing drawn there before it can then show.
 bool swrFillCoversMain(SWRenderer* swr, float x1, float y1, float x2, float y2, float alpha)
 {
-    if (swr->fb != swr->mainFb || swr->blendMode != bm_normal || swrIntAlpha(alpha) <= 253) return false;
+    if (swr->blendMode != bm_normal || swrIntAlpha(alpha) <= 253) return false;
+    return swrFillCoversWhole(swr, x1, y1, x2, y2);
+}
+
+// Whether swrFillRectangle with these corners would reach every pixel of the main buffer.
+bool swrFillCoversWhole(SWRenderer* swr, float x1, float y1, float x2, float y2)
+{
+    if (swr->fb != swr->mainFb) return false;
     if (swr->portX != 0 || swr->portY != 0 || swr->maxX < swr->mainWidth || swr->maxY < swr->mainHeight) return false;
     swrTransformPosIfNeeded(swr, &x1, &y1);
     swrTransformPosIfNeeded(swr, &x2, &y2);
@@ -1976,6 +1983,12 @@ typedef struct {
 } SWTiledPass;
 
 static SWTiledPass swrTiledHeld[SWR_TILED_HELD_MAX];
+
+// Fills held over those passes (swrFillHold), as swrBlendPremultiplied takes them.
+#define SWR_FILL_HELD_MAX 2
+#define SWR_HELD_ROW_MAX 1024
+static struct { uint32_t redBlue, green, inverse; } swrFillHeld[SWR_FILL_HELD_MAX];
+static int swrFillHeldCount = 0;
 static SWTiledPass swrTiledNow; // the pass being drawn or offered for holding
 
 // What one pixel of a copy leaves where `under` was: the tile's texel (with
@@ -2149,6 +2162,7 @@ bool swrTiledHold(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, i
     return false;
 #else
     if (swr->tiledHeldCount >= SWR_TILED_HELD_MAX || swr->fb != swr->mainFb || swr->fbPitch != swr->mainWidth) return false;
+    if (swrFillHeldCount > 0) return false; // it would go under the fills held over the earlier passes
     SWTiledPass* pass = &swrTiledHeld[swr->tiledHeldCount];
     if (!swrTiledPassSetUp(swr, texture, sx, sy, sw, sh, firstX, firstY, tileW, tileH, countX, countY, color, alphaf, pass)) return false;
     if (pass->width > SWR_TILED_OWN_SIDE || pass->height > SWR_TILED_OWN_SIDE) return false;
@@ -2174,20 +2188,72 @@ bool swrTiledHold(SWRenderer* swr, SWTexture* texture, int sx, int sy, int sw, i
 #endif
 }
 
-// Writes the held clear's colour over the whole main buffer, and the tiled
-// passes held over it, a row at a time. Leaves no pass held.
+// A translucent fill of the whole main buffer that comes straight after the
+// held clear and its tiled passes (a battle darkening its background) is held
+// with them: read, blend and write of every pixel of the buffer, which on the
+// Pocket is memory outside the cache and costs a quarter of a microsecond a
+// pixel to read (28 ms for the screen), becomes a blend of each colour the
+// rows are being put together from. Returns false, holding nothing, when it
+// cannot join; the caller then draws it.
+bool swrFillHold(SWRenderer* swr, uintpixel_t pxcolor, int alphaInt)
+{
+#if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
+    (void) swr; (void) pxcolor; (void) alphaInt;
+    return false;
+#else
+    if (swr->tiledHeldCount <= 0 || swrFillHeldCount >= SWR_FILL_HELD_MAX || swr->mainWidth > SWR_HELD_ROW_MAX) return false;
+    swrFillHeld[swrFillHeldCount].redBlue = swrSpreadRedBlue(pxcolor) * (uint32_t) alphaInt;
+    swrFillHeld[swrFillHeldCount].green = swrGreen(pxcolor) * (uint32_t) alphaInt;
+    swrFillHeld[swrFillHeldCount].inverse = (uint32_t) (256 - alphaInt);
+    swrFillHeldCount++;
+    return true;
+#endif
+}
+
+void swrFillHeldDrop(void)
+{
+    swrFillHeldCount = 0;
+}
+
+// Writes the held clear's colour over the whole main buffer, the tiled passes
+// held over it and the fills held over those, a row at a time. Leaves none
+// held. A row is put together in a buffer of its own and copied out: a pass
+// over another reads what is under it, and so does a fill, and those reads
+// are then of the cache.
 void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
 {
 #if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
     swrFillPixels(swr->mainFb, (size_t) swr->mainWidth * swr->mainHeight, color);
 #else
-    int count = swr->tiledHeldCount;
+    int count = swr->tiledHeldCount, fills = swrFillHeldCount;
     swr->tiledHeldCount = 0;
+    swrFillHeldCount = 0;
     SWTiledMemo memos[SWR_TILED_HELD_MAX] = { 0 };
+    uintpixel_t row[SWR_HELD_ROW_MAX];
+    bool own = swr->mainWidth <= SWR_HELD_ROW_MAX;
+    uintpixel_t filledFrom = 0, filledTo = 0;
+    bool filledKnown = false;
     for (int y = 0; y < swr->mainHeight; y++) {
         uintpixel_t* dstline = &swr->mainFb[y * swr->mainWidth];
-        swrFillPixels(dstline, (size_t) swr->mainWidth, color);
-        for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, dstline, &memos[p]);
+        uintpixel_t* line = own ? row : dstline;
+        swrFillPixels(line, (size_t) swr->mainWidth, color);
+        for (int p = 0; p < count; p++) swrTiledPassRow(&swrTiledHeld[p], y, line, &memos[p]);
+        if (fills > 0) {
+            // Few colours come out of a clear and a pass or two: the last answer is nearly always the next.
+            for (int x = 0; x < swr->mainWidth; x++) {
+                uintpixel_t under = line[x];
+                if (!filledKnown || under != filledFrom) {
+                    uintpixel_t result = under;
+                    for (int f = 0; f < fills; f++)
+                        result = swrBlendPremultiplied(result, swrFillHeld[f].redBlue, swrFillHeld[f].green, swrFillHeld[f].inverse);
+                    filledFrom = under;
+                    filledTo = result;
+                    filledKnown = true;
+                }
+                line[x] = filledTo;
+            }
+        }
+        if (own) memcpy(dstline, row, (size_t) swr->mainWidth * sizeof(uintpixel_t));
     }
 #endif
 }
