@@ -805,16 +805,16 @@ static bool menuSaveLog(int direction) {
 }
 
 static const UtMenuRow g_menuRows[] = {
-    { "Resume",          NULL,                 menuResume },
-    { "Video",           menuVideoValue,       menuVideo },
-    { "Frame times",     menuFrameTimesValue,  menuFrameTimes },
-    { "Log",             menuLogValue,         menuLog },
-    { "Script times",    menuScriptTimesValue, menuScriptTimes },
-    { "Debug buttons",   menuDebugValue,       menuDebug },
-    { "Next room",       NULL,                 menuNextRoom },
-    { "Previous room",   NULL,                 menuPreviousRoom },
-    { "Clear interact",  NULL,                 menuUnstick },
-    { "Save log",        NULL,                 menuSaveLog },
+    { "Resume",                    NULL,                 menuResume },
+    { "Performance Mode",          menuVideoValue,       menuVideo },
+    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes },
+    { "Show log overlay",          menuLogValue,         menuLog },
+    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes },
+    { "Enable debug buttons",      menuDebugValue,       menuDebug },
+    { "Next room",                 NULL,                 menuNextRoom },
+    { "Previous room",             NULL,                 menuPreviousRoom },
+    { "Clear interact",            NULL,                 menuUnstick },
+    { "Save log",                  NULL,                 menuSaveLog },
 };
 
 /* The frame-time overlay's numbers, in words. */
@@ -851,7 +851,7 @@ static void runMenu(void) {
     /* Over the picture last shown, at the size it was shown. */
     if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
     static const UtMenu menu = {
-        "Butterscotch", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])), menuStatus, menuPresent, platformBusyTick,
+        "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])), menuStatus, menuPresent, platformBusyTick,
     };
     AudioSystem *audio = g_runner->audioSystem;
     bool wasPaused = g_runner->paused;

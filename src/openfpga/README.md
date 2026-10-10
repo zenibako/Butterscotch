@@ -160,11 +160,11 @@ hardware gives a core no menu variables of its own.
 | Row | What it does |
 |---|---|
 | Resume | closes the menu |
-| Video | Speed or Accuracy, as L sets it |
-| Frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
-| Log | the last log lines over the game. The log is kept whether or not this is on, so it can be switched on after a hitch to read it |
-| Script times | every two seconds the log gets the twenty game scripts and built-in functions that took the most time, as milliseconds, VM instructions and calls per frame (Butterscotch's GML profiler). The log comes up with it. Measuring slows the game a little while it is on |
-| Debug buttons | the button chords below (debug mode) |
+| Performance Mode | Speed or Accuracy, as L sets it |
+| Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
+| Show log overlay | the last log lines over the game. The log is kept whether or not this is on, so it can be switched on after a hitch to read it |
+| Show script times in log | every two seconds the log gets the twenty game scripts and built-in functions that took the most time, as milliseconds, VM instructions and calls per frame (Butterscotch's GML profiler). The log comes up with it. Measuring slows the game a little while it is on |
+| Enable debug buttons | the button chords below (debug mode) |
 | Next room, Previous room | goes there as the menu closes |
 | Clear interact | sets `global.interact` to 0, for when a cutscene has left the player stuck |
 | Save log | writes the log to the spare save slot; leave through the Analogue menu to keep it |
