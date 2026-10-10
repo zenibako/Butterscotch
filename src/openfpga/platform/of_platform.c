@@ -472,6 +472,7 @@ static void dumpFrameIfRequested(bool drawn) {
 
 void platformSwapBuffers(void) {
     if (g_nextFb == NULL) return;
+    utPerfDetailAlways(g_debugMode);
     if (g_skipThisFrame) {
         /* Nothing was drawn: the frame is counted and the last picture stays up. */
         scriptProfileFrame();

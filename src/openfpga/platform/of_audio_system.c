@@ -538,7 +538,8 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
     static int32_t mix[UT_MIX_CHUNK_PAIRS];
     static int16_t out[UT_MIX_CHUNK_PAIRS * 2];
     int32_t master = (int32_t) (ut->masterGain * (float) UT_GAIN_ONE);
-    uint64_t mixStart = nowNanos();
+    const bool timed = utPerfDetail; /* a clock read costs more than mixing a few samples */
+    uint64_t mixStart = timed ? nowNanos() : 0;
     uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0;
     int allPairs = pairs;
 
@@ -547,7 +548,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
         memset(mix, 0, (size_t) chunk * sizeof(int32_t));
 
         if (!ut->allPaused) {
-            uint64_t voicesStart = nowNanos();
+            uint64_t voicesStart = timed ? nowNanos() : 0;
             for (int v = 0; v < UT_MAX_VOICES; v++) {
                 UtVoice *voice = &ut->voices[v];
                 if (voice->active && !voice->paused) {
@@ -555,7 +556,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
                     voicePairs += (uint64_t) chunk;
                 }
             }
-            voicesNanos += nowNanos() - voicesStart;
+            if (timed) voicesNanos += nowNanos() - voicesStart;
         }
 
         for (int i = 0; i < chunk; i++) {
@@ -571,12 +572,12 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
         }
 
         if (ut->dump != NULL) fwrite(out, sizeof(int16_t) * 2, (size_t) chunk, ut->dump);
-        uint64_t writeStart = nowNanos();
+        uint64_t writeStart = timed ? nowNanos() : 0;
         of_audio_write(out, chunk);
-        writeNanos += nowNanos() - writeStart;
+        if (timed) writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
     }
-    utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
+    if (timed) utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
     utPerfAddLoad(UT_LOAD_MIX_VOICES, voicesNanos);
     utPerfAddLoad(UT_LOAD_MIX_WRITE, writeNanos);
     utPerfAddLoad(UT_LOAD_MIX_PAIRS, (uint64_t) allPairs);

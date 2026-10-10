@@ -355,3 +355,27 @@ failure can be attributed. Say exactly which entry to run on which core and
 which lines of the result you need. State predictions before the run
 ("load should drop to about 19 s") so the result can confirm or refute
 them, and say plainly when a result refutes one.
+
+## A clock read is a trap: 17 us (2026-10-10)
+
+`nowNanos()` on the device is `clock_gettime`, an ecall into the kernel:
+**16.8 us** per read, measured by the benchmark's "call costs" line.
+VexiiRiscv here does not expose `rdcycle`/`rdtime` to user mode (they trap as
+illegal instructions), so there is no cheaper clock. Consequences:
+
+- A sprite draw that draws nothing costs 40 us, of which 6.5 us is the call
+  and 33.5 us was the two clock reads timing it. A battle makes about 100
+  draw calls a frame: 3 to 4 ms of timing, more with the mixing split.
+- Draw calls and mixing are therefore only timed "in detail"
+  (`utPerfDetail` / `swrDrawTimed`): every frame while an overlay or debug
+  mode is on, one frame in 8 during a benchmark (`UT_BENCH_DETAIL_EVERY`),
+  never in plain play. The benchmark's spr/til/txt/bkg/rct columns, the
+  mix/voices/write columns and the costliest-draws list are averages over
+  the timed frames; frame times and step/draw/snd/out are of every frame.
+- Benchmark numbers from before this change (through build `72eed8e`) carry
+  that overhead in every section, and numbers before `946af8c` also carry
+  about 0.15 ms per draw call of note formatting.
+- Before adding any timing to a hot path, count the reads per frame. The
+  script profiler (Select + X, `--scripts`) pays two per script and built-in
+  call, about 18 us with its lookup: its times rank things, nothing more.
+- `of_audio_free()` is 0.5 us, so the audio queue can be polled freely.

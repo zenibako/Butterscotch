@@ -17,6 +17,11 @@ typedef struct {
 
 extern bool swrCallNotes;
 
+// Whether draw calls are timed at all (SW_DRAW_PROFILE builds): the platform
+// may turn it off for frames nobody will ask about. Notes are only taken of
+// timed calls.
+extern bool swrDrawTimed;
+
 // Copies out the descriptions with the most time, heaviest first, and starts
 // over. *missed is how many calls were dropped: when the table of descriptions is
 // full, the one with the least time makes way for a new one.

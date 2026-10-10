@@ -21,6 +21,7 @@ static int swrPendingCount = 0; // tile pictures being held (see the tile run ca
 // See sw_call_notes.h.
 #include "sw_call_notes.h"
 bool swrCallNotes = false;
+bool swrDrawTimed = true;
 #ifdef SW_DRAW_PROFILE
 #include "gettime.h"
 #define SWR_NOTE_MAX 192
@@ -122,9 +123,10 @@ int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed)
 }
 // Times a statement that is part of some call, under a name of its own.
 #define SWR_NOTED(what, statement) do { \
-        uint64_t noteStart_ = swrCallNotes ? nowNanos() : 0; \
+        bool noted_ = swrCallNotes && swrDrawTimed; \
+        uint64_t noteStart_ = noted_ ? nowNanos() : 0; \
         statement; \
-        if (swrCallNotes) swrNote(nowNanos() - noteStart_, what); \
+        if (noted_) swrNote(nowNanos() - noteStart_, what); \
     } while (0)
 #else
 int swrCallNotesTake(SWCallNote* out, int max, uint32_t* missed) { (void) out; (void) max; if (missed != NULL) *missed = 0; return 0; }
@@ -1875,10 +1877,21 @@ static void SWRenderer_drawVertexBuffer(Renderer* renderer, VertexBuffer* buffer
 #ifdef SW_DRAW_PROFILE
 #include "gettime.h"
 void platformDrawProfile(int kind, uint64_t nanos);
+void platformDrawCount(int kind);
 enum { SWR_PROF_SPRITE, SWR_PROF_PART, SWR_PROF_TEXT, SWR_PROF_TILED, SWR_PROF_RECT };
 static uint64_t swrProfInner = 0;
 static uint64_t swrProfLast = 0; // what the SWR_PROFILED that ended last was charged
+// Reading the clock is not free everywhere (17 us on openfpgaOS, a trap into
+// the kernel, against 6 us for the rest of a sprite draw that draws nothing),
+// so the platform says when calls are to be timed (swrDrawTimed); otherwise
+// they are only counted.
 #define SWR_PROFILED(kind, call) do { \
+        if (!swrDrawTimed) { \
+            call; \
+            swrProfLast = 0; \
+            platformDrawCount(kind); \
+            break; \
+        } \
         uint64_t inner_ = swrProfInner, start_ = nowNanos(); \
         call; \
         uint64_t span_ = nowNanos() - start_; \
@@ -2621,7 +2634,7 @@ static bool SWRenderer_drawTileLayer(Renderer* renderer, Background* tileset, co
 static void SWRenderer_profDrawSprite(Renderer* renderer, int32_t tpagIndex, float x, float y, float originX, float originY, float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_SPRITE, SWRenderer_drawSprite(renderer, tpagIndex, x, y, originX, originY, xscale, yscale, angleDeg, color, alpha));
-    if (swrCallNotes && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
+    if (swrCallNotes && swrDrawTimed && tpagIndex >= 0 && (uint32_t) tpagIndex < renderer->dataWin->tpag.count) {
         const TexturePageItem* tpag = &renderer->dataWin->tpag.items[tpagIndex];
         SWNoteKey key = { .kind = SWR_NOTE_SPRITE, .alpha = (int16_t) (alpha * 100.0f), .a = tpag->targetWidth, .b = tpag->targetHeight,
                           .c = (int32_t) (xscale * 10.0f),
@@ -2648,7 +2661,7 @@ static void SWRenderer_profDrawTextColor(Renderer* renderer, const char* text, f
 static void SWRenderer_profDrawSpriteTiled(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha)
 {
     SWR_PROFILED(SWR_PROF_TILED, SWRenderer_drawSpriteTiled(renderer, tpagIndex, originX, originY, x, y, xscale, yscale, tileX, tileY, roomW, roomH, color, alpha));
-    if (swrCallNotes) {
+    if (swrCallNotes && swrDrawTimed) {
         SWNoteKey key = { .kind = SWR_NOTE_TILED, .alpha = (int16_t) (alpha * 100.0f), .a = tpagIndex };
         swrNoteKeyed(swrProfLast, &key);
     }
@@ -2671,7 +2684,7 @@ static bool SWRenderer_profDrawTileLayer(Renderer* renderer, Background* tileset
 static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1, float x2, float y2, uint32_t color, float alpha, bool outline)
 {
     SWR_PROFILED(SWR_PROF_RECT, SWRenderer_drawRectangle(renderer, x1, y1, x2, y2, color, alpha, outline));
-    if (swrCallNotes) {
+    if (swrCallNotes && swrDrawTimed) {
         // Where it is on the screen, not in the room, so that a scrolling view does not make each frame's a new one.
         const SWRenderer* swr = (const SWRenderer*) renderer;
         SWNoteKey key = { .kind = SWR_NOTE_RECT, .alpha = (int16_t) (alpha * 100.0f), .a = (int) x1 - swr->viewX, .b = (int) y1 - swr->viewY,

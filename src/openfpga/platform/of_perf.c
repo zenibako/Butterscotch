@@ -51,6 +51,32 @@ void utPerfAddLoad(UtLoadKind kind, uint64_t nanos) {
     g_loadNanos[kind] += nanos;
 }
 
+bool utPerfDetail = true;
+static int g_detailEvery = 0;
+static bool g_detailAlways = false;
+static unsigned g_frameNumber = 0;
+extern bool swrDrawTimed;
+
+void utPerfDetailEvery(int frames) {
+    g_detailEvery = frames;
+}
+
+void utPerfDetailAlways(bool always) {
+    g_detailAlways = always;
+}
+
+/* A draw call that was not timed. The audio queue is topped up by count
+ * here, there being no time to go by; asking how full it is costs half a
+ * microsecond. */
+void platformDrawCount(int kind) {
+    g_drawCalls[kind]++;
+    static unsigned sinceTick = 0;
+    if (++sinceTick >= 8) {
+        sinceTick = 0;
+        platformBusyTick();
+    }
+}
+
 void platformDrawProfile(int kind, uint64_t nanos) {
     g_drawNanos[kind] += nanos;
     g_drawCalls[kind]++;
@@ -82,9 +108,12 @@ static void reportSlowFrame(unsigned workMs) {
                 load[UT_LOAD_SOUND], load[UT_LOAD_MIX], load[UT_LOAD_MUSIC]);
         unsigned draw[UT_DRAW_KINDS];
         for (int i = 0; i < UT_DRAW_KINDS; i++) draw[i] = (unsigned) (g_drawNanos[i] / 1000000u);
-        logInfo("  draw: s%u/%u p%u/%u t%u/%u b%u/%u r%u/%u\n", g_drawCalls[0], draw[0], g_drawCalls[1], draw[1],
-                g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4]);
+        /* Calls and ms per kind; the ms, like mix above, are zero on a frame taken without detail. */
+        logInfo("  draw: s%u/%u p%u/%u t%u/%u b%u/%u r%u/%u%s\n", g_drawCalls[0], draw[0], g_drawCalls[1], draw[1],
+                g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4], utPerfDetail ? "" : " (not timed)");
     }
+    g_totals.frames++;
+    if (utPerfDetail) g_totals.detailFrames++;
     for (int i = 0; i < UT_LOAD_KINDS; i++) {
         g_totals.loadNanos[i] += g_loadNanos[i];
         g_loadNanos[i] = 0;
@@ -313,6 +342,9 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
     }
     g_lastFrame = now;
     g_sleepNanos = 0;
+    g_frameNumber++;
+    utPerfDetail = g_enabled || g_logEnabled || g_detailAlways || (g_detailEvery > 0 && g_frameNumber % (unsigned) g_detailEvery == 0);
+    swrDrawTimed = utPerfDetail;
 
     if (fb == NULL) return; /* a skipped frame: counted, nothing to draw on */
     if (g_logEnabled) drawLog(fb, width, height);
