@@ -90,6 +90,7 @@ typedef struct {
     int32_t instanceId;
     int32_t sourceIndex; /* SOND index or stream index this voice was started from */
     int32_t track;
+    bool music; /* a stream or an external file, not an embedded effect; see Muting */
 
     /* Compressed data being decoded: a stream slot's read-ahead buffer, or a
      * whole cached sound. */
@@ -773,9 +774,9 @@ static void refillStreams(UtAudioSystem *ut) {
 
 /* ===[ Muting ]===
  * The audio mode (a debug setting, to see what sound costs) mutes everything,
- * the music or the sound effects. Music here is what is streamed from the
- * pack and an effect is what is played from memory, the same line the voices
- * are shared out along. A muted voice is not decoded, mixed or read from the
+ * the music or the sound effects. Music here is what the game streams or
+ * keeps in a file of its own, and an effect is a sound embedded in its data,
+ * however long either is. A muted voice is not decoded, mixed or read from the
  * card, and with everything muted nothing is handed to the OS. Muted sounds
  * still run their course, since the game asks whether they are playing and
  * where they have got to: each frame moves every muted voice on by the game's
@@ -790,6 +791,7 @@ static void refillStreams(UtAudioSystem *ut) {
  * on the even sample at or below it (a byte boundary) and leaving any odd
  * sample in frac for the mixer to fetch, as it would have. */
 static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
+    voice->startedThisFrame = false; /* its first read is due once it is heard */
     const UtMusicTrack *track = &ut->tracks[voice->track];
     uint64_t count = track->sampleCount;
     uint64_t position = ((uint64_t) voice->samplesDecoded << 16) + voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
@@ -825,18 +827,18 @@ static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
 
 /* Whether a kind of voice is skipped rather than mixed. A desktop dump mixes
  * whatever the mode, so its output is the same in all of them. */
-static bool kindSkipped(const UtAudioSystem *ut, bool streamed) {
+static bool kindSkipped(const UtAudioSystem *ut, bool music) {
     if (ut->dump != NULL) return false;
     switch (g_audioMode) {
         case UT_AUDIO_DISABLED:   return true;
-        case UT_AUDIO_MUSIC_ONLY: return !streamed;
-        case UT_AUDIO_SOUND_ONLY: return streamed;
+        case UT_AUDIO_MUSIC_ONLY: return !music;
+        case UT_AUDIO_SOUND_ONLY: return music;
         default:                  return false;
     }
 }
 
 static bool voiceSkipped(const UtAudioSystem *ut, const UtVoice *voice) {
-    return kindSkipped(ut, voice->streamSlot >= 0);
+    return kindSkipped(ut, voice->music);
 }
 
 /* Nothing is heard at all, so nothing is queued. */
@@ -848,11 +850,10 @@ void utAudioSetMode(UtAudioMode mode) {
     g_audioMode = mode;
     if (g_audio == NULL || g_audio->file == NULL) return;
     UtAudioSystem *ut = g_audio;
-    if (kindSkipped(ut, false)) return;
     /* Load the short sounds that were started while muted. */
     for (int v = 0; v < UT_MAX_VOICES; v++) {
         UtVoice *voice = &ut->voices[v];
-        if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL) continue;
+        if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL || voiceSkipped(ut, voice)) continue;
         voice->data = cachedSound(ut, voice->track);
         if (voice->data == NULL) voice->active = false;
     }
@@ -894,6 +895,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     int32_t track = -1;
     float gain = 1.0f, pitch = 1.0f;
+    bool music = true; /* a stream */
 
     if (soundIndex >= UT_STREAM_INDEX_BASE) {
         UtStream *stream = streamFor(ut, soundIndex);
@@ -908,6 +910,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
         /* Streamed sounds are packed under their file name, embedded ones
          * under the sound's own name. */
         bool embedded = (sound->flags & (AUDIO_ENTRY_FLAG_IS_EMBEDDED | AUDIO_ENTRY_FLAG_IS_COMPRESSED)) != 0;
+        music = !embedded;
         track = findTrack(ut, embedded ? sound->name : sound->file);
         if (track < 0) track = findTrack(ut, embedded ? sound->file : sound->name);
         gain = sound->volume;
@@ -917,7 +920,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     bool streamed = trackBytes(&ut->tracks[track]) > UT_MEMORY_SOUND_BYTES;
     uint8_t *soundData = NULL;
-    if (!streamed && kindSkipped(ut, false)) {
+    if (!streamed && kindSkipped(ut, music)) {
         /* Not read until the mute comes off; see utAudioSetMode. */
         if (trackBytes(&ut->tracks[track]) == 0) return -1;
     } else if (!streamed) {
@@ -969,6 +972,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     voice->frac = 65536;
     voice->loop = loop;
     voice->track = track;
+    voice->music = music;
     voice->sourceIndex = soundIndex;
     voice->instanceId = ut->nextInstanceId++;
     voice->pitch = pitch;

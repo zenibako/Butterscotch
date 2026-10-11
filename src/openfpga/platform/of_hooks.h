@@ -24,7 +24,7 @@ bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize)
 bool utAudioHasPackFile(const char *path);
 
 /* What is heard (a debug setting): a muted sound runs its course unheard and costs almost nothing. Music is
- * what is streamed from the pack, a sound effect what is played from memory. */
+ * what the game streams or keeps in a file of its own, a sound effect what is embedded in its data. */
 typedef enum { UT_AUDIO_NORMAL, UT_AUDIO_DISABLED, UT_AUDIO_MUSIC_ONLY, UT_AUDIO_SOUND_ONLY, UT_AUDIO_MODE_COUNT } UtAudioMode;
 void utAudioSetMode(UtAudioMode mode);
 UtAudioMode utAudioMode(void);
