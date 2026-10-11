@@ -1423,11 +1423,57 @@ static void swrDrawSpriteRotatedInternal(
     float sh_dh = (float) sh / dh;
     
     int blendmode = swr->blendMode;
-
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    // Nothing comes of a draw this faint: alphaBlend skips every pixel of it.
+    if (blendmode == bm_normal && alpha < 4) return;
+    // At normal blending each pixel is a plain store or a premultiplied blend,
+    // both bit-identical to alphaBlend(), with the tinted (and premultiplied)
+    // colour worked out once per run of identical source pixels.
+    bool premul = blendmode == bm_normal;
+    uint32_t dstalpha = 256 - alpha;
+    uint32_t lastPixel = 0xFFFFFFFF;
+    uintpixel_t lastTinted = 0;
+    uint32_t srcRedBlue = 0, srcGreen = 0;
+#endif
+    
+    // Each row is only gone through where the sprite can be. Along a row the
+    // texture-local coordinates below change linearly with cx, by cosA and
+    // -sinA a pixel, so the stretch where 0 <= lx < dw and 0 <= ly < dh is
+    // solved for once a row, with two pixels to spare at each end; the exact
+    // test per pixel stays, so which pixels are drawn does not change.
+    // A coordinate that changes by less than 1/16 a pixel along the row is
+    // left to the per-pixel test, as its stretch is too sensitive to rounding.
+    const float flat = 1.0f / 16.0f;
+    float lxBase = pxa - dx, lyBase = pya - dy;
+    
     for (int cy = minYc; cy < maxYc; cy++)
     {
         uintpixel_t *dstline = &swr->fb[cy * swr->fbPitch];
-        for (int cx = minXc; cx < maxXc; cx++)
+        int fromX = minXc, toX = maxXc;
+        {
+            float oy = (float) cy + 0.5f - pya;
+            float lo = -FLT_MAX, hi = FLT_MAX;
+            // lx = cosA * ox + (sinA * oy + lxBase) must lie in [0, dw), and
+            // ly = -sinA * ox + (cosA * oy + lyBase) in [0, dh).
+            float slope[2] = { cosA, -sinA };
+            float start[2] = { sinA * oy + lxBase, cosA * oy + lyBase };
+            float size[2] = { (float) dw, (float) dh };
+            for (int k = 0; k < 2; k++)
+            {
+                if (fabsf(slope[k]) < flat) continue;
+                float a = -start[k] / slope[k], b = (size[k] - start[k]) / slope[k];
+                if (a > b) { float t = a; a = b; b = t; }
+                if (lo < a) lo = a;
+                if (hi > b) hi = b;
+            }
+            if (lo > hi) continue;
+            // ox = cx + 0.5 - pxa
+            float first = lo - 0.5f + pxa - 2.0f, last = hi - 0.5f + pxa + 2.0f;
+            if (first > (float) fromX) fromX = first >= (float) toX ? toX : (int) first;
+            if (last < (float) (toX - 1)) toX = last < (float) fromX ? fromX : (int) last + 1;
+        }
+        for (int cx = fromX; cx < toX; cx++)
         {
             // we need to determine the texture-space coordinate of cx/cy
             float ox = (float) cx + 0.5f - pxa;
@@ -1459,11 +1505,28 @@ static void swrDrawSpriteRotatedInternal(
             
             uintpixel_t src = texture->buffer[ty * texture->width + tx];
 
+#ifdef SW_HAS_PREMUL_BLEND
+            if (!swrIsOpaque(src))
+                continue;
+            if (src != lastPixel) {
+                lastTinted = tint(tintColor, src);
+                srcRedBlue = swrSpreadRedBlue(lastTinted) * alpha;
+                srcGreen = swrGreen(lastTinted) * alpha;
+                lastPixel = src;
+            }
+            if (!premul)
+                alphaBlend(&dstline[cx], lastTinted, blendmode, alpha);
+            else if (alpha > 253)
+                dstline[cx] = lastTinted;
+            else
+                dstline[cx] = swrBlendPremultiplied(dstline[cx], srcRedBlue, srcGreen, dstalpha);
+#else
             if (swrIsOpaque(src))
                 alphaBlend(&dstline[cx], tint(tintColor, src), blendmode, alpha);
 #ifndef SW_NO_SEMI_TRANSPARENT_TEXTURE_SUPPORT
             else if (!swrIsFullyTransparent(src))
                 swrCalculateAlphaBlending(&dstline[cx], src, tintColor, alpha, blendmode);
+#endif
 #endif
         }
     }
