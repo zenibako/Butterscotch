@@ -126,6 +126,9 @@ static uint64_t timedRead(uint32_t slot, uint32_t offset, uint32_t size) {
     return g_packResult >= 0 ? nowNanos() - start : 0;
 }
 
+/* Where in its file the texture pack starts (sw_texture_pack.c). */
+uint32_t swrTexturePackOffset(void);
+
 /* Each kind of read is timed a few times, every read at a part of its file
  * not read before in this probe, so nothing can come from a cache. */
 void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
@@ -133,10 +136,11 @@ void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
     uint64_t total[UT_READ_COSTS] = { 0 };
     unsigned counted[UT_READ_COSTS] = { 0 };
     memset(tenths, 0, UT_READ_COSTS * sizeof(tenths[0]));
-    uint32_t musicSlot = 0;
-    if (!g_packProbed) packProbe("textures.bin");
-    if (!g_packDirect || g_packPiece < SIZE || of_file_slot_find("music.bin", &musicSlot) != 0) return;
-    uint32_t texAt = 0, musicAt = 0;
+    uint32_t musicSlot = 0, dataSlot = 0;
+    /* The texture pack is opened, and its first read made, by its first sprite. */
+    uint32_t texAt = swrTexturePackOffset(), musicAt = 0, dataAt = 0;
+    if (!g_packDirect || g_packPiece < SIZE || of_file_slot_find("music.bin", &musicSlot) != 0 ||
+        of_file_slot_find("data.win", &dataSlot) != 0) return;
     #define TEX() timedRead(g_packSlot, (texAt += STRIDE), SIZE)
     #define MUSIC() timedRead(musicSlot, (musicAt += STRIDE), SIZE)
     #define COUNT(kind, nanos) do { uint64_t n_ = (nanos); if (n_ != 0) { total[kind] += n_; counted[kind]++; } } while (0)
@@ -151,6 +155,8 @@ void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
         uint64_t idle = nowNanos();
         while (nowNanos() - idle < 100000000ull) {}
         COUNT(UT_READ_IDLE_TEX, TEX());
+        timedRead(dataSlot, (dataAt += STRIDE), SIZE);
+        COUNT(UT_READ_FILE_TEX, TEX());
     }
     #undef TEX
     #undef MUSIC

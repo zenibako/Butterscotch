@@ -389,8 +389,9 @@ void utBenchFrame(void) {
         unsigned tenths[UT_READ_COSTS];
         utPlatformReadCosts(tenths);
         #define MS(n) tenths[n] / 10, tenths[n] % 10
-        utLogPrint("4 KB read, ms: tex>tex %u.%u music>tex %u.%u tex>music %u.%u music>music %u.%u idle>tex %u.%u\n",
-                   MS(UT_READ_TEX_TEX), MS(UT_READ_MUSIC_TEX), MS(UT_READ_TEX_MUSIC), MS(UT_READ_MUSIC_MUSIC), MS(UT_READ_IDLE_TEX));
+        utLogPrint("4 KB read, ms: tex>tex %u.%u music>tex %u.%u tex>music %u.%u music>music %u.%u idle>tex %u.%u data.win>tex %u.%u\n",
+                   MS(UT_READ_TEX_TEX), MS(UT_READ_MUSIC_TEX), MS(UT_READ_TEX_MUSIC), MS(UT_READ_MUSIC_MUSIC), MS(UT_READ_IDLE_TEX),
+                   MS(UT_READ_FILE_TEX));
         #undef MS
     }
     /* One more measurement, after the report so far is safely in the file: it
