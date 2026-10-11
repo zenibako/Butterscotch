@@ -24,6 +24,19 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
   640x480 at 16 bpp or the switch back from it.
 - The app-facing API barely changed between v0.7 and v0.9; the same
   sources build against either.
+- **Where Pocket runtimes come from (checked 2026-10-11).** The
+  openfpgaOS/openfpgaOS repo has the OS source but no Pocket binaries; its
+  tags are MiSTer releases. Pocket runtimes ship only inside
+  openfpgaOS/openfpgaSDK (v0.7, `a408ddc`, which this repo pins) and the
+  Diablo port's releases (v0.9; Diablo 1.1.0 was built from OS v0.9.5
+  plus two commits). To answer "is there a newer OS", compare those two
+  against what `build-pocket.yml` and `SDK_ROOT` use, not the OS repo's
+  tags. Moving to v0.9 would bring fixes for audio re-arm races and for
+  flips timing out while the Pocket's menu is open, at no speed gain
+  (see the perf skill).
+- **The frame buffer is on the cached alias** (`0x10xxxxxx`) in the OS
+  source since `ca5bb0a` (2026-04-16), in both runtimes. Not yet read
+  back on the device; see the perf skill's frame-buffer section.
 
 ## Display
 
