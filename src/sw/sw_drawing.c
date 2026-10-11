@@ -871,6 +871,7 @@ void swrOverlayFlushForState(SWRenderer* swr)
 
 void swrOverlayFlush(SWRenderer* swr)
 {
+    swrTrailEnd();
 #ifdef SW_HAS_PREMUL_BLEND
     // Held tile pictures are older than anything else held, so they go first,
     // and a held clear is older still: the pictures take it with them, and
@@ -2035,6 +2036,50 @@ void swrFillRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
 #endif
 }
 
+// A trail: one translucent sprite stamped again and again a pixel or two
+// along, each stamp a little more opaque (Deltarune's attack burst draws
+// about 80 in a row, so every pixel under it is blended some 24 times).
+// With speed favoured, every second stamp is left out and the one after it
+// is drawn with both stamps' opacity, 1 - (1 - a)(1 - b): half the blending
+// for a picture that differs by a step of a pixel or two along the trail.
+// Only plain sprite draws (SWRenderer_drawSprite, which allows overlay
+// merging) take part, and anything else drawn in between ends the trail
+// (swrOverlayFlush). A stamp left out is drawn after all when the next
+// sprite is not the trail's; one followed by something else is lost.
+#ifdef SW_HAS_PREMUL_BLEND
+#define SWR_TRAIL_STEP 3      // the furthest a stamp may be from the last one, in pixels each way
+#define SWR_TRAIL_MIN_SIDE 16 // smaller sprites (text, sparks) are left alone
+typedef struct {
+    bool known;
+    const uintpixel_t* fb;
+    SWTexture* texture;
+    int dx, dy, dw, dh, sx, sy, sw, sh, alpha;
+    uintpixel_t tint;
+} SWTrailStamp;
+static SWTrailStamp swrTrailLast;   // the stamp drawn last, while the trail goes on
+static SWTrailStamp swrTrailMissed; // a stamp left out, its opacity to go with the next
+static bool swrTrailDrawing = false;
+
+static bool swrTrailFollows(const SWTrailStamp* before, const SWTrailStamp* stamp)
+{
+    if (!before->known || before->fb != stamp->fb || before->texture != stamp->texture) return false;
+    if (before->sx != stamp->sx || before->sy != stamp->sy || before->sw != stamp->sw || before->sh != stamp->sh) return false;
+    if (before->dw != stamp->dw || before->dh != stamp->dh || before->tint != stamp->tint) return false;
+    int ax = stamp->dx - before->dx, ay = stamp->dy - before->dy;
+    return ax >= -SWR_TRAIL_STEP && ax <= SWR_TRAIL_STEP && ay >= -SWR_TRAIL_STEP && ay <= SWR_TRAIL_STEP;
+}
+#endif
+
+// Something other than a trail's next stamp is being drawn.
+void swrTrailEnd(void)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    if (swrTrailDrawing) return;
+    swrTrailLast.known = false;
+    swrTrailMissed.known = false;
+#endif
+}
+
 void swrDrawSprite(
     Renderer* renderer, float dx, float dy, float dw, float dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
@@ -2045,6 +2090,34 @@ void swrDrawSprite(
     
     swrTransformPosIfNeeded(swr, &dx, &dy);
     swrTransformSizeIfNeeded(swr, &dw, &dh);
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    if (swrFavorSpeed && swr->overlayMergeAllowed) {
+        SWTrailStamp stamp = { true, swr->fb, texture, swrFloor(dx), swrFloor(dy), swrCeiling(dw), swrCeiling(dh),
+                               sx, sy, sw, sh, swrIntAlpha(alpha), swrConvertPixel(tintColor) };
+        int sideW = stamp.dw < 0 ? -stamp.dw : stamp.dw, sideH = stamp.dh < 0 ? -stamp.dh : stamp.dh;
+        bool translucent = swr->blendMode == bm_normal && stamp.alpha >= 4 && stamp.alpha <= 253 &&
+                           sideW >= SWR_TRAIL_MIN_SIDE && sideH >= SWR_TRAIL_MIN_SIDE;
+        if (translucent && swrTrailFollows(&swrTrailMissed, &stamp)) {
+            int missed = swrTrailMissed.alpha;
+            stamp.alpha = missed + stamp.alpha - (missed * stamp.alpha + 128) / 256;
+            swrTrailMissed.known = false;
+        } else if (translucent && !swrTrailMissed.known && swrTrailFollows(&swrTrailLast, &stamp)) {
+            swrTrailMissed = stamp;
+            return;
+        }
+        swrTrailDrawing = true;
+        if (swrTrailMissed.known) // the trail ends with a stamp left out: it goes down after all, before this
+            swrDrawSpriteInternal(renderer, swrTrailMissed.dx, swrTrailMissed.dy, swrTrailMissed.dw, swrTrailMissed.dh, swrTrailMissed.texture,
+                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha);
+        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha);
+        swrTrailDrawing = false;
+        swrTrailMissed.known = false;
+        swrTrailLast = stamp;
+        swrTrailLast.known = translucent;
+        return;
+    }
+#endif
     
     swrDrawSpriteInternal(
         renderer,
@@ -2352,6 +2425,51 @@ void swrFillHeldDrop(void)
 #endif
 }
 
+#if PIXEL_SIZE == 16 && defined SW_HAS_PREMUL_BLEND && !defined SW_DITHERED_BLENDING
+// Whether every held pass repeats across the whole of each row it touches
+// with the same step: copies from the row's left end to its right, none
+// clipped by a port narrower than the buffer. A battle's scrolling grid is
+// that. Each row is then one stretch of `step` pixels over and over.
+#define SWR_TILED_PERIOD_MAX 256
+static bool swrTiledHeldRepeats(const SWRenderer* swr, int count, int* step)
+{
+    int period = swrTiledHeld[0].stepX;
+    if (period <= 0 || period > SWR_TILED_PERIOD_MAX || swr->mainWidth > SWR_HELD_ROW_MAX) return false;
+    for (int p = 0; p < count; p++) {
+        const SWTiledPass* pass = &swrTiledHeld[p];
+        if (pass->stepX != period || pass->minX > 0 || pass->maxX < swr->mainWidth) return false;
+        if (pass->originX > 0 || pass->originX + pass->countX * period < swr->mainWidth) return false;
+    }
+    *step = period;
+    return true;
+}
+
+// What the pass puts on row y, into one stretch of the row: `pattern[i]`
+// stands for every pixel x of the row with x % period == i. The same pixels
+// as swrTiledPassRow, from one copy instead of every copy across the row.
+FORCE_INLINE void swrTiledPassPattern(const SWTiledPass* pass, int y, uintpixel_t* pattern, int period, SWTiledMemo* memo)
+{
+    int fromOrigin = y - pass->originY;
+    if (y < pass->minY || y >= pass->maxY || fromOrigin < 0) return;
+    int copyY = fromOrigin / pass->stepY, row = fromOrigin - copyY * pass->stepY;
+    if (copyY >= pass->countY || row >= pass->height) return;
+    int from = (int) pass->bounds[row * 2] - pass->boundsBase, to = (int) pass->bounds[row * 2 + 1] - pass->boundsBase;
+    if (from < 0) from = 0;
+    if (to > pass->width) to = pass->width;
+    
+    const uintpixel_t* srcline = &pass->texels[row * pass->pitch];
+    const uint8_t* covline = pass->coverage != NULL ? &pass->coverage[row * pass->pitch] : NULL;
+    // A copy's column `col` lands on x = originX + copy * period + col.
+    int at = (pass->originX + from) % period;
+    if (at < 0) at += period;
+    for (int col = from; col < to; col++, at = at + 1 == period ? 0 : at + 1) {
+        const uint8_t* covered = covline != NULL ? &covline[col] : NULL;
+        if (covered != NULL ? *covered != 0 : swrIsOpaque(srcline[col]))
+            pattern[at] = swrTiledPixelMemo(memo, pattern[at], srcline[col], covered, pass->alpha);
+    }
+}
+#endif
+
 // Writes the held clear's colour over the whole main buffer, the tiled passes
 // held over it and the fills held over those, a row at a time. Leaves none
 // held. With fills, the buffer's row is filled with what they make of the
@@ -2359,6 +2477,13 @@ void swrFillHeldDrop(void)
 // (a pass over another reads what is under it), putting each pixel they
 // write into the buffer as the fills leave it: per pixel only where a pass
 // draws, which for a grid of lines is little of the screen.
+//
+// When the passes repeat across every row (swrTiledHeldRepeats), as a
+// battle's grid does, that per-copy work is most of the cost: on a 320 px
+// row a 25 px grid is 13 copies a pass, each a pixel or two, every row. So
+// the row is instead worked out for one stretch of `step` pixels, with the
+// fills, and the stretch is laid along a row in ordinary memory and copied
+// out. Every pixel comes out as the copies would have left it.
 void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
 {
 #if PIXEL_SIZE != 16 || !defined SW_HAS_PREMUL_BLEND || defined SW_DITHERED_BLENDING
@@ -2368,6 +2493,32 @@ void swrTiledHeldWrite(SWRenderer* swr, uintpixel_t color)
     swr->tiledHeldCount = 0;
     swrFillHeldCount = 0;
     SWTiledMemo memos[SWR_TILED_HELD_MAX] = { 0 };
+    int period;
+    if (count > 0 && swrTiledHeldRepeats(swr, count, &period)) {
+        uintpixel_t pattern[SWR_TILED_PERIOD_MAX], row[SWR_HELD_ROW_MAX];
+        SWFilledMemo filledMemo = { 0 };
+        int width = swr->mainWidth, first = period < width ? period : width;
+        bool laid = false; // row[] holds a row laid out from the stretch now in row[0..first)
+        for (int y = 0; y < swr->mainHeight; y++) {
+            swrFillPixels(pattern, (size_t) period, color);
+            for (int p = 0; p < count; p++) swrTiledPassPattern(&swrTiledHeld[p], y, pattern, period, &memos[p]);
+            if (fills > 0)
+                for (int i = 0; i < period; i++) pattern[i] = swrFilled(&filledMemo, fills, pattern[i]);
+            // Most rows of a grid are the row before again.
+            if (!laid || memcmp(row, pattern, (size_t) first * sizeof(uintpixel_t)) != 0) {
+                int done = first;
+                memcpy(row, pattern, (size_t) done * sizeof(uintpixel_t));
+                while (done < width) {
+                    int more = done < width - done ? done : width - done;
+                    memcpy(&row[done], row, (size_t) more * sizeof(uintpixel_t));
+                    done += more;
+                }
+                laid = true;
+            }
+            memcpy(&swr->mainFb[y * width], row, (size_t) width * sizeof(uintpixel_t));
+        }
+        return;
+    }
     if (fills == 0) {
         for (int y = 0; y < swr->mainHeight; y++) {
             uintpixel_t* dstline = &swr->mainFb[y * swr->mainWidth];
