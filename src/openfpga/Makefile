@@ -82,7 +82,7 @@ BS_VENDOR_SRCS = $(wildcard $(BS_VENDOR)/bzip2/*.c) \
 BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics_disabled.c
 
 SRCS = main.c platform/of_platform.c platform/of_diag.c platform/of_log.c \
-       platform/of_perf.c platform/of_audio_system.c platform/ut_bench.c \
+       platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/ut_bench.c \
        platform/ut_strings.c platform/ut_save_fs.c platform/ut_native.c \
        platform/ut_font.c platform/ut_menu.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
@@ -100,7 +100,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
 BS_DEFS = $(GAME_DEFS) -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DUT_LOG_SLOT_FILE='"$(APP)_1.sav"' -DUT_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
-          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DENABLE_VM_GML_PROFILER \
+          -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DPLATFORM_PACK_READ -DSW_TEXTURE_PACK_HOST='"music.bin"' -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
 
@@ -161,7 +161,8 @@ MKTEXPACK = $(ROOT)/.obj/$(APP)-tools/mktexpack
 MKTEXPACK_SRCS = tools/mktexpack.c platform/of_log.c $(BS_SRC)/log.c $(BS_SRC)/gettime.c \
                  $(BS_IMAGE_SRCS) $(BS_STB_SRCS) $(wildcard $(BS_VENDOR)/bzip2/*.c)
 
-$(MKTEXPACK): $(MKTEXPACK_SRCS)
+# The header sets the tile size, so a change there rebuilds the tool and the packs.
+$(MKTEXPACK): $(MKTEXPACK_SRCS) $(BS_SRC)/sw/sw_texture_pack.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -DUT_HOST_TOOL $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(MKTEXPACK_SRCS) -lm -o $@
 
