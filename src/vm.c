@@ -2914,6 +2914,11 @@ static RValue executeLoop(VMContext* ctx) {
     // reload the values at the end of every iteration.
     const uint32_t codeEnd = ctx->codeEnd;
     const uint8_t* const bytecodeBase = ctx->bytecodeBase;
+#if defined(ENABLE_VM_GML_PROFILER) && defined(UT_FAST_LOOP)
+    // Pocket applies Script times toggles between frames. Its profiler stays alive
+    // throughout this call, including nested scripts and audio service hooks.
+    Profiler* const instructionProfiler = ctx->profiler;
+#endif
     // If you just joined the stream: ip is short for instruction pointer chat
     // The ip is mutable, so we need to use VM_SYNC_IP and VM_RELOAD_IP every time an opcode handler may access it or write to it
     uint32_t ip = ctx->ip;
@@ -2977,8 +2982,12 @@ static RValue executeLoop(VMContext* ctx) {
 #endif
 
 #ifdef ENABLE_VM_GML_PROFILER
-        if (ctx->profiler != nullptr)
-            Profiler_tickInstruction(ctx->profiler);
+#ifndef UT_FAST_LOOP
+        // Other platforms can change the profiler while the interpreter runs.
+        Profiler* const instructionProfiler = ctx->profiler;
+#endif
+        if (instructionProfiler != nullptr)
+            Profiler_tickInstruction(instructionProfiler);
 #endif
         uint32_t instrAddr = ip;
         uint32_t instr = BinaryUtils_readUint32Aligned(bytecodeBase + ip);
@@ -3887,11 +3896,11 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
         const char* savedCodeName = ctx->currentCodeName;
         ctx->currentCodeName = code->name;
 #ifdef ENABLE_VM_GML_PROFILER
-        Profiler_enter(ctx->profiler, code->name);
+        if (ctx->profiler != nullptr) Profiler_enter(ctx->profiler, code->name);
 #endif
         bool done = ctx->nativeCode[codeIndex](ctx);
 #ifdef ENABLE_VM_GML_PROFILER
-        Profiler_exit(ctx->profiler);
+        if (ctx->profiler != nullptr) Profiler_exit(ctx->profiler);
 #endif
         ctx->currentCodeName = savedCodeName;
         if (done) return RValue_makeUndefined();
@@ -3917,11 +3926,11 @@ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
     ctx->savearefBalance = 0;
 
 #ifdef ENABLE_VM_GML_PROFILER
-    Profiler_enter(ctx->profiler, code->name);
+    if (ctx->profiler != nullptr) Profiler_enter(ctx->profiler, code->name);
 #endif
     RValue result = executeLoop(ctx);
 #ifdef ENABLE_VM_GML_PROFILER
-    Profiler_exit(ctx->profiler);
+    if (ctx->profiler != nullptr) Profiler_exit(ctx->profiler);
 #endif
 
     requireMessage(ctx->savearefBalance == 0, "SAVEAREF/RESTOREAREF imbalance at end of VM_executeCode (unpaired SAVEAREF)");
@@ -3953,11 +3962,11 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
     if (ctx->nativeScript != nullptr && ctx->nativeScript[codeIndex] != nullptr) {
         RValue nativeResult = RValue_makeUndefined();
 #ifdef ENABLE_VM_GML_PROFILER
-        Profiler_enter(ctx->profiler, code->name);
+        if (ctx->profiler != nullptr) Profiler_enter(ctx->profiler, code->name);
 #endif
         bool done = ctx->nativeScript[codeIndex](ctx, args, argCount, &nativeResult);
 #ifdef ENABLE_VM_GML_PROFILER
-        Profiler_exit(ctx->profiler);
+        if (ctx->profiler != nullptr) Profiler_exit(ctx->profiler);
 #endif
         if (done) return RValue_stealOwnershipOrCopy(nativeResult); // as a script's own return value is, below
     }
@@ -4013,11 +4022,11 @@ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t
 
     // Execute the callee
 #ifdef ENABLE_VM_GML_PROFILER
-    Profiler_enter(ctx->profiler, code->name);
+    if (ctx->profiler != nullptr) Profiler_enter(ctx->profiler, code->name);
 #endif
     RValue result = executeLoop(ctx);
 #ifdef ENABLE_VM_GML_PROFILER
-    Profiler_exit(ctx->profiler);
+    if (ctx->profiler != nullptr) Profiler_exit(ctx->profiler);
 #endif
 
     requireMessage(ctx->savearefBalance == 0, "SAVEAREF/RESTOREAREF imbalance at end of VM_callCodeIndex (unpaired SAVEAREF)");
