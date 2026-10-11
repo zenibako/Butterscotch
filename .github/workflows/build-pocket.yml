@@ -91,6 +91,17 @@ jobs:
             PC_OBJ_DIR="$PWD/out/.obj/profiler-fixture-generic" PC_EXTRA_CFLAGS=-UUT_FAST_LOOP
           ./undertale_pc_generic_profiler_fixture
 
+      - name: Check clipped sprite pixels and texture bounds
+        working-directory: butterscotch/src/openfpga
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          make sprite-clipping-fixture WADS="16 17" PC_BIN=undertale_pc_clipping \
+            PC_OBJ_DIR="$PWD/out/.obj/sprite-clipping-fixture" \
+            PC_EXTRA_CFLAGS="-g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=alignment"
+          ./undertale_pc_clipping_sprite_clipping_fixture
+
       - uses: actions/upload-artifact@v7
         with:
           name: butterscotch-pocket-programs

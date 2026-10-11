@@ -292,6 +292,11 @@ $(PC_BIN): $(PC_OBJS)
 
 test: $(PC_BIN) $(GAME_PACKS)
 
+# Asset-free clipped sprite pixel and memory-safety regression check.
+.PHONY: sprite-clipping-fixture
+sprite-clipping-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/sprite-clipping.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_sprite_clipping_fixture
+
 # Asset-free VM/profiler accounting and between-execution toggle regression check.
 .PHONY: profiler-fixture
 profiler-fixture: $(PC_OBJS)
