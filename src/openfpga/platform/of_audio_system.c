@@ -90,6 +90,7 @@ typedef struct {
     int32_t instanceId;
     int32_t sourceIndex; /* SOND index or stream index this voice was started from */
     int32_t track;
+    bool music; /* a stream or an external file, not an embedded effect; see Muting */
 
     /* Compressed data being decoded: a stream slot's read-ahead buffer, or a
      * whole cached sound. */
@@ -143,7 +144,9 @@ typedef struct {
 
 /* The file idle hook has no user pointer, so the one instance is global. */
 static UtAudioSystem *g_audio = NULL;
-static bool g_muted = false; /* see Muting, below */
+static UtAudioMode g_audioMode = UT_AUDIO_NORMAL; /* see Muting, below */
+static bool voiceSkipped(const UtAudioSystem *ut, const UtVoice *voice);
+static bool silent(const UtAudioSystem *ut);
 
 /* ===[ Pack lookup ]=== */
 
@@ -552,7 +555,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
             uint64_t voicesStart = timed ? nowNanos() : 0;
             for (int v = 0; v < UT_MAX_VOICES; v++) {
                 UtVoice *voice = &ut->voices[v];
-                if (voice->active && !voice->paused) {
+                if (voice->active && !voice->paused && !voiceSkipped(ut, voice)) {
                     mixVoice(ut, voice, mix, chunk);
                     voicePairs += (uint64_t) chunk;
                 }
@@ -606,7 +609,7 @@ static void pumpOutput(UtAudioSystem *ut) {
  * queue is deep (100 ms) leaves a gap in the sound. */
 void platformBusyTick(void) {
     /* A dump follows game time instead of the queue; see updateAudio. */
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !g_muted) pumpOutput(g_audio);
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutput(g_audio);
 }
 
 /* A room change is the one long stretch of work with nowhere to feed the
@@ -614,12 +617,12 @@ void platformBusyTick(void) {
  * log hook calls this when the change starts, to queue enough to cover it.
  * Sounds that start in the next quarter second are heard that much late. */
 void utAudioRoomChange(void) {
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !g_muted) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
 }
 
 #ifndef OF_PC
 static void idleHook(void) {
-    if (g_audio != NULL && g_audio->file != NULL && !g_muted) pumpOutput(g_audio);
+    if (g_audio != NULL && g_audio->file != NULL && !silent(g_audio)) pumpOutput(g_audio);
 }
 #endif
 
@@ -751,7 +754,7 @@ static void refillStreams(UtAudioSystem *ut) {
     uint32_t least = UT_READAHEAD;
     for (int v = 0; v < UT_MAX_VOICES; v++) {
         UtVoice *voice = &ut->voices[v];
-        if (!voice->active || voice->streamSlot < 0) continue;
+        if (!voice->active || voice->streamSlot < 0 || voiceSkipped(ut, voice)) continue;
         if (voice->startedThisFrame) {
             voice->startedThisFrame = false;
             continue;
@@ -770,13 +773,17 @@ static void refillStreams(UtAudioSystem *ut) {
 }
 
 /* ===[ Muting ]===
- * With sound muted (a debug switch, to see what sound costs) nothing is
- * decoded, mixed, read from the card or handed to the OS. Sounds still run
- * their course, since the game asks whether they are playing and where they
- * have got to: each frame moves every voice on by the game's time, as a seek
- * would. A seek cannot carry the decoder's state, so a sound that was playing
- * when the mute came off is rough for a moment, as after any seek. A short
- * sound started while muted is not loaded until the mute comes off. */
+ * The audio mode (a debug setting, to see what sound costs) mutes everything,
+ * the music or the sound effects. Music here is what the game streams or
+ * keeps in a file of its own, and an effect is a sound embedded in its data,
+ * however long either is. A muted voice is not decoded, mixed or read from the
+ * card, and with everything muted nothing is handed to the OS. Muted sounds
+ * still run their course, since the game asks whether they are playing and
+ * where they have got to: each frame moves every muted voice on by the game's
+ * time, as a seek would. A seek cannot carry the decoder's state, so a sound
+ * that was playing when its mute came off is rough for a moment, as after any
+ * seek. A short sound started while muted is not loaded until its mute comes
+ * off. */
 
 /* mixVoice keeps samplesDecoded * 65536 + frac moving by exactly step per
  * output pair: fetching a sample adds 65536 to one side and takes it from the
@@ -784,6 +791,7 @@ static void refillStreams(UtAudioSystem *ut) {
  * on the even sample at or below it (a byte boundary) and leaving any odd
  * sample in frac for the mixer to fetch, as it would have. */
 static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
+    voice->startedThisFrame = false; /* its first read is due once it is heard */
     const UtMusicTrack *track = &ut->tracks[voice->track];
     uint64_t count = track->sampleCount;
     uint64_t position = ((uint64_t) voice->samplesDecoded << 16) + voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
@@ -817,41 +825,56 @@ static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
     voice->gainNow = voice->gainTarget;
 }
 
-/* Whether voices are skipped rather than mixed. A desktop dump mixes even when
- * muted, so its output is the same either way. */
-static bool skipping(const UtAudioSystem *ut) {
-    return g_muted && ut->dump == NULL;
+/* Whether a kind of voice is skipped rather than mixed. A desktop dump mixes
+ * whatever the mode, so its output is the same in all of them. */
+static bool kindSkipped(const UtAudioSystem *ut, bool music) {
+    if (ut->dump != NULL) return false;
+    switch (g_audioMode) {
+        case UT_AUDIO_DISABLED:   return true;
+        case UT_AUDIO_MUSIC_ONLY: return !music;
+        case UT_AUDIO_SOUND_ONLY: return music;
+        default:                  return false;
+    }
 }
 
-void utAudioSetMuted(bool muted) {
-    g_muted = muted;
-    if (muted || g_audio == NULL || g_audio->file == NULL) return;
-    /* Load the short sounds that were started while muted. */
+static bool voiceSkipped(const UtAudioSystem *ut, const UtVoice *voice) {
+    return kindSkipped(ut, voice->music);
+}
+
+/* Nothing is heard at all, so nothing is queued. */
+static bool silent(const UtAudioSystem *ut) {
+    return g_audioMode == UT_AUDIO_DISABLED && ut->dump == NULL;
+}
+
+void utAudioSetMode(UtAudioMode mode) {
+    g_audioMode = mode;
+    if (g_audio == NULL || g_audio->file == NULL) return;
     UtAudioSystem *ut = g_audio;
+    /* Load the short sounds that were started while muted. */
     for (int v = 0; v < UT_MAX_VOICES; v++) {
         UtVoice *voice = &ut->voices[v];
-        if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL) continue;
+        if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL || voiceSkipped(ut, voice)) continue;
         voice->data = cachedSound(ut, voice->track);
         if (voice->data == NULL) voice->active = false;
     }
 }
 
-bool utAudioMuted(void) {
-    return g_muted;
+UtAudioMode utAudioMode(void) {
+    return g_audioMode;
 }
 
 static void updateAudio(UtAudioSystem *ut, float deltaTime) {
     if (ut->file == NULL) return;
 
-    if (skipping(ut)) {
+    if (kindSkipped(ut, false) || kindSkipped(ut, true)) {
         int pairs = (int) (deltaTime * (float) OF_AUDIO_RATE + 0.5f);
         if (pairs > 0 && !ut->allPaused) {
             for (int v = 0; v < UT_MAX_VOICES; v++) {
                 UtVoice *voice = &ut->voices[v];
-                if (voice->active && !voice->paused) skipVoice(ut, voice, pairs);
+                if (voice->active && !voice->paused && voiceSkipped(ut, voice)) skipVoice(ut, voice, pairs);
             }
         }
-        return;
+        if (silent(ut)) return;
     }
 
     refillStreams(ut);
@@ -872,6 +895,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     int32_t track = -1;
     float gain = 1.0f, pitch = 1.0f;
+    bool music = true; /* a stream */
 
     if (soundIndex >= UT_STREAM_INDEX_BASE) {
         UtStream *stream = streamFor(ut, soundIndex);
@@ -886,6 +910,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
         /* Streamed sounds are packed under their file name, embedded ones
          * under the sound's own name. */
         bool embedded = (sound->flags & (AUDIO_ENTRY_FLAG_IS_EMBEDDED | AUDIO_ENTRY_FLAG_IS_COMPRESSED)) != 0;
+        music = !embedded;
         track = findTrack(ut, embedded ? sound->name : sound->file);
         if (track < 0) track = findTrack(ut, embedded ? sound->file : sound->name);
         gain = sound->volume;
@@ -895,8 +920,8 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     bool streamed = trackBytes(&ut->tracks[track]) > UT_MEMORY_SOUND_BYTES;
     uint8_t *soundData = NULL;
-    if (!streamed && skipping(ut)) {
-        /* Not read until the mute comes off; see utAudioSetMuted. */
+    if (!streamed && kindSkipped(ut, music)) {
+        /* Not read until the mute comes off; see utAudioSetMode. */
         if (trackBytes(&ut->tracks[track]) == 0) return -1;
     } else if (!streamed) {
         soundData = cachedSound(ut, track);
@@ -947,6 +972,7 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     voice->frac = 65536;
     voice->loop = loop;
     voice->track = track;
+    voice->music = music;
     voice->sourceIndex = soundIndex;
     voice->instanceId = ut->nextInstanceId++;
     voice->pitch = pitch;
