@@ -805,24 +805,22 @@ static bool menuSaveLog(int direction) {
     return true;
 }
 
+static const char *const g_audioModeNames[UT_AUDIO_MODE_COUNT] = { "Normal", "Disabled", "Music only", "Sound only" };
+
+static void setAudioMode(UtAudioMode mode) {
+    utAudioSetMode(mode);
+    logInfo("Debug: audio mode %s%s\n", g_audioModeNames[mode],
+            mode == UT_AUDIO_DISABLED ? "" : "; what was playing unheard is rough until it next starts");
+}
+
 static const char *menuAudioValue(void) {
-    return utAudioModeName(utAudioMode());
+    return g_audioModeNames[utAudioMode()];
 }
 
-/* A and Right step forward through the modes, Left back. */
 static bool menuAudio(int direction) {
-    int mode = ((int) utAudioMode() + (direction < 0 ? UT_AUDIO_MODE_COUNT - 1 : 1)) % UT_AUDIO_MODE_COUNT;
-    utAudioSetMode((UtAudioMode) mode);
-    logInfo("Debug: audio %s\n", utAudioModeName((UtAudioMode) mode));
+    int step = direction < 0 ? UT_AUDIO_MODE_COUNT - 1 : 1;
+    setAudioMode((UtAudioMode) (((int) utAudioMode() + step) % UT_AUDIO_MODE_COUNT));
     return false;
-}
-
-/* The frame-time overlay's numbers, in words. */
-static void menuStatus(char *out, size_t size) {
-    unsigned average, worstWork, worstPeriod, skipped;
-    utPerfShown(&average, &worstWork, &worstPeriod, &skipped);
-    (void) worstPeriod;
-    snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
 }
 
 static const UtMenuRow g_debugRows[] = {
@@ -837,16 +835,21 @@ static const UtMenuRow g_debugRows[] = {
     { "Save log",                  NULL,                 menuSaveLog,      NULL },
 };
 
-/* The sub-menu is shown and kept fed by the top menu's present and idle. */
-static const UtMenu g_debugMenu = {
-    "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])), menuStatus, NULL, NULL,
-};
+static const UtMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
 
 static const UtMenuRow g_menuRows[] = {
     { "Resume",                    NULL,                 menuResume,       NULL },
     { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
-    { "Debug",                     NULL,                 NULL,             &g_debugMenu },
+    { "Debug",                     NULL,                 NULL,             &g_debugPage },
 };
+
+/* The frame-time overlay's numbers, in words. */
+static void menuStatus(char *out, size_t size) {
+    unsigned average, worstWork, worstPeriod, skipped;
+    utPerfShown(&average, &worstWork, &worstPeriod, &skipped);
+    (void) worstPeriod;
+    snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
+}
 
 #ifdef OF_PC
 static bool g_menuDump = false;
@@ -874,7 +877,7 @@ static void runMenu(void) {
     /* Over the picture last shown, at the size it was shown. */
     if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
     static const UtMenu menu = {
-        "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])), menuStatus, menuPresent, platformBusyTick,
+        { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuStatus, menuPresent, platformBusyTick,
     };
     AudioSystem *audio = g_runner->audioSystem;
     bool wasPaused = g_runner->paused;
@@ -956,11 +959,11 @@ bool platformHandleEvents(void) {
         showNotice(scriptProfileOn() ? "Script times on" : "Script times off");
     }
     if (chording && of_btn_pressed(OF_BTN_DOWN)) {
+        /* Off, or back to everything from whichever mode the menu left. */
         bool mute = utAudioMode() == UT_AUDIO_NORMAL;
-        utAudioSetMode(mute ? UT_AUDIO_DISABLED : UT_AUDIO_NORMAL);
+        setAudioMode(mute ? UT_AUDIO_DISABLED : UT_AUDIO_NORMAL);
         chordUsed = true;
         showNotice(mute ? "Sound off" : "Sound on");
-        logInfo("Debug: sound %s\n", mute ? "off" : "on; what was playing is rough until it next starts");
     }
     if (chording && of_btn_pressed(OF_BTN_Y)) {
         bool saved = utLogDump();

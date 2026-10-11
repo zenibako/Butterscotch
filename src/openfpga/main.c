@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
             utBenchStart();
         }
         if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugMode(true);
-        if (strcmp(argv[i], "--mute") == 0) utAudioSetMode(UT_AUDIO_DISABLED); /* as Select + Down in debug mode */
+        if (strcmp(argv[i], "--mute") == 0) utAudioSetMode(UT_AUDIO_DISABLED); /* as the menu's audio mode, or Select + Down in debug mode */
         /* Game-script times in the log every 150 frames (see utPerfScriptReport): which scripts a section's
          * "step" and unexplained "draw" time are. Timing every script call slows the run, so a benchmark
          * with this on is for the names, not for its totals. */
