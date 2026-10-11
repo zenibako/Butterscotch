@@ -44,6 +44,13 @@ void utPlatformSetUncapped(bool uncapped);
 void utPlatformSetMirrorFaint(int alpha);
 void utPlatformSetForcedSkip(int every);
 int utPlatformForcedSkip(void);
+/* What a 4 KB direct read costs, in tenths of a millisecond, by what came
+ * just before it (UT_READ_AFTER_*): a texture read after a texture read, a
+ * texture read after a music read, a music read after a texture read, a music
+ * read after a music read, and a texture read after 100 ms without reads.
+ * All zero where reads are not direct. */
+enum { UT_READ_TEX_TEX, UT_READ_MUSIC_TEX, UT_READ_TEX_MUSIC, UT_READ_MUSIC_MUSIC, UT_READ_IDLE_TEX, UT_READ_COSTS };
+void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]);
 /* What a call costs on this machine, in nanoseconds, each averaged over a few
  * thousand: reading the clock; a sprite draw on a skipped frame, which goes
  * through everything a draw does up to the first pixel and stops there; the

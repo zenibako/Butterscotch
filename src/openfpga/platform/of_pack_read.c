@@ -17,6 +17,7 @@
 #include "gettime.h"
 #include "log.h"
 #include "of_hooks.h"
+#include "ut_bench.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -106,7 +107,63 @@ bool platformPackRead(const char *path, uint32_t offset, uint32_t size, void *de
     return true;
 }
 
+/* Reads `size` bytes at `offset` of the file in `slot` into the staging
+ * memory; returns how long it took, or 0 if it failed. */
+static uint64_t timedRead(uint32_t slot, uint32_t offset, uint32_t size) {
+    g_packDone = 0;
+    g_packResult = 0;
+    uint64_t start = nowNanos();
+    while (of_file_read_async((int) slot, offset, g_packStage, size, packCallback) < 0) {
+        if (nowNanos() - start > 50000000ull) return 0;
+    }
+    while (!g_packDone && of_file_async_poll() != 1) {
+        if (nowNanos() - start > UT_PACK_TIMEOUT_NANOS) {
+            uint64_t gaveUp = nowNanos();
+            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < UT_PACK_SETTLE_NANOS) of_file_async_poll();
+            return 0;
+        }
+    }
+    return g_packResult >= 0 ? nowNanos() - start : 0;
+}
+
+/* Each kind of read is timed a few times, every read at a part of its file
+ * not read before in this probe, so nothing can come from a cache. */
+void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
+    enum { SIZE = 4096, ROUNDS = 4, STRIDE = 96 * 1024 };
+    uint64_t total[UT_READ_COSTS] = { 0 };
+    unsigned counted[UT_READ_COSTS] = { 0 };
+    memset(tenths, 0, UT_READ_COSTS * sizeof(tenths[0]));
+    uint32_t musicSlot = 0;
+    if (!g_packProbed) packProbe("textures.bin");
+    if (!g_packDirect || g_packPiece < SIZE || of_file_slot_find("music.bin", &musicSlot) != 0) return;
+    uint32_t texAt = 0, musicAt = 0;
+    #define TEX() timedRead(g_packSlot, (texAt += STRIDE), SIZE)
+    #define MUSIC() timedRead(musicSlot, (musicAt += STRIDE), SIZE)
+    #define COUNT(kind, nanos) do { uint64_t n_ = (nanos); if (n_ != 0) { total[kind] += n_; counted[kind]++; } } while (0)
+    for (int round = 0; round < ROUNDS; round++) {
+        TEX();
+        COUNT(UT_READ_TEX_TEX, TEX());
+        COUNT(UT_READ_TEX_MUSIC, MUSIC());
+        COUNT(UT_READ_MUSIC_TEX, TEX());
+        MUSIC();
+        COUNT(UT_READ_MUSIC_MUSIC, MUSIC());
+        TEX();
+        uint64_t idle = nowNanos();
+        while (nowNanos() - idle < 100000000ull) {}
+        COUNT(UT_READ_IDLE_TEX, TEX());
+    }
+    #undef TEX
+    #undef MUSIC
+    #undef COUNT
+    for (int kind = 0; kind < UT_READ_COSTS; kind++)
+        if (counted[kind] != 0) tenths[kind] = (unsigned) (total[kind] / counted[kind] / 100000u);
+}
+
 #else
+
+void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
+    memset(tenths, 0, UT_READ_COSTS * sizeof(tenths[0]));
+}
 
 uint64_t platformPackRefusedNanos(void) {
     return 0;
