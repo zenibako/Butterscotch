@@ -97,6 +97,18 @@ static void packOpen(void)
         fclose(file);
         return;
     }
+    // Tiles are read into a window by their offsets, so one that runs past
+    // the end of the 32-bit file space must not get that far.
+    for (uint32_t i = 0; i < header[2]; i++)
+    {
+        if ((uint64_t) packBase + tiles[i].offset + tiles[i].size > UINT32_MAX) {
+            logWarn("SWR: Texture pack tile %u lies outside the file, ignoring the pack.\n", (unsigned) i);
+            free(pages);
+            free(tiles);
+            fclose(file);
+            return;
+        }
+    }
     
     setvbuf(file, NULL, _IONBF, 0);
     packFile = file;
