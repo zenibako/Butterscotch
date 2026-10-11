@@ -100,6 +100,12 @@ frame pacing for timing runs. `UT_SEED=<n>` fixes the game's RNG and
 E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
 enables older bytecode versions for testing other games.
 
+`make profiler-fixture WADS="16 17"` builds the asset-free
+`./undertale_pc_profiler_fixture` check for Script times. It exercises nested
+script/builtin counts, native success/fallback accounting, report/reset, and
+off/on/off toggles between executions. Pass the same `PC_EXTRA_CFLAGS` sanitizer
+flags as an ASan build to check memory safety too.
+
 ## Deltarune (experimental)
 
 The core lists two games on the Pocket, Undertale and Deltarune. They are
