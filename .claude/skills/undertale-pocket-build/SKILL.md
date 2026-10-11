@@ -251,9 +251,10 @@ git add -A src .claude && git ... commit      # a branch off main
   merged while follow-up fixes were being pushed to it, and they never
   reached `main`. After a merge, put further work on a new branch from
   `main`.
-- The user writes PR descriptions. Open the PR with a short outline to
-  fill in (before and after, the evidence, what is not yet checked on the
-  device), not a finished description.
+- Write the full PR description (before and after, the evidence, what is
+  not yet checked on the device), but start it with an empty `## Summary`
+  section for the user to fill in, then a `---` divider, so their copy and
+  the agent's stay apart.
 - CI runs about 33 checks: desktop gcc and clang, C++98, MSVC 4.0,
   GCC 2.95, Web, the consoles and the Analogue Pocket build. They build
   with warnings as errors, so the usual failures are:
