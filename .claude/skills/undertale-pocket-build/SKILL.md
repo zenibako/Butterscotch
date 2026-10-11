@@ -74,7 +74,7 @@ should end with `Comparison cores added: ...`, and a build that prints
 nothing after that line succeeded. To see only the lines that matter:
 
 ```bash
-make -C src/openfpga compare 2>&1 | grep -E " error|undefined reference|Comparison|\*\*\*"
+make -C src/openfpga compare 2>&1 | grep -E " error|undefined reference|Comparison|mkcompare:|\*\*\*"
 make -C src/openfpga GAME=deltarune 2>&1 | grep -E " error|undefined reference|\*\*\*"
 ```
 
@@ -162,14 +162,14 @@ Three routes, in order of preference:
    - The rsync never deletes, so old benchmark ELFs and instance files
      stay on the card. That is harmless.
    - If the mini's checkout is on a work branch, the user builds main
-     with `git switch --detach fork/main` after checking `git status` is
+     with `git fetch fork && git switch --detach fork/main` after checking `git status` is
      clean, and switches back afterwards.
 3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} /Volumes/Pocket/`
 
 **Checking what is on a card.** Every core's `core.json` says version
 0.1.0, so it cannot tell builds apart. Compare file times against when the
 change merged, `cmp` the ELF against a fresh build, or look for a string
-the change added (`strings undertale.elf | grep "Music only"`).
+the change added (`strings /Volumes/Pocket/Assets/butterscotch/common/undertale.elf | grep "Music only"`).
 
 Plain `copy` after a `compare-copy` leaves stale v0.9 cores on the card; use
 `compare-copy` again if those cores should stay current.

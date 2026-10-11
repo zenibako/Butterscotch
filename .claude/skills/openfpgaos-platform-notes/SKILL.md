@@ -35,7 +35,10 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
   flips timing out while the Pocket's menu is open, at no speed gain
   (see the perf skill).
 - **The frame buffer is on the cached alias** (`0x10xxxxxx`) in the OS
-  source since `ca5bb0a` (2026-04-16), in both runtimes. Not yet read
+  source since `ca5bb0a` (2026-04-16). Both runtimes are built from OS
+  revisions that contain it: the SDK's v0.7 runtime from `618a3eb`
+  (2026-08-09) and Diablo 1.1.0's from v0.9.5 plus two commits (checked
+  with `git merge-base --is-ancestor`). Not yet read
   back on the device; see the perf skill's frame-buffer section.
 
 ## Display

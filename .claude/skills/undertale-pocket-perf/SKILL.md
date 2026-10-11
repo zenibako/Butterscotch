@@ -390,7 +390,8 @@ AXI round trip.
 **Corrected 2026-10-11, from the OS source:** `target_platform.h` in
 openfpgaOS has handed apps the **cached** alias (`FBn_BASE` at
 `0x10xxxxxx`, flushed at the flip) since commit `ca5bb0a` (2026-04-16), and
-both the v0.7 and v0.9 Pocket runtimes are newer than that. So the frame
+both Pocket runtimes are built from OS revisions that contain it (v0.7
+from `618a3eb`, v0.9 from v0.9.5 plus two commits). So the frame
 buffer is most likely cached on the device, and the 245 ns read is
 unexplained. Branch `claude/project-thread-quaq0g` logs the address at
 boot (`Video: frame buffer N at 0x...`); one device run with it settles
