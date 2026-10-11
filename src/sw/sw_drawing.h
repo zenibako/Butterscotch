@@ -33,6 +33,8 @@ void swrFillRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
 // Draws whatever solid overlay swrDrawSprite is holding back. Anything else
 // that reads or writes pixels, or changes where they go, must call this first.
 void swrOverlayFlush(SWRenderer* swr);
+// Ends a sprite trail being thinned with speed favoured (see swrDrawSprite).
+void swrTrailEnd(void);
 // Draws the tile pictures being held (sw_renderer.c); NULL for whichever renderer holds them.
 void swrTileRunsFlush(SWRenderer* swr);
 void swrClearSettle(SWRenderer* swr);

@@ -871,6 +871,7 @@ void swrOverlayFlushForState(SWRenderer* swr)
 
 void swrOverlayFlush(SWRenderer* swr)
 {
+    swrTrailEnd();
 #ifdef SW_HAS_PREMUL_BLEND
     // Held tile pictures are older than anything else held, so they go first,
     // and a held clear is older still: the pictures take it with them, and
@@ -2035,6 +2036,50 @@ void swrFillRectangleColor(Renderer* renderer, float x1, float y1, float x2, flo
 #endif
 }
 
+// A trail: one translucent sprite stamped again and again a pixel or two
+// along, each stamp a little more opaque (Deltarune's attack burst draws
+// about 80 in a row, so every pixel under it is blended some 24 times).
+// With speed favoured, every second stamp is left out and the one after it
+// is drawn with both stamps' opacity, 1 - (1 - a)(1 - b): half the blending
+// for a picture that differs by a step of a pixel or two along the trail.
+// Only plain sprite draws (SWRenderer_drawSprite, which allows overlay
+// merging) take part, and anything else drawn in between ends the trail
+// (swrOverlayFlush). A stamp left out is drawn after all when the next
+// sprite is not the trail's; one followed by something else is lost.
+#ifdef SW_HAS_PREMUL_BLEND
+#define SWR_TRAIL_STEP 3      // the furthest a stamp may be from the last one, in pixels each way
+#define SWR_TRAIL_MIN_SIDE 16 // smaller sprites (text, sparks) are left alone
+typedef struct {
+    bool known;
+    const uintpixel_t* fb;
+    SWTexture* texture;
+    int dx, dy, dw, dh, sx, sy, sw, sh, alpha;
+    uintpixel_t tint;
+} SWTrailStamp;
+static SWTrailStamp swrTrailLast;   // the stamp drawn last, while the trail goes on
+static SWTrailStamp swrTrailMissed; // a stamp left out, its opacity to go with the next
+static bool swrTrailDrawing = false;
+
+static bool swrTrailFollows(const SWTrailStamp* before, const SWTrailStamp* stamp)
+{
+    if (!before->known || before->fb != stamp->fb || before->texture != stamp->texture) return false;
+    if (before->sx != stamp->sx || before->sy != stamp->sy || before->sw != stamp->sw || before->sh != stamp->sh) return false;
+    if (before->dw != stamp->dw || before->dh != stamp->dh || before->tint != stamp->tint) return false;
+    int ax = stamp->dx - before->dx, ay = stamp->dy - before->dy;
+    return ax >= -SWR_TRAIL_STEP && ax <= SWR_TRAIL_STEP && ay >= -SWR_TRAIL_STEP && ay <= SWR_TRAIL_STEP;
+}
+#endif
+
+// Something other than a trail's next stamp is being drawn.
+void swrTrailEnd(void)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    if (swrTrailDrawing) return;
+    swrTrailLast.known = false;
+    swrTrailMissed.known = false;
+#endif
+}
+
 void swrDrawSprite(
     Renderer* renderer, float dx, float dy, float dw, float dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
@@ -2045,6 +2090,34 @@ void swrDrawSprite(
     
     swrTransformPosIfNeeded(swr, &dx, &dy);
     swrTransformSizeIfNeeded(swr, &dw, &dh);
+    
+#ifdef SW_HAS_PREMUL_BLEND
+    if (swrFavorSpeed && swr->overlayMergeAllowed) {
+        SWTrailStamp stamp = { true, swr->fb, texture, swrFloor(dx), swrFloor(dy), swrCeiling(dw), swrCeiling(dh),
+                               sx, sy, sw, sh, swrIntAlpha(alpha), swrConvertPixel(tintColor) };
+        int sideW = stamp.dw < 0 ? -stamp.dw : stamp.dw, sideH = stamp.dh < 0 ? -stamp.dh : stamp.dh;
+        bool translucent = swr->blendMode == bm_normal && stamp.alpha >= 4 && stamp.alpha <= 253 &&
+                           sideW >= SWR_TRAIL_MIN_SIDE && sideH >= SWR_TRAIL_MIN_SIDE;
+        if (translucent && swrTrailFollows(&swrTrailMissed, &stamp)) {
+            int missed = swrTrailMissed.alpha;
+            stamp.alpha = missed + stamp.alpha - (missed * stamp.alpha + 128) / 256;
+            swrTrailMissed.known = false;
+        } else if (translucent && !swrTrailMissed.known && swrTrailFollows(&swrTrailLast, &stamp)) {
+            swrTrailMissed = stamp;
+            return;
+        }
+        swrTrailDrawing = true;
+        if (swrTrailMissed.known) // the trail ends with a stamp left out: it goes down after all, before this
+            swrDrawSpriteInternal(renderer, swrTrailMissed.dx, swrTrailMissed.dy, swrTrailMissed.dw, swrTrailMissed.dh, swrTrailMissed.texture,
+                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha);
+        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha);
+        swrTrailDrawing = false;
+        swrTrailMissed.known = false;
+        swrTrailLast = stamp;
+        swrTrailLast.known = translucent;
+        return;
+    }
+#endif
     
     swrDrawSpriteInternal(
         renderer,
