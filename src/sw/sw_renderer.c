@@ -595,7 +595,18 @@ static void SWRenderer_drawRectangle(Renderer* renderer, float x1, float y1, flo
     uintpixel_t pxcolor = swrConvertPixel(color);
 #ifdef SW_HAS_PREMUL_BLEND
     // An opaque fill of the whole screen: the grid and tile pictures still held would not show under it.
-    if (!outline && swrFillCoversMain(swr, x1, y1, x2, y2, alpha)) swrHeldUnderDiscard(swr);
+    if (!outline && swrFillCoversMain(swr, x1, y1, x2, y2, alpha)) {
+        swrHeldUnderDiscard(swr);
+        // Holding those had marked the buffer as no longer one colour, though
+        // nothing was written. With them gone and nothing else held over a
+        // held clear, it is the clear's colour again, so the fill below takes
+        // the clear instead of writing it out first (a battle's backdrop over
+        // the room's floor grid).
+        if (swr->clearHeld && swr->mirrorLayers == 0 && swr->mirrorStage == 0 && swr->overlayCount == 0) {
+            swr->uniformValid = true;
+            swr->uniformColor = swr->clearHeldColor;
+        }
+    }
     // A fill over a held stack of mirrored layers may join it instead of letting it out.
     if (!outline && swrMirrorHoldFill(renderer, x1, y1, x2, y2, pxcolor, alpha)) return;
 #endif
