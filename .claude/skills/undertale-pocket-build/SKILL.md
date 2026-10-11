@@ -1,9 +1,23 @@
 ---
 name: undertale-pocket-build
-description: Build, package and deploy the Undertale port for the Analogue Pocket (Butterscotch on openfpgaOS) in this repo. Use this whenever the task involves building src/openfpga, running make here, producing the SD card tree, copying to the Pocket's SD card (from this Mac or another one), regenerating textures.bin or music.bin, the v0.9 comparison cores, or committing work in this repo — even if the user only says "rebuild it", "copy it" or "is it ready to copy?".
+description: Build, package and deploy the Undertale port for the Analogue Pocket (Butterscotch on openfpgaOS) in this repo. Use this whenever the task involves building src/openfpga, running make here, producing the SD card tree, copying to the Pocket's SD card (from the build machine or another one), regenerating textures.bin or music.bin, the v0.9 comparison cores, or committing work in this repo — even if the user only says "rebuild it", "copy it" or "is it ready to copy?".
+argument-hint: "[checkout: path or host:path with game data + toolchain] [card: SD mount path, and which machine]"
 ---
 
 # Building and deploying the Undertale Pocket port
+
+## Inputs
+
+This skill names no machines. Take these from the arguments; if one is
+missing and the task needs it, ask the user once for it and use what they
+say for the rest of the session, rather than guessing from earlier sessions:
+
+- **checkout**: where the working checkout, the game data and the Pocket
+  toolchain are. A local path, or `host:path` when it is on another machine
+  reached over SSH. Commands below write it as `$CHECKOUT`.
+- **card**: where the Pocket's SD card is mounted, and on which machine
+  (for example `/Volumes/Pocket` on a Mac). Commands below write it as
+  `$CARD`.
 
 ## Where things are
 
@@ -26,11 +40,10 @@ undertale-pocket/                 not a git repo; holds the pieces below
 └── screenshots/                  captures sent to the user
 ```
 
-**Which machine.** The working checkout, the game data and the toolchain
-are on the user's Mac mini, at
-`~/Projects/undertale-pocket/butterscotch-mirror`. The SD card is usually
-in the MacBook. A session on the MacBook reaches the mini with
-`ssh mac-mini` (the `mac-mini.local` name does not resolve from there). A
+**Which machine.** Build in `$CHECKOUT`; the card may be on a different
+machine from it. If `$CHECKOUT` is a `host:path`, run builds there over SSH
+using the host name the user gave, since a `.local` name may not resolve
+from every machine. A
 cloud session has neither the game data nor a device toolchain, so it can
 lint and build `undertale_pc` against a test game but cannot build the
 Pocket ELF or check the real game's output.
@@ -136,46 +149,46 @@ which takes a minute or more. Rebuilding mid-copy hands them a mixed tree.
 
 Three routes, in order of preference:
 
-1. **Card in this Mac mini:** `make -C src/openfpga compare-copy`
+1. **Card in the machine that has the checkout:** `make -C src/openfpga compare-copy`
    (or `copy` for the single core). This runs `tools/sdcopy.sh`, which waits
    for the card, mounts it, copies, removes `._*` sidecar files, verifies,
    and unmounts. It prints a specific message on each failure.
-2. **Card in a second Mac (usually the MacBook):** SSH from the mini
+2. **Card in a second Mac:** SSH from the build machine
    cannot touch the card (macOS blocks removable volumes for remote
    logins; that restriction is the user's and is not to be worked around).
    Give the user these to run in a Terminal on that Mac:
 
    ```bash
-   rsync -rc --exclude '._*' --exclude '.DS_Store' mac-mini:Projects/undertale-pocket/butterscotch-mirror/src/openfpga/out/build/pocket/butterscotch/ /Volumes/Pocket/
-   dot_clean -m /Volumes/Pocket/Assets/butterscotch /Volumes/Pocket/Cores /Volumes/Pocket/Platforms
-   diskutil unmount /Volumes/Pocket
+   rsync -rc --exclude '._*' --exclude '.DS_Store' "$CHECKOUT/src/openfpga/out/build/pocket/butterscotch/" "$CARD/"
+   dot_clean -m "$CARD/Assets/butterscotch" "$CARD/Cores" "$CARD/Platforms"
+   diskutil unmount "$CARD"
    ```
 
-   - `dot_clean -m /Volumes/Pocket` on the whole card prints "Operation
+   - `dot_clean -m "$CARD"` on the whole card prints "Operation
      not permitted" for `.Spotlight-V100`, `.Trashes` and
      `.TemporaryItems`. Those are macOS's own folders and the lines are
      harmless; the narrower paths above avoid them.
    - If the unmount is "dissented by" a `com.apple.Virtualization`
      process, the Claude desktop app has the card open for a session that
      was reading it. Once the copy has finished,
-     `diskutil unmount force /Volumes/Pocket` is safe.
+     `diskutil unmount force "$CARD"` is safe.
    - The rsync never deletes, so old benchmark ELFs and instance files
      stay on the card. That is harmless.
-   - If the mini's checkout is on a work branch, the user builds main
-     with `git fetch fork && git switch --detach fork/main` after checking `git status` is
+   - If `$CHECKOUT` is on a work branch, the user builds main
+     with `git fetch <fork remote> && git switch --detach <fork remote>/main` after checking `git status` is
      clean, and switches back afterwards.
-3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} /Volumes/Pocket/`
+3. **Manual:** `cp -R src/openfpga/out/build/pocket/butterscotch/{Cores,Assets,Platforms} "$CARD/"`
 
 **Checking what is on a card.** Every core's `core.json` says version
 0.1.0, so it cannot tell builds apart. Compare file times against when the
 change merged, `cmp` the ELF against a fresh build, or look for a string
-the change added (`strings /Volumes/Pocket/Assets/butterscotch/common/undertale.elf | grep "Music only"`).
+the change added (`strings "$CARD/Assets/butterscotch/common/undertale.elf" | grep "Music only"`).
 
 Plain `copy` after a `compare-copy` leaves stale v0.9 cores on the card; use
 `compare-copy` again if those cores should stay current.
 
 Unmount, never eject (`diskutil unmount`, as `sdcopy.sh` does): after an
-eject this Mac does not see the card again until it is reseated, and
+eject a Mac does not see the card again until it is reseated, and
 sometimes not then, and the user asked on 2026-10-09 for unmount to be
 used so the card is found next time.
 
@@ -218,13 +231,14 @@ git add -A src .claude && git ... commit      # a branch off main
 - `main` is upstream `main` merged with upstream's draft PR #429
   (`sw-renderer`) and this port. Bring upstream in with a merge, not a
   rebase: the branch is published.
-- In the Mac mini checkout the `fork` remote is `zenibako/Butterscotch` on
-  GitHub and `origin` is upstream ButterscotchRunner. Push to `fork` only
-  when asked, never to `origin`, and never open PRs or comment upstream on
-  the user's behalf. A cloud clone's `origin` is the fork.
-- A push from the mini can be stopped by a permission check in the
-  session driving it. Then give the user the exact `git push -u fork
-  <branch>` to run there rather than looking for another route.
+- Check `git remote -v` before pushing: a local checkout may name the
+  fork (`zenibako/Butterscotch`) `fork` and upstream ButterscotchRunner
+  `origin`, while a cloud clone's `origin` is the fork. Push to the fork
+  only when asked, never to upstream, and never open PRs or comment upstream on
+  the user's behalf.
+- A push from a remote checkout can be stopped by a permission check in
+  the session driving it. Then give the user the exact `git push -u
+  <fork remote> <branch>` to run there rather than looking for another route.
 - Commits use the GitHub noreply address set in each repo's local config;
   leave it as it is.
 
