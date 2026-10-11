@@ -403,6 +403,23 @@ void platformGetMousePos(double *xPos, double *yPos) {
     if (yPos) *yPos = 0.0;
 }
 
+/* Logs each distinct buffer the display hands out, the first few times. The
+ * OS source puts app frame buffers at the uncached SDRAM alias (0x5xxxxxxx),
+ * which would make every frame buffer read an AXI round trip; newer OS
+ * versions move them to the cached alias. This line says which the card has. */
+static void logFramebufferAddress(const void *surface) {
+    static uintptr_t seen[4];
+    static int count;
+    uintptr_t address = (uintptr_t) surface;
+    for (int i = 0; i < count; i++) {
+        if (seen[i] == address) return;
+    }
+    if (count == (int) (sizeof(seen) / sizeof(seen[0]))) return;
+    seen[count++] = address;
+    logInfo("Video: frame buffer %d at 0x%08lx (%s alias)\n", count, (unsigned long) address,
+            (address >> 28) == 0x5 ? "uncached" : "cached or other");
+}
+
 /* The renderer draws each frame straight into the display's back buffer, so
  * presenting is just a flip. Returns NULL (renderer keeps its own buffer and
  * the frame is copied) if the mode is unavailable or its rows are padded. */
@@ -410,7 +427,9 @@ uint16_t *platformAcquireFramebuffer(int width, int height) {
     matchVideoMode(width, height);
     if (width != g_modeW || height != g_modeH) return NULL;
     if (g_modeStride != width * (int) sizeof(uint16_t)) return NULL;
-    return (uint16_t *) (void *) of_video_surface();
+    uint16_t *surface = (uint16_t *) (void *) of_video_surface();
+    logFramebufferAddress(surface);
+    return surface;
 }
 
 void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, int bpp) {
