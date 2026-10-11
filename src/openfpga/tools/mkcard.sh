@@ -35,6 +35,26 @@ done
 COMMON="$OUT/Assets/$NAME/common"
 rm -f "$COMMON/$NAME.elf"
 
+# Four bytes, little-endian, as printf escapes.
+le32() {
+    printf '\\%03o\\%03o\\%03o\\%03o' $(($1 & 255)) $(($1 >> 8 & 255)) $(($1 >> 16 & 255)) $(($1 >> 24 & 255))
+}
+
+# The texture pack also rides at the end of the music pack, where the
+# program reads it (sw_texture_pack.h): switching between two files costs the
+# Pocket about 20 ms each way, and music is read between nearly every frame.
+# It starts on a 4 KB boundary and is followed by its offset, its size, a
+# zero and "UTXT". The pack stays in its own slot for the v0.9 comparison
+# cores, which read it there.
+append_textures() { # <music pack on the card> <texture pack>
+    local size pad base tsize
+    size=$(wc -c < "$1"); pad=$(( (4096 - size % 4096) % 4096 ))
+    head -c "$pad" /dev/zero >> "$1"
+    base=$((size + pad)); tsize=$(wc -c < "$2")
+    cat "$2" >> "$1"
+    printf "$(le32 "$base")$(le32 "$tsize")$(le32 0)UTXT" >> "$1"
+}
+
 included=""
 for entry in "${GAMES[@]}"; do
     IFS='|' read -r game instance dir data textures music <<< "$entry"
@@ -51,6 +71,7 @@ for entry in "${GAMES[@]}"; do
         cp "$src/textures.bin" "$COMMON/$textures"
         if [ -f "$src/music.bin" ]; then
             cp "$src/music.bin" "$COMMON/$music"
+            append_textures "$COMMON/$music" "$src/textures.bin"
         else
             echo "mkcard: $game has no $src/music.bin, it will have no sound pack"
         fi

@@ -27,6 +27,8 @@ PackTile;
 #define TILE_MAX_WORDS (TILE_MAX * TILE_MAX + 16)
 
 static FILE* packFile = NULL;
+static const char* packPath = SW_TEXTURE_PACK_PATH;
+static uint32_t packBase = 0;
 static PackPage* packPages = NULL;
 static PackTile* packTiles = NULL;
 static uint32_t packCount = 0;
@@ -34,11 +36,42 @@ static uint32_t packTileCount = 0;
 static int packTile = 0;
 static bool packProbed = false;
 
+static void packOpen(void);
+
+// Opens the pack where it is and leaves the file at its start.
+static FILE* packFind(void)
+{
+#ifdef SW_TEXTURE_PACK_HOST
+    FILE* host = fopen(SW_TEXTURE_PACK_HOST, "rb");
+    if (host) {
+        uint32_t tail[4] = { 0, 0, 0, 0 }; // offset, size, 0, magic
+        long end = -1;
+        if (fseek(host, -16, SEEK_END) == 0 && (end = ftell(host)) > 0 && fread(tail, sizeof(uint32_t), 4, host) == 4 &&
+            memcmp(&tail[3], SW_TEXTURE_PACK_TAIL_MAGIC, 4) == 0 && tail[2] == 0 && tail[1] > 0 &&
+            (uint64_t) tail[0] + tail[1] == (uint64_t) end && fseek(host, (long) tail[0], SEEK_SET) == 0) {
+            packPath = SW_TEXTURE_PACK_HOST;
+            packBase = tail[0];
+            return host;
+        }
+        fclose(host);
+    }
+#endif
+    packPath = SW_TEXTURE_PACK_PATH;
+    packBase = 0;
+    return fopen(SW_TEXTURE_PACK_PATH, "rb");
+}
+
+uint32_t swrTexturePackOffset(void)
+{
+    if (!packProbed) packOpen();
+    return packBase;
+}
+
 static void packOpen(void)
 {
     packProbed = true;
     
-    FILE* file = fopen(SW_TEXTURE_PACK_PATH, "rb");
+    FILE* file = packFind();
     if (!file) {
         logInfo("SWR: No texture pack (%s), decoding PNG pages instead.\n", SW_TEXTURE_PACK_PATH);
         return;
@@ -49,7 +82,7 @@ static void packOpen(void)
     if (fread(magic, 1, 4, file) != 4 || memcmp(magic, SW_TEXTURE_PACK_MAGIC, 4) != 0 ||
         fread(header, sizeof(uint32_t), 3, file) != 3 || header[0] == 0 || header[0] > 4096 ||
         header[1] < 16 || header[1] > TILE_MAX || (header[1] & (header[1] - 1)) != 0 || header[2] == 0 || header[2] > 1024 * 1024) {
-        logWarn("SWR: %s is not a texture pack this build can read (rebuild it), ignoring it.\n", SW_TEXTURE_PACK_PATH);
+        logWarn("SWR: %s is not a texture pack this build can read (rebuild it), ignoring it.\n", packPath);
         fclose(file);
         return;
     }
@@ -72,7 +105,8 @@ static void packOpen(void)
     packCount = header[0];
     packTileCount = header[2];
     packTile = (int) header[1];
-    logInfo("SWR: Texture pack with %u pages in %u tiles of %d.\n", (unsigned) packCount, (unsigned) packTileCount, packTile);
+    logInfo("SWR: Texture pack with %u pages in %u tiles of %d, in %s at %u KB.\n", (unsigned) packCount, (unsigned) packTileCount, packTile,
+            packPath, (unsigned) (packBase / 1024));
 }
 
 bool swrTexturePackGetSize(uint32_t pageId, int* outW, int* outH)
@@ -136,12 +170,12 @@ static bool readWindow(uint32_t start, uint32_t end)
     uint64_t readStart = nowNanos();
 #ifdef PLATFORM_PACK_READ
     uint64_t refusedBefore = platformPackRefusedNanos();
-    bool done = platformPackRead(SW_TEXTURE_PACK_PATH, start, size, window);
+    bool done = platformPackRead(packPath, packBase + start, size, window);
     packStats.refusedNanos += platformPackRefusedNanos() - refusedBefore;
 #else
     bool done = false;
 #endif
-    if (!done && (fseek(packFile, (long) start, SEEK_SET) != 0 || fread(window, 1, size, packFile) != size)) {
+    if (!done && (fseek(packFile, (long) (packBase + start), SEEK_SET) != 0 || fread(window, 1, size, packFile) != size)) {
         packLastError = "read";
         clearerr(packFile);
         return false;
@@ -286,6 +320,7 @@ bool swrTexturePackGetSize(UNUSED uint32_t pageId, UNUSED int* outW, UNUSED int*
 bool swrTexturePackDecode(UNUSED uint32_t pageId, UNUSED uintpixel_t* buffer) { return false; }
 bool swrTexturePackDecodeRect(UNUSED uint32_t pageId, UNUSED int x, UNUSED int y, UNUSED int w, UNUSED int h, UNUSED uintpixel_t* buffer) { return false; }
 const char* swrTexturePackLastError(void) { return ""; }
+uint32_t swrTexturePackOffset(void) { return 0; }
 void swrTexturePackTakeStats(SwrTexturePackStats* out) { memset(out, 0, sizeof(*out)); }
 
 #endif

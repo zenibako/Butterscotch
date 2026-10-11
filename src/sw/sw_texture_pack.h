@@ -39,6 +39,14 @@
 #define SW_TEXTURE_PACK_PATH "textures.bin"
 #endif
 
+// A platform can carry the pack at the end of another file it reads all the
+// time (SW_TEXTURE_PACK_HOST), so the two are read without switching files,
+// which on the Pocket costs about 20 ms each way. The host file then ends
+// with 16 bytes: uint32_t offset, size (where the pack is in it, the pack
+// running right up to these bytes), uint32_t 0, char[4] "UTXT". Without that
+// ending, or without the host file, the pack is read from its own file.
+#define SW_TEXTURE_PACK_TAIL_MAGIC "UTXT"
+
 // Returns false if there is no pack, or it has no entry for this page.
 bool swrTexturePackGetSize(uint32_t pageId, int* outW, int* outH);
 
@@ -59,6 +67,9 @@ typedef struct
 }
 SwrTexturePackStats;
 void swrTexturePackTakeStats(SwrTexturePackStats* out);
+
+// Where in its file the pack starts: 0 unless it rides in the host file.
+uint32_t swrTexturePackOffset(void);
 
 // Why the last decode failed: "read" (with errno left as the C library set
 // it) or "data" for a tile that does not decode. Empty after a success.
