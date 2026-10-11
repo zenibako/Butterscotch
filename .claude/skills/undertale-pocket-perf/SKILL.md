@@ -382,14 +382,20 @@ illegal instructions), so there is no cheaper clock. Consequences:
 
 ## Why reading the frame buffer is slow (2026-10-10)
 
-*From the OS source, not yet confirmed for the v0.7 runtime on the card:*
-`openfpgaOS/src/firmware/os/targets/pocket/target_platform.h` says app frame
-buffers live at the **uncached** SDRAM alias (`0x50xxxxxx`) so that pixel
-writes do not push the app's data out of the cache; every load from one is
-then an AXI round trip, whatever its width. That fits the measured 245 ns a
-pixel to read against 27 ns to write. (The newer OS in that clone moves them
-to the cached alias with a flush at the flip; the address `of_video_surface()`
-returns says which a build has.) What follows from it:
+*Measured on the device:* about 245 ns a pixel to read the frame buffer
+against 27 ns to write. The first explanation was that app frame buffers
+live at the **uncached** SDRAM alias (`0x50xxxxxx`), where every load is an
+AXI round trip.
+
+**Corrected 2026-10-11, from the OS source:** `target_platform.h` in
+openfpgaOS has handed apps the **cached** alias (`FBn_BASE` at
+`0x10xxxxxx`, flushed at the flip) since commit `ca5bb0a` (2026-04-16), and
+both the v0.7 and v0.9 Pocket runtimes are newer than that. So the frame
+buffer is most likely cached on the device, and the 245 ns read is
+unexplained. Branch `claude/project-thread-quaq0g` logs the address at
+boot (`Video: frame buffer N at 0x...`); one device run with it settles
+the question. Until then, don't justify a change by "the frame buffer is
+uncached". What still holds, whatever the cause:
 
 - Anything that reads the frame buffer per pixel is the expensive kind of
   draw: translucent fills and sprites, text edges, a pass over another.
@@ -398,8 +404,50 @@ returns says which a build has.) What follows from it:
   the rows together in ordinary memory and copy them out.
 - If reads must happen, two pixels per 32-bit load halves them (with 16-bit
   pixels, as the Pocket build uses).
-- Scattered single-pixel stores are each a round trip too; consecutive
-  stores are what is cheap.
+- Scattered single-pixel stores were taken to be a round trip each, with
+  about 2.5 us more per row a draw touches. Neither figure reproduced in
+  the os25 harness (below): uncached cost there is flat per access, and
+  back-to-back stores, the clear and fills, are what cost. Don't re-use
+  the per-row or 1 us scattered-store figures without an isolated probe.
+
+## Simulated runs: the os25 harness (2026-10-11)
+
+The user has a cycle-level simulator of the os25 CPU and memory system,
+the os25 harness. It lives only on the user's Mac mini, with its own skill
+there, and is deliberately kept out of this repository. A session on the
+MacBook reaches it with `ssh mac-mini`; read that skill before running it.
+It answers cycle questions without a card trip:
+
+- **Everything from it is simulated.** Say so with every number, and
+  never present a desktop or cloud check as harness evidence.
+- **It models what it is told.** Its OS model puts the frame buffer where
+  the OS source says, so it cannot tell you which alias the device's
+  runtime uses, or anything else about the device that the source would
+  have to be right about. It does not model scanout contention,
+  interrupts or the audio hardware.
+- **It repeats exactly for the same build**, so differences between two
+  builds are real for that model, but code layout alone moves results by
+  a few percent. Use it for large wins and regressions and for "is this
+  work wasted" tests, not 1 to 3% claims.
+- **A cheap way to find wasted work:** replace a draw with a wrong colour.
+  If the frames still match, everything it drew is overdrawn. That is how
+  dodge's redundant full-screen clear was found (5.6 ms simulated).
+- Write results up in `src/openfpga/docs/` with the window, frames and
+  build, and date them here.
+
+Results so far (Butterscotch main `05b0eef`, three frames per window):
+
+- An uncached frame buffer would cost 4 to 12 ms a frame (dodge 71.4 to
+  83.6 ms, field 40.1 to 46.5, Flowey 11.5 to 15.5), most of it the
+  full-screen clear (`swrClearSettle`, about 4.7 ms), then
+  `swrTiledHeldWrite`, `swrDrawHLineInt` and row `memcpy`. Since the
+  device is probably on the cached alias, treat these as an upper bound.
+- Uncached reads cost 210 to 229 ns in the model, close to the device's
+  245 ns. Spaced-out stores cost about 29 ns, but back-to-back stores 99
+  to 122 ns.
+- In a Deltarune battle the opaque full-screen backdrop dropped the held
+  floor grid without taking over the held clear, so the clear was written
+  in full and painted over. The fix is on `claude/project-thread-quaq0g`.
 
 ## Sprite-path layout experiment closed (2026-10-10)
 
