@@ -1378,12 +1378,15 @@ static void swrDrawSpriteRotatedInternal(
     float pya = pivotY + dy;
     
     float minXf = FLT_MAX, minYf = FLT_MAX, maxXf = -FLT_MAX, maxYf = -FLT_MAX;
+    float quadX[4], quadY[4]; // the turned rectangle's corners, in order round it
     for (int i = 0; i < 4; i++)
     {
         float cxi = cnrx[i] - pxa;
         float cyi = cnry[i] - pya;
         float rx = cosA * cxi - sinA * cyi + pxa;
         float ry = sinA * cxi + cosA * cyi + pya;
+        quadX[i] = rx;
+        quadY[i] = ry;
         if (minXf > rx) minXf = rx;
         if (maxXf < rx) maxXf = rx;
         if (minYf > ry) minYf = ry;
@@ -1424,14 +1427,81 @@ static void swrDrawSpriteRotatedInternal(
     
     int blendmode = swr->blendMode;
 
+    // Half of the box round a turned sprite is outside the sprite, and the
+    // test below costs a pixel there most of what one inside costs. So each
+    // row is narrowed first to where the rectangle's edges cross it, with
+    // pixels to spare on either side: the test still decides every pixel
+    // that is looked at, and the ones left out were certain to fail it.
+    // Each edge's x for a row is its x at its first corner plus the row's
+    // distance from that corner times its slope; a level edge crosses no row.
+    #define SWR_TURNED_SPARE 2.0f
+    float edgeSlope[4];
+    bool edgeLevel[4];
+    for (int e = 0; e < 4; e++) // not i: a compiler without C99 for-scoping still has the corners' i
+    {
+        float ex = quadX[(e + 1) & 3] - quadX[e], ey = quadY[(e + 1) & 3] - quadY[e];
+        edgeLevel[e] = ey > -0.001f && ey < 0.001f;
+        edgeSlope[e] = edgeLevel[e] ? 0.0f : ex / ey;
+    }
+    
+    // The numbers the loop needs as floats are worked out once: a conversion
+    // from an integer for every pixel holds the processor up on the Pocket.
+    // These are the same values the conversions gave.
+    float soxf = (float) sox, soyf = (float) soy, sixf = (float) six, siyf = (float) siy;
+    float dwf = (float) dw, dhf = (float) dh;
+    
+    // A pixel's distance across from the pivot depends on its column alone,
+    // so it is worked out once for each column the draw can reach, by the
+    // sum the loop would otherwise do for every pixel of every row.
+    #define SWR_TURNED_COLUMNS 640
+    float acrossKept[SWR_TURNED_COLUMNS];
+    bool acrossHeld = maxXc - minXc <= SWR_TURNED_COLUMNS; // the table starts at column minXc
+    if (acrossHeld) {
+        float colf = (float) minXc; // whole numbers this small are exact in a float, and stay so a step at a time
+        for (int col = minXc; col < maxXc; col++, colf += 1.0f) acrossKept[col - minXc] = colf + 0.5f - pxa;
+    }
+
     for (int cy = minYc; cy < maxYc; cy++)
     {
         uintpixel_t *dstline = &swr->fb[cy * swr->fbPitch];
-        for (int cx = minXc; cx < maxXc; cx++)
+        float cyf = (float) cy;
+        
+        // Where the rectangle can be on this row.
+        float rowY = cyf + 0.5f;
+        float rowLeft = FLT_MAX, rowRight = -FLT_MAX;
+        for (int i = 0; i < 4; i++)
+        {
+            float y0 = quadY[i], y1 = quadY[(i + 1) & 3];
+            float low = y0 < y1 ? y0 : y1, high = y0 < y1 ? y1 : y0;
+            if (rowY < low - 1.0f || rowY > high + 1.0f) continue;
+            if (edgeLevel[i]) {
+                float x0 = quadX[i], x1 = quadX[(i + 1) & 3];
+                if (rowLeft > x0) rowLeft = x0;
+                if (rowLeft > x1) rowLeft = x1;
+                if (rowRight < x0) rowRight = x0;
+                if (rowRight < x1) rowRight = x1;
+                continue;
+            }
+            // The crossing, and where it would be a row up and a row down:
+            // near a corner the edge may end short of this row's middle.
+            float at = quadX[i] + (rowY - y0) * edgeSlope[i];
+            float reach = edgeSlope[i] < 0.0f ? -edgeSlope[i] : edgeSlope[i];
+            if (rowLeft > at - reach) rowLeft = at - reach;
+            if (rowRight < at + reach) rowRight = at + reach;
+        }
+        if (rowLeft > rowRight) continue;
+        int rowFrom = minXc, rowTo = maxXc;
+        if (rowLeft - SWR_TURNED_SPARE > (float) minXc) rowFrom = swrFloor(rowLeft - SWR_TURNED_SPARE);
+        if (rowRight + SWR_TURNED_SPARE < (float) maxXc) rowTo = swrCeiling(rowRight + SWR_TURNED_SPARE) + 1;
+        if (rowTo > maxXc) rowTo = maxXc;
+        if (rowFrom >= rowTo) continue;
+        
+        float cxf = (float) rowFrom;
+        for (int cx = rowFrom; cx < rowTo; cx++, cxf += 1.0f)
         {
             // we need to determine the texture-space coordinate of cx/cy
-            float ox = (float) cx + 0.5f - pxa;
-            float oy = (float) cy + 0.5f - pya;
+            float ox = acrossHeld ? acrossKept[cx - minXc] : cxf + 0.5f - pxa;
+            float oy = cyf + 0.5f - pya;
             
             // "undo" the rotation
             float lx =  cosA * ox + sinA * oy;
@@ -1441,13 +1511,14 @@ static void swrDrawSpriteRotatedInternal(
             lx += pxa - dx;
             ly += pya - dy;
             
-            if (lx < 0 || ly < 0 || lx >= (float) dw || ly >= (float) dh) continue;
+            if (lx < 0 || ly < 0 || lx >= dwf || ly >= dhf) continue;
             
             lx = lx * sw_dw;
             ly = ly * sh_dh;
             
-            int tx = (int)(sox + lx * six);
-            int ty = (int)(soy + ly * siy);
+            // Not mirrored, that is zero plus the coordinate times one: the coordinate itself.
+            int tx = flipX ? (int)(soxf + lx * sixf) : (int) lx;
+            int ty = flipY ? (int)(soyf + ly * siyf) : (int) ly;
             
             if (tx < 0) tx = 0;
             if (ty < 0) ty = 0;
@@ -1467,6 +1538,8 @@ static void swrDrawSpriteRotatedInternal(
 #endif
         }
     }
+    #undef SWR_TURNED_SPARE
+    #undef SWR_TURNED_COLUMNS
 }
 
 static void swrDrawTriangleInternal(SWRenderer* swr, int xup, int yup, int xleft, int yleft, int xright, int yright, uintpixel_t color1, uintpixel_t color2, uintpixel_t color3, int alpha)
