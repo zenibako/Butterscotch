@@ -5,8 +5,9 @@
  *
  *   Up/Down   choose a row (held, it repeats)
  *   Left/Right  change a setting
- *   A         change a setting, or do what the row says
- *   B, Select, Start  close
+ *   A         change a setting, do what the row says, or open its page
+ *   B         back to the page before, or close from the first
+ *   Select, Start  close
  *
  * The layout is worked out at 320x240 and doubled for a 640x480 frame, the
  * way utFontScale does the text, and rows scroll if the font is too tall for
@@ -68,12 +69,23 @@ static void drawSoul(uint16_t *fb, int width, int height, int x, int y, int scal
             if (g_soul[row] & (0x80 >> col)) fillRect(fb, width, height, x + col * scale, y + row * scale, scale, scale, UT_RED);
 }
 
+/* Pages open one inside another this deep at most, the first included. */
+#define UT_MENU_DEPTH 4
+
 typedef struct {
+    const UtMenuPage *page;
     int cursor, scroll;
+} MenuLevel;
+
+typedef struct {
+    MenuLevel levels[UT_MENU_DEPTH];
+    int depth;      /* the page shown is levels[depth] */
     int heldFrames; /* how long Up or Down has been held */
 } MenuState;
 
-static void draw(const UtMenu *menu, const MenuState *state, uint16_t *fb, const uint16_t *game, int width, int height) {
+static void draw(const UtMenu *menu, const MenuState *all, uint16_t *fb, const uint16_t *game, int width, int height) {
+    const MenuLevel *state = &all->levels[all->depth];
+    const UtMenuPage *page = state->page;
     /* The game behind at a quarter of its brightness. */
     for (size_t i = 0, n = (size_t) width * (size_t) height; i < n; i++) fb[i] = (uint16_t) ((game[i] >> 2) & 0x1CE7);
 
@@ -82,7 +94,7 @@ static void draw(const UtMenu *menu, const MenuState *state, uint16_t *fb, const
     int margin = UT_MENU_MARGIN * s, border = UT_MENU_BORDER * s, pad = UT_MENU_PAD * s;
     int chrome = 2 * border + 2 * pad + line /* title */ + line / 2 + line / 2 + 2 * line /* status, help */;
     int visible = (height - 2 * margin - chrome) / line;
-    if (visible > menu->count) visible = menu->count;
+    if (visible > page->count) visible = page->count;
     if (visible < 1) visible = 1;
 
     int boxW = width - 2 * margin;
@@ -93,25 +105,25 @@ static void draw(const UtMenu *menu, const MenuState *state, uint16_t *fb, const
 
     int left = boxX + border + pad, right = boxX + boxW - border - pad;
     int y = boxY + border + pad;
-    utFontDraw(fb, width, height, left, y, menu->title, UT_WHITE, s);
+    utFontDraw(fb, width, height, left, y, page->title, UT_WHITE, s);
     y += line + line / 2;
 
     int textX = left + (UT_SOUL_W + 4) * s;
     for (int i = 0; i < visible; i++) {
         int index = state->scroll + i;
-        const UtMenuRow *row = &menu->rows[index];
+        const UtMenuRow *row = &page->rows[index];
         bool chosen = index == state->cursor;
         if (chosen) drawSoul(fb, width, height, left, y + (line - UT_SOUL_H * s) / 2, s);
         utFontDraw(fb, width, height, textX, y, row->label, chosen ? UT_YELLOW : UT_WHITE, s);
-        if (row->value != NULL) {
-            const char *value = row->value();
+        if (row->opens != NULL || row->value != NULL) {
+            const char *value = row->opens != NULL ? ">" : row->value();
             utFontDraw(fb, width, height, right - utFontWidth(value, s), y, value, chosen ? UT_YELLOW : UT_WHITE, s);
         }
         y += line;
     }
     /* More rows above or below: a mark at the right edge. */
     if (state->scroll > 0) fillRect(fb, width, height, right - 2 * s, y - visible * line - line / 4, 4 * s, s, UT_GREY);
-    if (state->scroll + visible < menu->count) fillRect(fb, width, height, right - 2 * s, y + line / 8, 4 * s, s, UT_GREY);
+    if (state->scroll + visible < page->count) fillRect(fb, width, height, right - 2 * s, y + line / 8, 4 * s, s, UT_GREY);
 
     y += line / 2;
     if (menu->status != NULL) {
@@ -159,14 +171,16 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
      * draws into. */
     uint16_t *game = (uint16_t *) malloc(pixels * sizeof(uint16_t));
     uint16_t *fb = (uint16_t *) malloc(pixels * sizeof(uint16_t));
-    if (game == NULL || fb == NULL || menu->count <= 0) {
+    if (game == NULL || fb == NULL || menu->page.count <= 0) {
         free(game);
         free(fb);
         return false;
     }
     memcpy(game, frame, pixels * sizeof(uint16_t));
 
-    MenuState state = { 0, 0, 0 };
+    MenuState state;
+    memset(&state, 0, sizeof(state));
+    state.levels[0].page = &menu->page;
     bool open = true;
     while (open) {
         bool scriptDone;
@@ -182,24 +196,36 @@ bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height)
         } else {
             state.heldFrames = 0;
         }
-        if (step != 0) state.cursor = (state.cursor + step + menu->count) % menu->count;
+        MenuLevel *level = &state.levels[state.depth];
+        if (step != 0) level->cursor = (level->cursor + step + level->page->count) % level->page->count;
 
-        const UtMenuRow *row = &menu->rows[state.cursor];
+        const UtMenuRow *row = &level->page->rows[level->cursor];
         int direction = (pressed & (1u << BTN_LEFT)) ? -1 : (pressed & (1u << BTN_RIGHT)) ? 1 : 0;
-        if (pressed & (1u << BTN_A)) {
+        if (row->opens != NULL) {
+            if ((pressed & (1u << BTN_A)) && row->opens->count > 0 && state.depth + 1 < UT_MENU_DEPTH) {
+                level = &state.levels[++state.depth];
+                level->page = row->opens;
+                level->cursor = level->scroll = 0;
+            }
+        } else if (pressed & (1u << BTN_A)) {
             if (row->choose(0)) open = false;
         } else if (direction != 0 && row->value != NULL) {
             if (row->choose(direction)) open = false;
         }
-        if (pressed & ((1u << BTN_B) | (1u << BTN_SELECT) | (1u << BTN_START))) open = false;
+        if (pressed & (1u << BTN_B)) {
+            /* Back to the row that opened this page. */
+            if (state.depth > 0) level = &state.levels[--state.depth];
+            else open = false;
+        }
+        if (pressed & ((1u << BTN_SELECT) | (1u << BTN_START))) open = false;
 
         /* Keep the chosen row in view. */
         int s = utFontScale(width), line = utFontLineHeight(s);
         int chrome = 2 * (UT_MENU_BORDER + UT_MENU_PAD) * s + 3 * line + 2 * (line / 2);
         int visible = (height - 2 * UT_MENU_MARGIN * s - chrome) / line;
         if (visible < 1) visible = 1;
-        if (state.cursor < state.scroll) state.scroll = state.cursor;
-        if (state.cursor >= state.scroll + visible) state.scroll = state.cursor - visible + 1;
+        if (level->cursor < level->scroll) level->scroll = level->cursor;
+        if (level->cursor >= level->scroll + visible) level->scroll = level->cursor - visible + 1;
 
         if (!open) break;
         draw(menu, &state, fb, game, width, height);
