@@ -266,6 +266,74 @@ void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skipp
     *audioFree = (unsigned) ((nowNanos() - start) / CALLS);
 }
 
+/* The loops of utPlatformMemoryCosts, kept out of line so that each is the
+ * same code whichever memory it is pointed at. */
+static volatile uint32_t g_memSink;
+
+__attribute__((noinline)) static void memWrite(uint16_t *pixels, int count, uint16_t seed) {
+    for (int i = 0; i < count; i++) pixels[i] = (uint16_t) (seed + i);
+}
+
+__attribute__((noinline)) static uint32_t memRead(const uint16_t *pixels, int count) {
+    uint32_t sum = 0;
+    for (int i = 0; i < count; i++) sum += pixels[i];
+    return sum;
+}
+
+__attribute__((noinline)) static uint32_t memRead32(const uint32_t *words, int count) {
+    uint32_t sum = 0;
+    for (int i = 0; i < count; i++) sum += words[i];
+    return sum;
+}
+
+__attribute__((noinline)) static void memBlend(uint16_t *pixels, int count) {
+    for (int i = 0; i < count; i++) pixels[i] = (uint16_t) ((pixels[i] >> 1) & 0x3DEF);
+}
+
+static void memoryCosts(uint16_t *pixels, int count, unsigned tenths[UT_MEM_COSTS]) {
+    enum { PASSES = 2, SMALL = 8192, SMALL_PASSES = 16 };
+    uint64_t start = nowNanos();
+    for (int pass = 0; pass < PASSES; pass++) memWrite(pixels, count, (uint16_t) pass);
+    uint64_t wrote = nowNanos();
+    for (int pass = 0; pass < PASSES; pass++) g_memSink += memRead(pixels, count);
+    uint64_t read = nowNanos();
+    for (int pass = 0; pass < PASSES; pass++) g_memSink += memRead32((const uint32_t *) (const void *) pixels, count / 2);
+    uint64_t read32 = nowNanos();
+    for (int pass = 0; pass < PASSES; pass++) memBlend(pixels, count);
+    uint64_t blended = nowNanos();
+    int small = count < SMALL ? count : SMALL;
+    g_memSink += memRead(pixels, small); /* brings it in, where it can be brought in */
+    uint64_t smallStart = nowNanos();
+    for (int pass = 0; pass < SMALL_PASSES; pass++) g_memSink += memRead(pixels, small);
+    uint64_t smallEnd = nowNanos();
+    uint64_t whole = (uint64_t) count * PASSES;
+    tenths[UT_MEM_WRITE] = (unsigned) ((wrote - start) * 10u / whole);
+    tenths[UT_MEM_READ] = (unsigned) ((read - wrote) * 10u / whole);
+    tenths[UT_MEM_READ32] = (unsigned) ((read32 - read) * 10u / whole);
+    tenths[UT_MEM_BLEND] = (unsigned) ((blended - read32) * 10u / whole);
+    tenths[UT_MEM_SMALL] = (unsigned) ((smallEnd - smallStart) * 10u / ((uint64_t) small * SMALL_PASSES));
+}
+
+void utPlatformMemoryCosts(unsigned tenths[2][UT_MEM_COSTS], unsigned long *address, int *pixels) {
+    enum { PIXELS = 320 * 240 };
+    memset(tenths, 0, 2 * sizeof(tenths[0]));
+    uint16_t *surface = (uint16_t *) (void *) of_video_surface();
+    int count = g_modeW * g_modeH < PIXELS ? g_modeW * g_modeH : PIXELS;
+    *address = (unsigned long) (uintptr_t) surface;
+    *pixels = count;
+    if (surface == NULL || count <= 0) return;
+    uint16_t *kept = malloc((size_t) count * sizeof(uint16_t));
+    uint16_t *heap = malloc((size_t) count * sizeof(uint16_t));
+    if (kept != NULL && heap != NULL) {
+        memcpy(kept, surface, (size_t) count * sizeof(uint16_t));
+        memoryCosts(surface, count, tenths[0]);
+        memoryCosts(heap, count, tenths[1]);
+        memcpy(surface, kept, (size_t) count * sizeof(uint16_t));
+    }
+    free(kept);
+    free(heap);
+}
+
 void utPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path) {
     int32_t w = 0, h = 0;
     uint32_t stages[SWR_PROBE_STAGES] = { 0 }, out = 0;

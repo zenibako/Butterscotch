@@ -401,6 +401,25 @@ void utBenchFrame(void) {
                    US(at[4]), US(at[5]), US(at[6]), US(at[0]), US(outside));
         #undef US
     }
+    {
+        /* What a pixel costs to write and to read, in the display's buffer and in ordinary memory
+         * (utPlatformMemoryCosts), nanoseconds: written; read 16 and 32 bits at a time; read then
+         * written; read repeatedly from 16 KB, which is cheap only where the memory is cached. */
+        unsigned tenths[2][UT_MEM_COSTS];
+        unsigned long address;
+        int pixels;
+        utPlatformMemoryCosts(tenths, &address, &pixels);
+        utLogPrint("pixel ns, %d px:   write  read  rd32   r+w small\n", pixels);
+        for (int row = 0; row < 2; row++) {
+            char where[16];
+            if (row == 0) snprintf(where, sizeof(where), "fb %08lx", address);
+            else snprintf(where, sizeof(where), "heap");
+            utLogPrint("%-11s      %4u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", where,
+                       tenths[row][UT_MEM_WRITE] / 10, tenths[row][UT_MEM_WRITE] % 10, tenths[row][UT_MEM_READ] / 10, tenths[row][UT_MEM_READ] % 10,
+                       tenths[row][UT_MEM_READ32] / 10, tenths[row][UT_MEM_READ32] % 10, tenths[row][UT_MEM_BLEND] / 10, tenths[row][UT_MEM_BLEND] % 10,
+                       tenths[row][UT_MEM_SMALL] / 10, tenths[row][UT_MEM_SMALL] % 10);
+        }
+    }
     utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
     utLogDump();
     utDiagHalt("benchmark finished");

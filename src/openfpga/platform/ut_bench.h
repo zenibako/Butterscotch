@@ -52,5 +52,13 @@ int utPlatformForcedSkip(void);
 /* The renderer's sprite cost probe (swrSpriteCostProbe) on the game's renderer. */
 void utPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path);
 void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree);
+/* What a pixel costs in the display's back buffer (row 0) against a heap
+ * block of the same size (row 1), in tenths of a nanosecond: written; read
+ * 16 bits at a time; read 32 bits at a time; read then written, as a blend
+ * does; and read over and over from 16 KB of it, which stays in the data
+ * cache if the memory is cached at all. `address` is the buffer's, `pixels`
+ * how many each pass covers. The buffer's pixels are put back afterwards. */
+enum { UT_MEM_WRITE, UT_MEM_READ, UT_MEM_READ32, UT_MEM_BLEND, UT_MEM_SMALL, UT_MEM_COSTS };
+void utPlatformMemoryCosts(unsigned tenths[2][UT_MEM_COSTS], unsigned long *address, int *pixels);
 
 #endif /* UT_BENCH_H */
