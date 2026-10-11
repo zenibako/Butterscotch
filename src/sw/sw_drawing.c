@@ -1455,6 +1455,20 @@ static void swrDrawSpriteRotatedInternal(
     // so it is worked out once for each column the draw can reach, by the
     // sum the loop would otherwise do for every pixel of every row.
     #define SWR_TURNED_COLUMNS 640
+    // For following the texel in whole numbers along a row (see the loop):
+    // how near a line between texels a pixel is left to the float sum, in
+    // 65536ths of a texel; the longest row and the furthest texel coordinate
+    // it is trusted over, which keep the drift well inside that and the
+    // numbers inside 32 bits.
+    #define SWR_TURNED_NEAR 2048
+    #define SWR_TURNED_STEP_SPAN 2048
+    #define SWR_TURNED_STEP_REACH 16000.0f
+    // A step across the screen moves the texel by this much each way.
+    float texStepXf = cosA * sw_dw * 65536.0f, texStepYf = -sinA * sh_dh * 65536.0f;
+    bool steppable = sw < 8192 && sh < 8192 &&
+                     texStepXf > -1.0e9f && texStepXf < 1.0e9f && texStepYf > -1.0e9f && texStepYf < 1.0e9f;
+    int32_t texStepX = steppable ? (int32_t) swrFloor(texStepXf + 0.5f) : 0;
+    int32_t texStepY = steppable ? (int32_t) swrFloor(texStepYf + 0.5f) : 0;
     float acrossKept[SWR_TURNED_COLUMNS];
     bool acrossHeld = maxXc - minXc <= SWR_TURNED_COLUMNS; // the table starts at column minXc
     if (acrossHeld) {
@@ -1497,34 +1511,78 @@ static void swrDrawSpriteRotatedInternal(
         if (rowTo > maxXc) rowTo = maxXc;
         if (rowFrom >= rowTo) continue;
         
-        float cxf = (float) rowFrom;
-        for (int cx = rowFrom; cx < rowTo; cx++, cxf += 1.0f)
-        {
-            // we need to determine the texture-space coordinate of cx/cy
-            float ox = acrossHeld ? acrossKept[cx - minXc] : cxf + 0.5f - pxa;
+        // Along a row the texel a pixel takes moves by the same amount at
+        // every step, so it is followed in whole numbers (sixteen bits below
+        // the point) from where the sum below puts the row's first pixel.
+        // That drifts from the sum by a few thousandths of a texel over a
+        // row, which only matters to a pixel that lands that close to the
+        // line between two texels or to the sprite's edge. Any pixel within
+        // SWR_TURNED_NEAR of one is worked out by the sum as before; for the
+        // rest the two agree on the texel, so the picture is the same.
+        bool stepped = steppable && rowTo - rowFrom <= SWR_TURNED_STEP_SPAN;
+        int32_t texX = 0, texY = 0; // the unmirrored texel coordinate, 16.16
+        if (stepped) {
+            float ox = acrossHeld ? acrossKept[rowFrom - minXc] : (float) rowFrom + 0.5f - pxa;
             float oy = cyf + 0.5f - pya;
-            
-            // "undo" the rotation
             float lx =  cosA * ox + sinA * oy;
             float ly = -sinA * ox + cosA * oy;
-            
-            // turn it into a texture-local coordinate
             lx += pxa - dx;
             ly += pya - dy;
-            
-            if (lx < 0 || ly < 0 || lx >= dwf || ly >= dhf) continue;
-            
             lx = lx * sw_dw;
             ly = ly * sh_dh;
-            
-            // Not mirrored, that is zero plus the coordinate times one: the coordinate itself.
-            int tx = flipX ? (int)(soxf + lx * sixf) : (int) lx;
-            int ty = flipY ? (int)(soyf + ly * siyf) : (int) ly;
-            
-            if (tx < 0) tx = 0;
-            if (ty < 0) ty = 0;
-            if (tx >= sw) tx = sw - 1;
-            if (ty >= sh) ty = sh - 1;
+            if (lx > -SWR_TURNED_STEP_REACH && lx < SWR_TURNED_STEP_REACH && ly > -SWR_TURNED_STEP_REACH && ly < SWR_TURNED_STEP_REACH) {
+                texX = (int32_t) swrFloor(lx * 65536.0f + 0.5f);
+                texY = (int32_t) swrFloor(ly * 65536.0f + 0.5f);
+            } else {
+                stepped = false;
+            }
+        }
+        
+        float cxf = (float) rowFrom;
+        for (int cx = rowFrom; cx < rowTo; cx++, cxf += 1.0f, texX += texStepX, texY += texStepY)
+        {
+            int tx, ty;
+            // Far enough from every line between texels (the sprite's edges are two of them)?
+            if (stepped && (uint32_t) ((texX & 0xFFFF) - SWR_TURNED_NEAR) < (uint32_t) (0x10000 - 2 * SWR_TURNED_NEAR) &&
+                           (uint32_t) ((texY & 0xFFFF) - SWR_TURNED_NEAR) < (uint32_t) (0x10000 - 2 * SWR_TURNED_NEAR))
+            {
+                int wholeX = texX >> 16, wholeY = texY >> 16;
+                if ((uint32_t) wholeX >= (uint32_t) sw || (uint32_t) wholeY >= (uint32_t) sh) continue;
+                // Mirrored, the sum below takes the whole part of (size - 1 - coordinate):
+                // the texel before the mirror image, and never less than the first.
+                tx = wholeX;
+                ty = wholeY;
+                if (flipX) { tx = sw - 2 - wholeX; if (tx < 0) tx = 0; }
+                if (flipY) { ty = sh - 2 - wholeY; if (ty < 0) ty = 0; }
+            }
+            else
+            {
+                // we need to determine the texture-space coordinate of cx/cy
+                float ox = acrossHeld ? acrossKept[cx - minXc] : cxf + 0.5f - pxa;
+                float oy = cyf + 0.5f - pya;
+                
+                // "undo" the rotation
+                float lx =  cosA * ox + sinA * oy;
+                float ly = -sinA * ox + cosA * oy;
+                
+                // turn it into a texture-local coordinate
+                lx += pxa - dx;
+                ly += pya - dy;
+                
+                if (lx < 0 || ly < 0 || lx >= dwf || ly >= dhf) continue;
+                
+                lx = lx * sw_dw;
+                ly = ly * sh_dh;
+                
+                // Not mirrored, that is zero plus the coordinate times one: the coordinate itself.
+                tx = flipX ? (int)(soxf + lx * sixf) : (int) lx;
+                ty = flipY ? (int)(soyf + ly * siyf) : (int) ly;
+                
+                if (tx < 0) tx = 0;
+                if (ty < 0) ty = 0;
+                if (tx >= sw) tx = sw - 1;
+                if (ty >= sh) ty = sh - 1;
+            }
             
             tx += sx;
             ty += sy;
@@ -1541,6 +1599,9 @@ static void swrDrawSpriteRotatedInternal(
     }
     #undef SWR_TURNED_SPARE
     #undef SWR_TURNED_COLUMNS
+    #undef SWR_TURNED_NEAR
+    #undef SWR_TURNED_STEP_SPAN
+    #undef SWR_TURNED_STEP_REACH
 }
 
 static void swrDrawTriangleInternal(SWRenderer* swr, int xup, int yup, int xleft, int yleft, int xright, int yright, uintpixel_t color1, uintpixel_t color2, uintpixel_t color3, int alpha)
