@@ -291,6 +291,11 @@ $(PC_BIN): $(PC_OBJS)
 
 test: $(PC_BIN) $(GAME_PACKS)
 
+# Asset-free VM/profiler accounting and between-execution toggle regression check.
+.PHONY: profiler-fixture
+profiler-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/profiler.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_profiler_fixture
+
 # The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
 # as undertale_pc_asan. Run it through the same frame scripts as undertale_pc:
 # it stops with a report on an out-of-bounds access, a use after free or
