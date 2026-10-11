@@ -40,6 +40,11 @@ static uint8_t *g_packStage;
 static uint32_t g_packPiece;
 static volatile int g_packDone;
 static volatile int g_packResult;
+static uint64_t g_packRefusedNanos;
+
+uint64_t platformPackRefusedNanos(void) {
+    return g_packRefusedNanos;
+}
 
 /* Runs from the read-completion interrupt. */
 static void packCallback(int token, int result) {
@@ -72,6 +77,7 @@ static bool packReadPiece(uint32_t offset, uint32_t size) {
     while (of_file_read_async((int) g_packSlot, offset, g_packStage, size, packCallback) < 0) {
         if (nowNanos() - start > 50000000ull) return false;
     }
+    g_packRefusedNanos += nowNanos() - start;
     /* The poll is the OS's fallback for a lost interrupt. */
     while (!g_packDone && of_file_async_poll() != 1) {
         if (nowNanos() - start > UT_PACK_TIMEOUT_NANOS) {
@@ -101,6 +107,10 @@ bool platformPackRead(const char *path, uint32_t offset, uint32_t size, void *de
 }
 
 #else
+
+uint64_t platformPackRefusedNanos(void) {
+    return 0;
+}
 
 bool platformPackRead(const char *path, uint32_t offset, uint32_t size, void *dest) {
     (void) path;
