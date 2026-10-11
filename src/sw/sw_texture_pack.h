@@ -49,6 +49,17 @@ bool swrTexturePackDecode(uint32_t pageId, uintpixel_t* buffer);
 // `buffer`. The rectangle must lie within the page.
 bool swrTexturePackDecodeRect(uint32_t pageId, int x, int y, int w, int h, uintpixel_t* buffer);
 
+// Where the time of the decodes since the last call went, for the log line
+// of a slow load: the reads, how long they waited for the platform to accept
+// them, the platform's busy work between reads (audio) and the decoding.
+typedef struct
+{
+    uint32_t reads, bytes;
+    uint64_t readNanos, refusedNanos, tickNanos, decodeNanos;
+}
+SwrTexturePackStats;
+void swrTexturePackTakeStats(SwrTexturePackStats* out);
+
 // Why the last decode failed: "read" (with errno left as the C library set
 // it) or "data" for a tile that does not decode. Empty after a success.
 const char* swrTexturePackLastError(void);

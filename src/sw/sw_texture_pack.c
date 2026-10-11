@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include "sw_texture_pack.h"
+#include "gettime.h"
 
 #if PIXEL_SIZE == 16 && !defined IS_BIG_ENDIAN
 
@@ -97,7 +98,17 @@ void platformBusyTick(void);
 // Reads `size` bytes at `offset` of the file at `path` into `dest`, fetching
 // exactly that much. Returns false to have the caller read it with fread.
 bool platformPackRead(const char* path, uint32_t offset, uint32_t size, void* dest);
+// Total time the platform's reads have waited to be accepted.
+uint64_t platformPackRefusedNanos(void);
 #endif
+
+static SwrTexturePackStats packStats;
+
+void swrTexturePackTakeStats(SwrTexturePackStats* out)
+{
+    *out = packStats;
+    memset(&packStats, 0, sizeof(packStats));
+}
 
 static const char* packLastError = "";
 
@@ -122,8 +133,11 @@ static bool readWindow(uint32_t start, uint32_t end)
     windowStart = windowEnd = 0;
     uint32_t size = end - start;
     errno = 0;
+    uint64_t readStart = nowNanos();
 #ifdef PLATFORM_PACK_READ
+    uint64_t refusedBefore = platformPackRefusedNanos();
     bool done = platformPackRead(SW_TEXTURE_PACK_PATH, start, size, window);
+    packStats.refusedNanos += platformPackRefusedNanos() - refusedBefore;
 #else
     bool done = false;
 #endif
@@ -132,8 +146,13 @@ static bool readWindow(uint32_t start, uint32_t end)
         clearerr(packFile);
         return false;
     }
+    uint64_t readEnd = nowNanos();
+    packStats.reads++;
+    packStats.bytes += size;
+    packStats.readNanos += readEnd - readStart;
 #ifdef PLATFORM_BUSY_TICK
     platformBusyTick();
+    packStats.tickNanos += nowNanos() - readEnd;
 #endif
     windowStart = start;
     windowEnd = end;
@@ -244,7 +263,9 @@ bool swrTexturePackDecodeRect(uint32_t pageId, int x, int y, int w, int h, uintp
                 if (packLastError[0] == '\0') packLastError = "data";
                 return false;
             }
+            uint64_t decodeStart = nowNanos();
             if (!decodeTile(tile, tw, th, pixels)) return false;
+            packStats.decodeNanos += nowNanos() - decodeStart;
             for (int row = top; row < bottom; row++)
                 memcpy(&buffer[(size_t) (row - y) * w + (left - x)], &pixels[(row - tileY) * tw + (left - tileX)], rowBytes);
         }

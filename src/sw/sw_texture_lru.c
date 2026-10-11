@@ -363,6 +363,8 @@ SWTexture* swrTextureForItem(SWRenderer* swr, int32_t tpagIndex)
         }
         
         uint64_t loadStart = nowNanos();
+        SwrTexturePackStats stats;
+        swrTexturePackTakeStats(&stats);
         bool outOfMemory;
         item = loadItem(swr, tpag, (uint32_t) pageId, pageW, pageH, &outOfMemory);
         if (item == NULL) {
@@ -394,8 +396,16 @@ SWTexture* swrTextureForItem(SWRenderer* swr, int32_t tpagIndex)
         // Only the slow ones are worth a line; the platform reads the time off it.
         uint32_t tookMs = (uint32_t) ((nowNanos() - loadStart) / 1000000u);
         if (tookMs >= 20) {
+            swrTexturePackTakeStats(&stats);
             logInfo("SWR: Loaded TXTR item %d of page %d (%dx%d, pack) took %u ms, cache %u KB\n", (int) tpagIndex, (int) pageId,
                     (int) item->width, (int) item->height, (unsigned) tookMs, (unsigned) (cachedBytes(swr) / 1024));
+            // ms to one decimal: reads (count, KB), waiting to be accepted, audio between reads, decoding.
+            logInfo("  item %d: %u reads %u KB in %u.%u ms (wait %u.%u), audio %u.%u, decode %u.%u\n", (int) tpagIndex,
+                    (unsigned) stats.reads, (unsigned) (stats.bytes / 1024),
+                    (unsigned) (stats.readNanos / 1000000u), (unsigned) (stats.readNanos / 100000u % 10u),
+                    (unsigned) (stats.refusedNanos / 1000000u), (unsigned) (stats.refusedNanos / 100000u % 10u),
+                    (unsigned) (stats.tickNanos / 1000000u), (unsigned) (stats.tickNanos / 100000u % 10u),
+                    (unsigned) (stats.decodeNanos / 1000000u), (unsigned) (stats.decodeNanos / 100000u % 10u));
         }
         return swr->itemTextures[tpagIndex];
     }
