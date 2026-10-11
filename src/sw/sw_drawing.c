@@ -1437,11 +1437,11 @@ static void swrDrawSpriteRotatedInternal(
     #define SWR_TURNED_SPARE 2.0f
     float edgeSlope[4];
     bool edgeLevel[4];
-    for (int i = 0; i < 4; i++)
+    for (int e = 0; e < 4; e++) // not i: a compiler without C99 for-scoping still has the corners' i
     {
-        float ex = quadX[(i + 1) & 3] - quadX[i], ey = quadY[(i + 1) & 3] - quadY[i];
-        edgeLevel[i] = ey > -0.001f && ey < 0.001f;
-        edgeSlope[i] = edgeLevel[i] ? 0.0f : ex / ey;
+        float ex = quadX[(e + 1) & 3] - quadX[e], ey = quadY[(e + 1) & 3] - quadY[e];
+        edgeLevel[e] = ey > -0.001f && ey < 0.001f;
+        edgeSlope[e] = edgeLevel[e] ? 0.0f : ex / ey;
     }
     
     // The numbers the loop needs as floats are worked out once: a conversion
