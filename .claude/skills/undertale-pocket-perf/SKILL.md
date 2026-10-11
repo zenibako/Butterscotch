@@ -1,9 +1,20 @@
 ---
 name: undertale-pocket-perf
 description: Measure and diagnose performance of the Undertale port on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
+argument-hint: "[card: SD mount path] [harness: path or host:path of the os25 harness, if any]"
 ---
 
 # Performance work on the Pocket
+
+## Inputs
+
+Take these from the arguments; if the task needs one that is missing, ask
+the user once rather than guessing a machine or path:
+
+- **card**: where the Pocket's SD card is mounted (written `$CARD` below).
+- **harness**: where the user's os25 harness checkout is, as a path or
+  `host:path`, for simulated runs. Without it, say a simulated check is
+  possible and ask; don't hunt for it.
 
 ## Reading the log off the card
 
@@ -14,7 +25,7 @@ Y with the debug buttons on, and reaches
 the card when the user leaves the core through the Analogue menu:
 
 ```bash
-tr -d '\0' < /Volumes/Pocket/Saves/butterscotch/common/deltarune_1.sav   # or undertale_1.sav
+tr -d '\0' < "$CARD"/Saves/butterscotch/common/deltarune_1.sav   # or undertale_1.sav
 ```
 
 Check the first line (`Butterscotch log, <game>`) and the timestamps: the
@@ -61,7 +72,7 @@ Check that a test measures what you think it does. If two readings that
 
 ## What is known (measured on the user's Pocket, v0.7 runtime, os25)
 
-- **CPU:** roughly 100–170x slower than this Mac per frame of game work.
+- **CPU:** roughly 100–170x slower than the desktop build on a recent Mac per frame of game work.
   Desktop work of 0.3 ms per frame is about 31 ms on the device.
 - **SD reads:** about **1.1 MB/s for data read the first time**, the same
   for 4 KB, 64 KB and 1 MB requests. Repeat reads of the same region come
@@ -414,9 +425,9 @@ uncached". What still holds, whatever the cause:
 ## Simulated runs: the os25 harness (2026-10-11)
 
 The user has a cycle-level simulator of the os25 CPU and memory system,
-the os25 harness. It lives only on the user's Mac mini, with its own skill
-there, and is deliberately kept out of this repository. A session on the
-MacBook reaches it with `ssh mac-mini`; read that skill before running it.
+the os25 harness. It lives only on the user's own machine (the **harness**
+input), with its own skill there, and is deliberately kept out of this
+repository. Read that skill before running it.
 It answers cycle questions without a card trip:
 
 - **Everything from it is simulated.** Say so with every number, and
