@@ -1455,11 +1455,10 @@ static void swrDrawSpriteRotatedInternal(
     // sum the loop would otherwise do for every pixel of every row.
     #define SWR_TURNED_COLUMNS 640
     float acrossKept[SWR_TURNED_COLUMNS];
-    const float* across = NULL; // indexed by column
-    if (maxXc - minXc <= SWR_TURNED_COLUMNS) {
-        float cxf = (float) minXc; // whole numbers this small are exact in a float, and stay so a step at a time
-        for (int cx = minXc; cx < maxXc; cx++, cxf += 1.0f) acrossKept[cx - minXc] = cxf + 0.5f - pxa;
-        across = acrossKept - minXc;
+    bool acrossHeld = maxXc - minXc <= SWR_TURNED_COLUMNS; // the table starts at column minXc
+    if (acrossHeld) {
+        float colf = (float) minXc; // whole numbers this small are exact in a float, and stay so a step at a time
+        for (int col = minXc; col < maxXc; col++, colf += 1.0f) acrossKept[col - minXc] = colf + 0.5f - pxa;
     }
 
     for (int cy = minYc; cy < maxYc; cy++)
@@ -1501,7 +1500,7 @@ static void swrDrawSpriteRotatedInternal(
         for (int cx = rowFrom; cx < rowTo; cx++, cxf += 1.0f)
         {
             // we need to determine the texture-space coordinate of cx/cy
-            float ox = across != NULL ? across[cx] : cxf + 0.5f - pxa;
+            float ox = acrossHeld ? acrossKept[cx - minXc] : cxf + 0.5f - pxa;
             float oy = cyf + 0.5f - pya;
             
             // "undo" the rotation
