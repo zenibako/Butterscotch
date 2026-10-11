@@ -286,5 +286,6 @@ bool swrTexturePackGetSize(UNUSED uint32_t pageId, UNUSED int* outW, UNUSED int*
 bool swrTexturePackDecode(UNUSED uint32_t pageId, UNUSED uintpixel_t* buffer) { return false; }
 bool swrTexturePackDecodeRect(UNUSED uint32_t pageId, UNUSED int x, UNUSED int y, UNUSED int w, UNUSED int h, UNUSED uintpixel_t* buffer) { return false; }
 const char* swrTexturePackLastError(void) { return ""; }
+void swrTexturePackTakeStats(SwrTexturePackStats* out) { memset(out, 0, sizeof(*out)); }
 
 #endif
