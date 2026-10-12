@@ -14,6 +14,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+struct Runner;
+bool platformSnapshotBoundary(struct Runner *runner);
 AudioSystem *platformCreateAudioSystem(void);
 FileSystem *platformCreateFileSystem(void);
 void platformDestroyFileSystem(FileSystem *base);

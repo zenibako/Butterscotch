@@ -669,6 +669,7 @@ typedef struct {
 
 typedef struct { char* key; int32_t value; } AssetsByNameEntry;
 typedef struct { char* key; int value; } DisabledObjEntry;
+typedef struct { int key; Instance* value; } InstanceIdEntry;
 
 struct Runner {
     DataWin* dataWin;
@@ -772,7 +773,7 @@ struct Runner {
     int32_t viewportW;   // Scaled game width in window
     int32_t viewportH;   // Scaled game height in window
     DisabledObjEntry* disabledObjects; // stb_ds string hashmap, nullptr = no filtering
-    struct { int key; Instance* value; }* instancesById;
+    InstanceIdEntry* instancesById;
     bool drawEnabled;
     bool forceDrawDepth;
     bool applyOffsetForPrimitives;

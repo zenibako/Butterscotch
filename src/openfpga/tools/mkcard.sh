@@ -21,6 +21,12 @@ GAMES=(
     "undertale|Undertale.json|games/undertale|data.win|textures.bin|music.bin"
     "deltarune|Deltarune.json|games/deltarune|deltarune.win|dr_textures.bin|dr_music.bin"
 )
+if [ "${SAVESTATES:-0}" = 1 ]; then
+    GAMES=("undertale|Undertale.json|.|data.win|textures.bin|music.bin")
+    [ -f "$ROOT/runtime/pocket/UNDERTALE_SAVESTATES" ] || {
+        echo "mkcard: use an SDK staged with the save-state-enabled os25 runtime"; exit 1;
+    }
+fi
 
 first=""
 for entry in "${GAMES[@]}"; do
@@ -31,9 +37,24 @@ done
 
 # The SDK script lays down the core, the bitstream and the OS; it names the
 # program after the tree, which is not a name any entry uses.
-"$IMAGE_SH" "$NAME" "$first" "$ROOT" "$DIST" > /dev/null
+bash "$IMAGE_SH" "$NAME" "$first" "$ROOT" "$DIST" > /dev/null
 COMMON="$OUT/Assets/$NAME/common"
 rm -f "$COMMON/$NAME.elf"
+if [ "${SAVESTATES:-0}" = 1 ]; then
+    python3 - "$OUT" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for path in root.glob('Cores/*/core.json'):
+    data = json.loads(path.read_text())
+    data['core']['framework']['sleep_supported'] = True
+    data['core']['metadata']['description'] = 'Undertale with native Memories and sleep (experimental)'
+    path.write_text(json.dumps(data, indent=4) + '\n')
+for path in root.glob('Assets/*/*/Deltarune.json'):
+    path.unlink()
+for path in root.glob('Assets/*/common/deltarune_os.ini'):
+    path.unlink()
+PY
+fi
 
 # Four bytes, little-endian, as printf escapes.
 le32() {

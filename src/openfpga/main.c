@@ -13,6 +13,7 @@
 #include "platform/of_diag.h"
 #include "platform/of_bench.h"
 #include "platform/of_hooks.h"
+#include "platform/of_state_requests.h"
 #include "stb_ds.h"
 
 #ifdef OF_PC
@@ -78,6 +79,7 @@ int main(int argc, char **argv) {
     of_file_slot_register(OF_SLOT_MUSIC, OF_MUSIC_NAME);
 #endif
     ofDiagInstall();
+    ofSavestateStartup();
     ofDiagCheckFile(OF_DATA_WIN_NAME);
 
     CommandLineArgs args = {0};

@@ -1,0 +1,27 @@
+diff --git a/src/fpga/targets/pocket/seeds/os25.seed b/src/fpga/targets/pocket/seeds/os25.seed
+index 209e3ef..45a4fb7 100644
+--- a/src/fpga/targets/pocket/seeds/os25.seed
++++ b/src/fpga/targets/pocket/seeds/os25.seed
+@@ -1 +1 @@
+-20
++8
+diff --git a/src/fpga/targets/pocket/seeds/os25.seed.src b/src/fpga/targets/pocket/seeds/os25.seed.src
+index 509ac88..f9a863c 100644
+--- a/src/fpga/targets/pocket/seeds/os25.seed.src
++++ b/src/fpga/targets/pocket/seeds/os25.seed.src
+@@ -1 +1 @@
+-ea139d77fb2c43de094893a08965400f
++c11c6ce48968f1e59b1fa5e913eb4409
+diff --git a/src/fpga/targets/pocket/variants/os25.mk b/src/fpga/targets/pocket/variants/os25.mk
+index a1e7864..7288ad9 100644
+--- a/src/fpga/targets/pocket/variants/os25.mk
++++ b/src/fpga/targets/pocket/variants/os25.mk
+@@ -32,7 +32,7 @@ DEFS := INCLUDE_ANALOGIZER INCLUDE_HW_MIXER INCLUDE_TRANSLUC \
+         INCLUDE_PALETTE INCLUDE_COLUMN_LIST INCLUDE_COMPACT_SPAN \
+         INCLUDE_PARAM_SPAN_Q29 INCLUDE_4PLAYER INCLUDE_BANK_ROW_TRACK \
+         INCLUDE_CPU_RING INCLUDE_GPU_WRITE_BURSTS EXCLUDE_GPU_COMMAND_DMA \
+-        INCLUDE_SPAN_DEDICATED_MULT
++        INCLUDE_SPAN_DEDICATED_MULT INCLUDE_SAVESTATE INCLUDE_CLK90
+ 
+ # Separate span products from the shared perspective DSP operand mux.
+ # Bit-exact and cycle-identical in Quake/Doom replays; paired seeds 15/20

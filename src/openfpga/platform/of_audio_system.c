@@ -23,6 +23,9 @@
 #include "utils.h"
 
 #include "of_music_pack.h"
+#include "of_snapshot_parts.h"
+#include "of_snapshot_bytes.h"
+#include <math.h>
 
 #include <ctype.h>
 #include <stddef.h>
@@ -133,7 +136,10 @@ typedef struct {
     uint32_t cachedBytes;
     uint32_t useCounter;
     int32_t nextInstanceId;
+    int16_t *snapshotPcm; /* shadow of accepted output for exact queued-audio restore */
+    uint64_t snapshotWritten;
     int32_t queueCapacity;
+    int32_t snapshotReservedPairs;
     float masterGain;
     bool allPaused;
     FILE *dump; /* desktop only: raw copy of everything written to the output */
@@ -144,6 +150,7 @@ typedef struct {
 
 /* The file idle hook has no user pointer, so the one instance is global. */
 static OfAudioSystem *g_audio = NULL;
+static bool g_snapshotLocked = false;
 static OfAudioMode g_audioMode = OF_AUDIO_NORMAL; /* see Muting, below */
 static bool voiceSkipped(const OfAudioSystem *ut, const OfVoice *voice);
 static bool silent(const OfAudioSystem *ut);
@@ -577,7 +584,14 @@ static void mixAndWrite(OfAudioSystem *ut, int pairs) {
 
         if (ut->dump != NULL) fwrite(out, sizeof(int16_t) * 2, (size_t) chunk, ut->dump);
         uint64_t writeStart = timed ? nowNanos() : 0;
-        of_audio_write(out, chunk);
+        int accepted = of_audio_write(out, chunk);
+        if (ut->snapshotPcm && accepted > 0 && accepted <= chunk) {
+            for (int i = 0; i < accepted; i++) {
+                size_t at = (size_t)(ut->snapshotWritten++ % (uint64_t)ut->queueCapacity) * 2;
+                ut->snapshotPcm[at] = out[i * 2];
+                ut->snapshotPcm[at + 1] = out[i * 2 + 1];
+            }
+        }
         if (timed) writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
     }
@@ -609,7 +623,7 @@ static void pumpOutput(OfAudioSystem *ut) {
  * queue is deep (100 ms) leaves a gap in the sound. */
 void platformBusyTick(void) {
     /* A dump follows game time instead of the queue; see updateAudio. */
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutput(g_audio);
+    if (!g_snapshotLocked && g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutput(g_audio);
 }
 
 /* A room change is the one long stretch of work with nowhere to feed the
@@ -617,12 +631,12 @@ void platformBusyTick(void) {
  * log hook calls this when the change starts, to queue enough to cover it.
  * Sounds that start in the next quarter second are heard that much late. */
 void ofAudioRoomChange(void) {
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutputTo(g_audio, OF_QUEUE_ROOM_CHANGE_PAIRS);
+    if (!g_snapshotLocked && g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutputTo(g_audio, OF_QUEUE_ROOM_CHANGE_PAIRS);
 }
 
 #ifndef OF_PC
 static void idleHook(void) {
-    if (g_audio != NULL && g_audio->file != NULL && !silent(g_audio)) pumpOutput(g_audio);
+    if (!g_snapshotLocked && g_audio != NULL && g_audio->file != NULL && !silent(g_audio)) pumpOutput(g_audio);
 }
 #endif
 
@@ -702,6 +716,11 @@ static void ofInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem)
     adpcmDiffInit();
     of_audio_init();
     ut->queueCapacity = of_audio_free();
+#ifndef OF_PC
+    ut->snapshotReservedPairs = 1;
+#endif
+    if (ut->queueCapacity > 0 && ut->queueCapacity <= OF_AUDIO_RATE * 4)
+        ut->snapshotPcm = calloc((size_t)ut->queueCapacity * 2, sizeof(int16_t));
     ut->masterGain = 1.0f;
     ut->nextInstanceId = OF_INSTANCE_ID_BASE;
     openPack(ut);
@@ -728,6 +747,7 @@ static void ofDestroy(AudioSystem *audio) {
     free(ut->cachedSounds);
     free(ut->cachedLastUse);
     free(ut->tracks);
+    free(ut->snapshotPcm);
     free(ut);
 }
 
@@ -892,6 +912,8 @@ static int32_t ofPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     (void) priority;
     OfAudioSystem *ut = (OfAudioSystem *) audio;
     if (ut->file == NULL) return -1;
+    if (ut->nextInstanceId < OF_INSTANCE_ID_BASE || ut->nextInstanceId >= OF_STREAM_INDEX_BASE - 1)
+        return -1;
 
     int32_t track = -1;
     float gain = 1.0f, pitch = 1.0f;
@@ -1242,4 +1264,231 @@ AudioSystem *platformCreateAudioSystem(void) {
     ut->base.vtable = &ofVtable;
     g_audio = ut;
     return &ut->base;
+}
+
+
+/* Decoder cursors and the unread stream tail make restoring sample-exact;
+ * short sound bytes are prepared from the immutable pack, never pointer-saved. */
+#define OF_AUDIO_SNAPSHOT_MAGIC 0x31554155u
+#define OF_VOICE_U32(F) \
+    F(instanceId) F(sourceIndex) F(track) F(streamSlot) \
+    F(bufferLen) F(bufferPos) F(fileBytePos) F(samplesDecoded) F(pendingCode) \
+    F(sample0) F(sample1) F(frac) F(step) F(gainNow) F(gainTarget) F(gainStepPerPair)
+
+typedef struct {
+    OfStream streams[OF_MAX_STREAMS];
+    OfVoice voices[OF_MAX_VOICES];
+    uint8_t streamBuffers[OF_MAX_STREAMED][OF_READAHEAD];
+    uint8_t **sounds;
+    uint32_t trackCount;
+    AudioGroupGain *gains;
+    uint32_t gainCount;
+    int32_t nextInstanceId;
+    float masterGain, listener[3];
+    bool allPaused;
+    OfAudioMode mode;
+    int16_t *pcm;
+    uint32_t pcmPairs;
+} OfAudioSnapshot;
+
+void ofAudioSnapshotLock(bool locked) { g_snapshotLocked = locked; }
+
+bool ofAudioSnapshot(AudioSystem *audio, uint8_t **data, size_t *size, const char **reason) {
+    OfAudioSystem *ut = (OfAudioSystem *)audio;
+    OfSnapshotWriter w = {.ok = true};
+    *data = NULL; *size = 0;
+    uint32_t queued = 0;
+    if (ut->queueCapacity > 0) {
+        int freePairs = of_audio_free();
+        if (freePairs < 0 || freePairs > ut->queueCapacity) goto bad;
+        queued = (uint32_t)(ut->queueCapacity - freePairs);
+        /* Pocket reserves one pair once the stream voice is activated. */
+        if (ut->snapshotWritten && queued >= (uint32_t)ut->snapshotReservedPairs)
+            queued -= (uint32_t)ut->snapshotReservedPairs;
+        if (queued && (!ut->snapshotPcm || queued > ut->snapshotWritten)) goto bad;
+    }
+    ofSnapU32(&w, OF_AUDIO_SNAPSHOT_MAGIC);
+    ofSnapU32(&w, ut->trackCount);
+    ofSnapU32(&w, ofSnapHash(ut->tracks, (size_t)ut->trackCount * sizeof(OfMusicTrack)));
+    ofSnapU32(&w, (uint32_t)ut->nextInstanceId);
+    ofSnapFloat(&w, ut->masterGain); ofSnapU32(&w, ut->allPaused);
+    ofSnapU32(&w, (uint32_t)g_audioMode);
+    ofSnapFloat(&w, audio->listenerX); ofSnapFloat(&w, audio->listenerY); ofSnapFloat(&w, audio->listenerZ);
+    ofSnapU32(&w, audio->groupGainCount);
+    for (uint32_t i = 0; i < audio->groupGainCount; i++) {
+        AudioGroupGain *g = &audio->groupGains[i];
+        ofSnapFloat(&w, g->current); ofSnapFloat(&w, g->start); ofSnapFloat(&w, g->target);
+        ofSnapFloat(&w, g->timeRemaining); ofSnapFloat(&w, g->totalTime);
+    }
+    for (unsigned i = 0; i < OF_MAX_STREAMS; i++) {
+        OfStream *t = &ut->streams[i];
+        ofSnapU32(&w, t->active); ofSnapU32(&w, (uint32_t)t->track);
+        ofSnapFloat(&w, t->gain); ofSnapFloat(&w, t->pitch);
+    }
+    for (unsigned i = 0; i < OF_MAX_VOICES; i++) {
+        OfVoice v = ut->voices[i];
+        if (!v.active) memset(&v, 0, sizeof(v));
+        if (v.active && (v.track < 0 || (uint32_t)v.track >= ut->trackCount ||
+            v.bufferPos > v.bufferLen || v.streamSlot >= OF_MAX_STREAMED)) goto bad;
+        uint32_t flags = (uint32_t)v.active | (uint32_t)v.paused << 1 | (uint32_t)v.loop << 2 |
+            (uint32_t)v.finished << 3 | (uint32_t)v.music << 4 |
+            (uint32_t)v.startedThisFrame << 5 | (uint32_t)v.havePendingCode << 6;
+        ofSnapU32(&w, flags);
+#define WRITE_VOICE(f) ofSnapU32(&w, (uint32_t)v.f);
+        OF_VOICE_U32(WRITE_VOICE)
+#undef WRITE_VOICE
+        ofSnapU32(&w, (uint32_t)v.adpcm.predictor); ofSnapU32(&w, (uint32_t)v.adpcm.stepIndex);
+        ofSnapFloat(&w, v.pitch);
+        if (v.active && v.streamSlot >= 0) {
+            if (v.bufferLen > OF_READAHEAD || (v.bufferLen > v.bufferPos && !v.data)) goto bad;
+            ofSnapWrite(&w, v.data ? v.data + v.bufferPos : NULL, v.bufferLen - v.bufferPos);
+        }
+    }
+    ofSnapU32(&w, queued);
+    for (uint32_t i = 0; i < queued; i++) {
+        size_t at = (size_t)((ut->snapshotWritten - queued + i) % (uint64_t)ut->queueCapacity) * 2;
+        uint32_t pair = (uint16_t)ut->snapshotPcm[at] | (uint32_t)(uint16_t)ut->snapshotPcm[at + 1] << 16;
+        ofSnapU32(&w, pair);
+    }
+    if (!w.ok) goto bad;
+    *data = w.data; *size = w.size; return true;
+bad:
+    free(w.data); *reason = "Audio cannot be captured safely"; return false;
+}
+
+void ofAudioFreeSnapshot(void *ptr) {
+    OfAudioSnapshot *p = ptr;
+    if (!p) return;
+    if (p->sounds) for (uint32_t i = 0; i < p->trackCount; i++) free(p->sounds[i]);
+    free(p->sounds); free(p->gains); free(p->pcm); free(p);
+}
+
+void *ofAudioPrepareSnapshot(AudioSystem *audio, const uint8_t *data, size_t size, const char **reason) {
+    OfAudioSystem *ut = (OfAudioSystem *)audio;
+    OfSnapshotReader r = {data, size, 0, true};
+    OfAudioSnapshot *p = NULL;
+    if (ofSnapGetU32(&r) != OF_AUDIO_SNAPSHOT_MAGIC || ofSnapGetU32(&r) != ut->trackCount ||
+        ofSnapGetU32(&r) != ofSnapHash(ut->tracks, (size_t)ut->trackCount * sizeof(OfMusicTrack))) goto bad;
+    p = calloc(1, sizeof(*p));
+    if (!p) goto bad;
+    p->trackCount = ut->trackCount;
+    p->sounds = calloc(p->trackCount ? p->trackCount : 1, sizeof(uint8_t *));
+    if (!p->sounds) goto bad;
+    p->nextInstanceId = (int32_t)ofSnapGetU32(&r);
+    if (p->nextInstanceId < OF_INSTANCE_ID_BASE || p->nextInstanceId >= OF_STREAM_INDEX_BASE) goto bad;
+    p->masterGain = ofSnapGetFloat(&r); uint32_t paused = ofSnapGetU32(&r);
+    p->mode = (OfAudioMode)ofSnapGetU32(&r); p->allPaused = paused != 0;
+    if (paused > 1 || (uint32_t)p->mode >= OF_AUDIO_MODE_COUNT || !isfinite(p->masterGain) ||
+        p->masterGain < 0 || p->masterGain > 4) goto bad;
+    for (unsigned i = 0; i < 3; i++) { p->listener[i] = ofSnapGetFloat(&r); if (!isfinite(p->listener[i])) goto bad; }
+    p->gainCount = ofSnapGetU32(&r);
+    if (p->gainCount > 1024 || p->gainCount > (r.size - r.offset) / 20) goto bad;
+    if (p->gainCount) {
+        p->gains = calloc(p->gainCount, sizeof(AudioGroupGain));
+        if (!p->gains) goto bad;
+    }
+    for (uint32_t i = 0; i < p->gainCount; i++) {
+        AudioGroupGain *g = &p->gains[i];
+        g->current = ofSnapGetFloat(&r); g->start = ofSnapGetFloat(&r); g->target = ofSnapGetFloat(&r);
+        g->timeRemaining = ofSnapGetFloat(&r); g->totalTime = ofSnapGetFloat(&r);
+        if (!isfinite(g->current) || !isfinite(g->start) || !isfinite(g->target) ||
+            !isfinite(g->timeRemaining) || !isfinite(g->totalTime)) goto bad;
+    }
+    for (unsigned i = 0; i < OF_MAX_STREAMS; i++) {
+        OfStream *t = &p->streams[i]; uint32_t active = ofSnapGetU32(&r);
+        t->active = active != 0; t->track = (int32_t)ofSnapGetU32(&r);
+        t->gain = ofSnapGetFloat(&r); t->pitch = ofSnapGetFloat(&r);
+        if (active > 1 || !isfinite(t->gain) || !isfinite(t->pitch) ||
+            (active && (t->track < 0 || (uint32_t)t->track >= ut->trackCount))) goto bad;
+    }
+    bool used[OF_MAX_STREAMED] = {0};
+    for (unsigned i = 0; i < OF_MAX_VOICES; i++) {
+        OfVoice *v = &p->voices[i]; uint32_t flags = ofSnapGetU32(&r);
+        v->active = (flags & 1) != 0; v->paused = (flags & 2) != 0; v->loop = (flags & 4) != 0;
+        v->finished = (flags & 8) != 0; v->music = (flags & 16) != 0;
+        v->startedThisFrame = (flags & 32) != 0; v->havePendingCode = (flags & 64) != 0;
+#define READ_VOICE(f) v->f = (__typeof__(v->f))ofSnapGetU32(&r);
+        OF_VOICE_U32(READ_VOICE)
+#undef READ_VOICE
+        v->adpcm.predictor = (int32_t)ofSnapGetU32(&r); v->adpcm.stepIndex = (int32_t)ofSnapGetU32(&r);
+        v->pitch = ofSnapGetFloat(&r);
+        if (!r.ok || flags > 127) goto bad;
+        if (!v->active) continue;
+        if (v->instanceId < OF_INSTANCE_ID_BASE || v->instanceId >= p->nextInstanceId) goto bad;
+        for (unsigned j = 0; j < i; j++)
+            if (p->voices[j].active && p->voices[j].instanceId == v->instanceId) goto bad;
+        if (v->track < 0 || (uint32_t)v->track >= ut->trackCount || v->streamSlot < -1 ||
+            v->streamSlot >= OF_MAX_STREAMED || v->bufferPos > v->bufferLen ||
+            v->adpcm.predictor < -32768 || v->adpcm.predictor > 32767 ||
+            v->adpcm.stepIndex < 0 || v->adpcm.stepIndex > 88 || v->pendingCode > 15 ||
+            !isfinite(v->pitch) || v->pitch <= 0 || v->samplesDecoded > ut->tracks[v->track].sampleCount ||
+            v->step < 1 || v->step > 8u * 65536u || v->frac > 9u * 65536u ||
+            v->sample0 < -32768 || v->sample0 > 32767 || v->sample1 < -32768 || v->sample1 > 32767 ||
+            v->gainNow < 0 || v->gainNow > 4 * OF_GAIN_ONE * 256 ||
+            v->gainTarget < 0 || v->gainTarget > 4 * OF_GAIN_ONE * 256 || v->gainStepPerPair < 0) goto bad;
+        if (v->streamSlot >= 0) {
+            if (used[v->streamSlot] || v->bufferLen > OF_READAHEAD ||
+                v->fileBytePos > trackBytes(&ut->tracks[v->track])) goto bad;
+            used[v->streamSlot] = true;
+            uint32_t remaining = v->bufferLen - v->bufferPos;
+            if (!ofSnapRead(&r, p->streamBuffers[v->streamSlot], remaining)) goto bad;
+            v->bufferLen = remaining; v->bufferPos = 0;
+        } else {
+            uint32_t bytes = trackBytes(&ut->tracks[v->track]);
+            if (v->bufferLen > bytes || v->bufferPos > bytes || !ut->file || !ut->cachedSounds) goto bad;
+            if (!p->sounds[v->track]) {
+                p->sounds[v->track] = malloc(bytes ? bytes : 1);
+                if (!p->sounds[v->track]) goto bad;
+                bool locked = g_snapshotLocked; g_snapshotLocked = true;
+                bool ok = fseek(ut->file, (long)ut->tracks[v->track].offset, SEEK_SET) == 0 &&
+                    fread(p->sounds[v->track], 1, bytes, ut->file) == bytes;
+                g_snapshotLocked = locked;
+                if (!ok) goto bad;
+            }
+        }
+    }
+    p->pcmPairs = ofSnapGetU32(&r);
+    if (p->pcmPairs > (uint32_t)(ut->queueCapacity > 0 ? ut->queueCapacity : 0) ||
+        p->pcmPairs > (r.size - r.offset) / 4 || (p->pcmPairs && !ut->snapshotPcm)) goto bad;
+    if (p->pcmPairs) { p->pcm = malloc((size_t)p->pcmPairs * 4); if (!p->pcm) goto bad; }
+    for (uint32_t i = 0; i < p->pcmPairs; i++) {
+        uint32_t pair = ofSnapGetU32(&r);
+        p->pcm[i * 2] = (int16_t)pair; p->pcm[i * 2 + 1] = (int16_t)(pair >> 16);
+    }
+    if (!r.ok || r.offset != r.size) goto bad;
+    return p;
+bad:
+    ofAudioFreeSnapshot(p); *reason = "Invalid or incompatible audio state"; return NULL;
+}
+
+void ofAudioApplySnapshot(AudioSystem *audio, void *ptr) {
+    OfAudioSystem *ut = (OfAudioSystem *)audio;
+    OfAudioSnapshot *p = ptr;
+    for (uint32_t i = 0; i < p->trackCount; i++) if (p->sounds[i]) {
+        if (ut->cachedSounds[i]) { free(ut->cachedSounds[i]); ut->cachedBytes -= trackBytes(&ut->tracks[i]); }
+        ut->cachedSounds[i] = p->sounds[i]; p->sounds[i] = NULL;
+        ut->cachedBytes += trackBytes(&ut->tracks[i]);
+    }
+    memcpy(ut->streamBuffers, p->streamBuffers, sizeof(ut->streamBuffers));
+    memcpy(ut->voices, p->voices, sizeof(ut->voices)); memcpy(ut->streams, p->streams, sizeof(ut->streams));
+    for (unsigned i = 0; i < OF_MAX_VOICES; i++) {
+        OfVoice *v = &ut->voices[i];
+        if (v->active) v->data = v->streamSlot >= 0 ? ut->streamBuffers[v->streamSlot] : ut->cachedSounds[v->track];
+    }
+    ut->masterGain = p->masterGain; ut->nextInstanceId = p->nextInstanceId; ut->allPaused = p->allPaused;
+    g_audioMode = p->mode;
+    audio->listenerX = p->listener[0]; audio->listenerY = p->listener[1]; audio->listenerZ = p->listener[2];
+    free(audio->groupGains); audio->groupGains = p->gains; audio->groupGainCount = p->gainCount; p->gains = NULL;
+#ifdef OF_PC
+    ofPcAudioSnapshotReset();
+#else
+    of_audio_init();
+#endif
+    ut->snapshotWritten = 0;
+    if (p->pcmPairs) {
+        int written = of_audio_write(p->pcm, (int)p->pcmPairs);
+        if (written > 0 && written <= (int)p->pcmPairs) {
+            memcpy(ut->snapshotPcm, p->pcm, (size_t)written * 4); ut->snapshotWritten = (uint64_t)written;
+        }
+    }
 }

@@ -1,0 +1,538 @@
+/* Core-only synthetic fixture for the Undertale (WAD16) snapshot contract. */
+#include "runner_snapshot.h"
+#include "stb_ds.h"
+#include "log.h"
+#include "spatial_grid.h"
+#include "miniz.h"
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+/* Host adapter for the core test, with no Pocket platform dependency. */
+void platformLog(logType type, const char *format, va_list args) {
+    if (type >= LOG_TYPE_WARNING) vfprintf(stderr, format, args);
+}
+
+static bool noSurface(Renderer *renderer, int32_t id) {
+    (void)renderer; (void)id;
+    return false;
+}
+
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
+           (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+static void write32(uint8_t *p, uint32_t v) {
+    for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i));
+}
+static uint32_t hashBytes(const uint8_t *p, size_t n) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+static size_t roomBlock(const uint8_t *p, size_t n, uint32_t rooms) {
+    for (size_t i = 0; i + 14 < n; i++)
+        if (le32(p + i) == rooms && le32(p + i + 4 + rooms) == 320 &&
+            le32(p + i + 8 + rooms) == 240) return i;
+    assert(false); return 0;
+}
+static void repack(uint8_t **bytes, size_t *size,
+                   void (*change)(uint8_t *, size_t)) {
+    uint32_t rawLen = le32(*bytes + 24);
+    uint8_t *raw = malloc(rawLen);
+    mz_ulong n = rawLen;
+    assert(mz_uncompress(raw, &n, *bytes + 32, *size - 32) == MZ_OK && n == rawLen);
+    change(raw, rawLen);
+    mz_ulong cap = mz_compressBound(rawLen);
+    uint8_t *out = malloc(cap + 32);
+    assert(mz_compress2(out + 32, &cap, raw, rawLen, MZ_DEFAULT_COMPRESSION) == MZ_OK);
+    memcpy(out, *bytes, 32);
+    write32(out + 16, (uint32_t)cap + 8);
+    write32(out + 28, hashBytes(raw, rawLen));
+    write32(out + 20, hashBytes(out + 24, cap + 8));
+    free(raw); free(*bytes); *bytes = out; *size = cap + 32;
+}
+static void invalidRoomFlag(uint8_t *raw, size_t n) {
+    size_t at = roomBlock(raw, n, 1);
+    raw[at + 4] = 2;
+}
+static void hugeRoom(uint8_t *raw, size_t n) {
+    size_t at = roomBlock(raw, n, 1);
+    write32(raw + at + 5, 4194240);
+    write32(raw + at + 9, 4194240);
+}
+static void invalidArrayCountAfterRooms(uint8_t *raw, size_t n) {
+    size_t at = roomBlock(raw, n, 2);
+    write32(raw + at + 4 + 2 + 2 * 18, 65537);
+}
+static void oversizedArrayShape(uint8_t *raw, size_t n) {
+    for (size_t i = 0; i + 20 < n; i++) {
+        if (le32(raw + i + 4) == 3 && le32(raw + i + 8) == 32000 &&
+            le32(raw + i + 12) == 32000 && le32(raw + i + 16) == 1) {
+            write32(raw + i + 16, 32000);
+            return;
+        }
+    }
+    assert(false);
+}
+
+static void fixture(Runner *r, DataWin *dw, VMContext *vm, Renderer *renderer,
+                    RendererVtable *vtable, Room *room, GameObject *object) {
+    memset(r, 0, sizeof(*r));
+    memset(dw, 0, sizeof(*dw));
+    memset(vm, 0, sizeof(*vm));
+    memset(renderer, 0, sizeof(*renderer));
+    memset(vtable, 0, sizeof(*vtable));
+    memset(room, 0, sizeof(*room));
+    memset(object, 0, sizeof(*object));
+    dw->gen8.wadVersion = 16;
+    dw->room.rooms = room;
+    dw->room.count = 1;
+    dw->objt.objects = object;
+    dw->objt.count = 1;
+    room->width = 320;
+    room->height = 240;
+    room->payloadLoaded = true;
+    r->dataWin = dw;
+    r->vmContext = vm;
+    r->renderer = renderer;
+    r->currentRoom = room;
+    r->currentRoomIndex = 0;
+    r->currentRoomOrderPosition = 0;
+    r->pendingRoom = -1;
+    r->nextInstanceId = 100003;
+    r->frameCount = 42;
+    r->gameStartFired = true;
+    r->spatialGrid = SpatialGrid_create(room->width, room->height);
+    r->instancesByObject = calloc(1, sizeof(Instance **));
+    r->instancesByExactObject = calloc(1, sizeof(Instance **));
+    vm->runner = r;
+    vm->dataWin = dw;
+    vm->globalScopeInstance = Instance_create(0, STRUCT_OBJECT_INDEX, 0, 0);
+    vtable->surfaceExists = noSurface;
+    renderer->vtable = vtable;
+    renderer->runner = r;
+}
+
+static void destroyFixture(Runner *r) {
+    Instance_free(r->vmContext->globalScopeInstance);
+    for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) Instance_free(r->instances[i]);
+    arrfree(r->instances);
+    for (ptrdiff_t i = 0; i < arrlen(r->dsMapPool); i++) {
+        for (ptrdiff_t j = 0; j < shlen(r->dsMapPool[i]); j++) {
+            free(r->dsMapPool[i][j].key);
+            RValue_free(&r->dsMapPool[i][j].value);
+        }
+        shfree(r->dsMapPool[i]);
+    }
+    arrfree(r->dsMapPool);
+    for (ptrdiff_t i = 0; i < arrlen(r->dsListPool); i++) {
+        for (ptrdiff_t j = 0; j < arrlen(r->dsListPool[i].items); j++)
+            RValue_free(&r->dsListPool[i].items[j]);
+        arrfree(r->dsListPool[i].items);
+    }
+    arrfree(r->dsListPool);
+    arrfree(r->dsQueuePool);
+    arrfree(r->dsStackPool); arrfree(r->dsPriorityPool); arrfree(r->dsGridPool);
+    arrfree(r->gmlBufferPool); arrfree(r->mpGridPool);
+    arrfree(r->particleSystemPool); arrfree(r->particleTypePool);
+    arrfree(r->audioEmitters); arrfree(r->vertexFormats); arrfree(r->vertexBuffers);
+    for (ptrdiff_t i = 0; i < shlen(r->vmContext->varNameMap); i++)
+        free(r->vmContext->varNameMap[i].key);
+    shfree(r->vmContext->varNameMap);
+    free(r->currentRoom->tiles);
+    hmfree(r->tileLayerMap);
+    hmfree(r->instancesById);
+    for (uint32_t i = 0; i < r->dataWin->objt.count; i++) {
+        arrfree(r->instancesByObject[i]);
+        arrfree(r->instancesByExactObject[i]);
+    }
+    free(r->instancesByObject);
+    free(r->instancesByExactObject);
+    SpatialGrid_free(r->spatialGrid);
+    arrfree(r->eventDispatchInstances);
+    arrfree(r->cachedDrawables);
+}
+
+static void testRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    Instance *first = Instance_create(100001, 0, 11, 22);
+    Instance *second = Instance_create(100002, 0, 33, 44);
+    first->alarm[3] = 9;
+    second->alarm[5] = 17;
+    arrput(r.instances, first);
+    arrput(r.instances, second);
+    GMLArray *shared = GMLArray_create(&dw, 2);
+    GMLArray_set(shared, 0, RValue_makeReal(73));
+    Instance_setSelfVar(first, 10, RValue_makeArray(shared));
+    Instance_setSelfVar(second, 11, RValue_makeArray(shared));
+    Instance_setSelfVar(vm.globalScopeInstance, 12, RValue_makeReal(91));
+    shput(vm.varNameMap, strdup("custom_state"), 12);
+    vm.nextDynamicVarID = 130;
+    DsMapEntry *map = NULL;
+    shput(map, strdup("flag"), RValue_makeBool(true));
+    arrput(r.dsMapPool, map);
+    DsList list = {0};
+    arrput(list.items, RValue_makeReal(17));
+    arrput(r.dsListPool, list);
+    room.tileCount = 1;
+    room.tiles = calloc(1, sizeof(RoomTile));
+    room.tiles[0].instanceID = 400;
+    room.tiles[0].x = 19;
+    RValue *owner = IntRValueHashMap_findSlot(&first->selfVars, 10);
+    shared->owner = owner;
+    GMLArray_decRef(shared);
+    r.random = Random_create(123);
+    uint32_t expectedRandom = r.random.state[0];
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    assert(Runner_snapshotCapture(&r, 0x1234, &bytes, &size, &reason));
+    assert(bytes && size > 0);
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 0x1234, bytes, size, &reason);
+    assert(prepared);
+    first->x = 700;
+    first->alarm[3] = -1;
+    r.frameCount = 100;
+    r.random.state[0] = 0;
+    vm.nextDynamicVarID = 900;
+    room.tiles[0].x = 900;
+    r.dsMapPool[0][0].value.int32 = 0;
+    r.dsListPool[0].items[0].real = 900;
+    Runner_snapshotApply(&r, prepared);
+    Runner_snapshotFree(prepared);
+    assert(r.frameCount == 42 && r.nextInstanceId == 100003);
+    assert(r.instances[0]->instanceId == 100001 && r.instances[1]->instanceId == 100002);
+    assert(r.instances[0]->x == 11 && r.instances[0]->alarm[3] == 9);
+    assert(r.instances[1]->alarm[5] == 17 && r.random.state[0] == expectedRandom);
+    RValue a = Instance_getSelfVar(r.instances[0], 10);
+    RValue b = Instance_getSelfVar(r.instances[1], 11);
+    assert(a.type == RVALUE_ARRAY && b.type == RVALUE_ARRAY && a.array == b.array);
+    assert(a.array->owner == IntRValueHashMap_findSlot(&r.instances[0]->selfVars, 10));
+    assert(GMLArray_get(a.array, 0).real == 73);
+    assert(Instance_getSelfVar(vm.globalScopeInstance, 12).real == 91);
+    assert(vm.nextDynamicVarID == 130);
+    assert(shget(vm.varNameMap, "custom_state") == 12);
+    assert(r.dsMapPool[0][0].value.int32 == 1);
+    assert(r.dsListPool[0].items[0].real == 17);
+    assert(room.tiles[0].x == 19);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testRejectsBadInputAndLiveResources(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    arrsetcap(r.dsQueuePool, 4); /* Allocated capacity without a live queue. */
+    arrput(r.eventDispatchInstances, NULL); /* Scratch survives completed dispatch. */
+    assert(Runner_snapshotCheck(&r) == NULL);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 7, &bytes, &size, &reason));
+    assert(Runner_snapshotPrepare(&r, 8, bytes, size, &reason) == NULL);
+    assert(Runner_snapshotPrepare(&r, 7, bytes, size - 1, &reason) == NULL);
+    bytes[size / 2] ^= 0x80;
+    assert(Runner_snapshotPrepare(&r, 7, bytes, size, &reason) == NULL);
+    assert(r.frameCount == 42);
+    free(bytes);
+    r.openTextFiles[0].isOpen = true;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    assert(!Runner_snapshotCapture(&r, 7, &bytes, &size, &reason));
+    assert(reason != NULL);
+    destroyFixture(&r);
+}
+
+static void testAllLoadedRoomsAndDefinitions(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[2]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    memset(&rooms[1], 0, sizeof(rooms[1]));
+    dw.room.count = 2;
+    rooms[1].payloadLoaded = true;
+    rooms[1].width = 640;
+    rooms[1].height = 480;
+    rooms[1].speed = 30;
+    rooms[1].tileCount = 1;
+    rooms[1].tiles = calloc(1, sizeof(RoomTile));
+    rooms[1].tiles[0].x = 17;
+    dw.gen8.gms2FPS = 30;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 45, &bytes, &size, &reason));
+    rooms[0].width = 999;
+    rooms[0].persistent = true; /* A room_set_persistent after capture. */
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 45, bytes, size, &reason);
+    assert(s);
+    rooms[1].tiles[0].x = 999;
+    rooms[1].width = 123;
+    rooms[1].height = 124;
+    rooms[1].speed = 60;
+    rooms[1].persistent = true;
+    dw.gen8.gms2FPS = 60;
+    Runner_snapshotApply(&r, s);
+    Runner_snapshotFree(s);
+    assert(rooms[1].tiles[0].x == 17);
+    assert(rooms[0].width == 320 && !rooms[0].persistent);
+    assert(rooms[1].width == 640 && rooms[1].height == 480);
+    assert(rooms[1].speed == 30 && !rooms[1].persistent);
+    assert(dw.gen8.gms2FPS == 30);
+    rooms[1].width = rooms[1].height = 4194240;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    free(bytes);
+    free(rooms[1].tiles);
+    destroyFixture(&r);
+}
+
+static void testDormantPoolHoleRefuses(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    DsQueue freed = {.freed = true};
+    arrput(r.dsQueuePool, freed);
+    DsStack stack = {.freed = true}; arrput(r.dsStackPool, stack);
+    DsPriority priority = {.freed = true}; arrput(r.dsPriorityPool, priority);
+    DsGrid grid = {.freed = true}; arrput(r.dsGridPool, grid);
+    GmlBuffer buffer = {0}; arrput(r.gmlBufferPool, buffer);
+    MpGrid mp = {0}; arrput(r.mpGridPool, mp);
+    ParticleSystem ps = {0}; arrput(r.particleSystemPool, ps);
+    ParticleType pt = {0}; arrput(r.particleTypePool, pt);
+    AudioEmitter emitter = {0}; arrput(r.audioEmitters, emitter);
+    VmVertexFormat *format = NULL; arrput(r.vertexFormats, format);
+    Buffer_Vertex *vertex = NULL; arrput(r.vertexBuffers, vertex);
+    assert(Runner_snapshotCheck(&r) == NULL);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 53, &bytes, &size, &reason));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 53, bytes, size, &reason);
+    assert(s);
+    arrput(r.dsQueuePool, freed); /* New timeline consumed id 1. */
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    assert(arrlen(r.dsQueuePool) == 1 && r.dsQueuePool[0].freed);
+    assert(arrlen(r.dsStackPool) == 1 && r.dsStackPool[0].freed);
+    assert(arrlen(r.dsPriorityPool) == 1 && r.dsPriorityPool[0].freed);
+    assert(arrlen(r.dsGridPool) == 1 && r.dsGridPool[0].freed);
+    assert(arrlen(r.gmlBufferPool) == 1 && !r.gmlBufferPool[0].isValid);
+    assert(arrlen(r.mpGridPool) == 1 && !r.mpGridPool[0].inUse);
+    assert(arrlen(r.particleSystemPool) == 1 && !r.particleSystemPool[0].used);
+    assert(arrlen(r.particleTypePool) == 1 && !r.particleTypePool[0].used);
+    assert(arrlen(r.audioEmitters) == 1 && !r.audioEmitters[0].active);
+    assert(arrlen(r.vertexFormats) == 1 && !r.vertexFormats[0]);
+    assert(arrlen(r.vertexBuffers) == 1 && !r.vertexBuffers[0]);
+    size_t nextQueueId = 0;
+    while (nextQueueId < (size_t)arrlen(r.dsQueuePool) && !r.dsQueuePool[nextQueueId].freed)
+        nextQueueId++;
+    assert(nextQueueId == 0);
+    r.dsQueuePool[0].freed = false;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testMalformedRoomCleanupAndDimensions(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 50, &bytes, &size, &reason));
+    repack(&bytes, &size, invalidRoomFlag);
+    assert(Runner_snapshotPrepare(&r, 50, bytes, size, &reason) == NULL);
+    free(bytes); bytes = NULL;
+    assert(Runner_snapshotCapture(&r, 50, &bytes, &size, &reason));
+    repack(&bytes, &size, hugeRoom);
+    assert(Runner_snapshotPrepare(&r, 50, bytes, size, &reason) == NULL);
+    free(bytes);
+    room.width = room.height = 4194240;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    destroyFixture(&r);
+}
+
+static void testRejectedPrepareKeepsLazyRoomUnloaded(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[2]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    memset(&rooms[1], 0, sizeof(rooms[1]));
+    dw.room.count = 2;
+    dw.lazyLoadRooms = true;
+    rooms[1].width = 320; rooms[1].height = 240;
+    rooms[1].payloadLoaded = true;
+    rooms[1].backgroundsFileOffset = 4;
+    rooms[1].viewsFileOffset = 8;
+    rooms[1].gameObjectsFileOffset = 12;
+    rooms[1].tilesFileOffset = 16;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 51, &bytes, &size, &reason));
+    size_t validSize = size;
+    uint8_t *validBytes = malloc(size);
+    memcpy(validBytes, bytes, size);
+    DataWin_freeRoomPayload(&rooms[1]);
+    dw.lazyLoadFile = tmpfile();
+    uint8_t emptyTables[20] = {0};
+    assert(dw.lazyLoadFile && fwrite(emptyTables, 1, sizeof(emptyTables), dw.lazyLoadFile) == sizeof(emptyTables));
+    fflush(dw.lazyLoadFile); dw.fileSize = sizeof(emptyTables);
+    repack(&bytes, &size, invalidArrayCountAfterRooms);
+    assert(Runner_snapshotPrepare(&r, 51, bytes, size, &reason) == NULL);
+    assert(!rooms[1].payloadLoaded && !rooms[1].backgrounds && !rooms[1].views);
+    assert(!rooms[1].tiles && !rooms[1].gameObjects);
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 51, validBytes, validSize, &reason);
+    assert(prepared && !rooms[1].payloadLoaded);
+    Runner_snapshotFree(prepared);
+    assert(!rooms[1].payloadLoaded && !rooms[1].backgrounds);
+    prepared = Runner_snapshotPrepare(&r, 51, validBytes, validSize, &reason);
+    assert(prepared && !rooms[1].payloadLoaded);
+    Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
+    assert(rooms[1].payloadLoaded && rooms[1].backgrounds && rooms[1].views);
+    DataWin_freeRoomPayload(&rooms[1]);
+    free(validBytes); free(bytes); fclose(dw.lazyLoadFile);
+    destroyFixture(&r);
+}
+
+static void testCumulativeArrayBudget(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    GMLArray *array = GMLArray_create(&dw, 64001);
+    GMLArray_set(array, 31999, RValue_makeReal(0));
+    GMLArray_set(array, 63999, RValue_makeReal(0));
+    Instance_setSelfVar(vm.globalScopeInstance, 10, RValue_makeArray(array));
+    GMLArray_decRef(array);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 52, &bytes, &size, &reason));
+    repack(&bytes, &size, oversizedArrayShape);
+    assert(Runner_snapshotPrepare(&r, 52, bytes, size, &reason) == NULL);
+    assert(reason && strcmp(reason, "Array element budget exceeded") == 0);
+    free(bytes); destroyFixture(&r);
+}
+
+static void testFreeCameraRefuses(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    r.freeCamZoom = 1.0f;
+    r.freeCamPanX = 0.25f;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    destroyFixture(&r);
+}
+
+static void testRoomLoadedAfterCaptureIsDiscarded(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[2]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    memset(&rooms[1], 0, sizeof(rooms[1]));
+    dw.room.count = 2;
+    dw.lazyLoadRooms = true;
+    rooms[1].width = 600;
+    rooms[1].height = 240;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 46, &bytes, &size, &reason));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 46, bytes, size, &reason);
+    assert(s);
+    rooms[1].payloadLoaded = true;
+    rooms[1].tileCount = 1;
+    rooms[1].tiles = calloc(1, sizeof(RoomTile));
+    rooms[1].tiles[0].x = 999;
+    rooms[1].width = 900;
+    Runner_snapshotApply(&r, s);
+    Runner_snapshotFree(s);
+    assert(!rooms[1].payloadLoaded && rooms[1].tileCount == 0 && rooms[1].tiles == NULL);
+    assert(rooms[1].width == 600);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testOrphanedSharedArrayOwner(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    Instance *first = Instance_create(100001, 0, 0, 0);
+    Instance *second = Instance_create(100002, 0, 0, 0);
+    arrput(r.instances, first); arrput(r.instances, second);
+    GMLArray *shared = GMLArray_create(&dw, 1);
+    GMLArray_set(shared, 0, RValue_makeReal(42));
+    Instance_setSelfVar(first, 10, RValue_makeArray(shared));
+    Instance_setSelfVar(second, 11, RValue_makeArray(shared));
+    RValue deadOwnerSlot = RValue_makeUndefined();
+    shared->owner = &deadOwnerSlot; /* A former owner outside every live root. */
+    GMLArray_decRef(shared);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 47, &bytes, &size, &reason));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 47, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s);
+    Runner_snapshotFree(s);
+    RValue *a = IntRValueHashMap_findSlot(&r.instances[0]->selfVars, 10);
+    RValue *b = IntRValueHashMap_findSlot(&r.instances[1]->selfVars, 11);
+    assert(a->array == b->array && a->array->refCount == 2);
+    assert(a->array->owner && a->array->owner != a && a->array->owner != b);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testReusedSharedArrayOwnerSlot(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    Instance *first = Instance_create(100001, 0, 0, 0);
+    Instance *second = Instance_create(100002, 0, 0, 0);
+    arrput(r.instances, first); arrput(r.instances, second);
+    GMLArray *shared = GMLArray_create(&dw, 1);
+    GMLArray_set(shared, 0, RValue_makeReal(42));
+    Instance_setSelfVar(first, 10, RValue_makeArray(shared));
+    Instance_setSelfVar(first, 12, RValue_makeReal(7));
+    Instance_setSelfVar(second, 11, RValue_makeArray(shared));
+    /* The former owner address has been reused by a live, unrelated value. */
+    RValue *reused = IntRValueHashMap_findSlot(&first->selfVars, 12);
+    shared->owner = reused;
+    GMLArray_decRef(shared);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 49, &bytes, &size, &reason));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 49, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    RValue *a = IntRValueHashMap_findSlot(&r.instances[0]->selfVars, 10);
+    RValue *b = IntRValueHashMap_findSlot(&r.instances[1]->selfVars, 11);
+    RValue *reusedAfter = IntRValueHashMap_findSlot(&r.instances[0]->selfVars, 12);
+    assert(a->array == b->array && a->array->refCount == 2);
+    assert(a->array->owner && a->array->owner != a && a->array->owner != b);
+    assert(a->array->owner != reusedAfter);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testLargeCompressibleMap(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    DsMapEntry *map = NULL;
+    char textValue[1025]; memset(textValue, 'x', 1024); textValue[1024] = 0;
+    for (int i = 0; i < 1200; i++) {
+        char key[32]; snprintf(key, sizeof(key), "key%d", i);
+        shput(map, strdup(key), RValue_makeOwnedString(strdup(textValue)));
+    }
+    arrput(r.dsMapPool, map);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 48, &bytes, &size, &reason));
+    assert(size < 1024 * 1024);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 48, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    assert(shlen(r.dsMapPool[0]) == 1200);
+    assert(strlen(shget(r.dsMapPool[0], "key1199").string) == 1024);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+int main(void) {
+    testRoundTrip();
+    testRejectsBadInputAndLiveResources();
+    testAllLoadedRoomsAndDefinitions();
+    testDormantPoolHoleRefuses();
+    testMalformedRoomCleanupAndDimensions();
+    testRejectedPrepareKeepsLazyRoomUnloaded();
+    testCumulativeArrayBudget();
+    testFreeCameraRefuses();
+    testRoomLoadedAfterCaptureIsDiscarded();
+    testOrphanedSharedArrayOwner();
+    testReusedSharedArrayOwnerSlot();
+    testLargeCompressibleMap();
+    return 0;
+}

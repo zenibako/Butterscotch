@@ -5,6 +5,28 @@
 #include "runner.h"
 #include "utils.h"
 
+#include <limits.h>
+
+bool SpatialGrid_dimensionsValid(uint32_t roomWidth, uint32_t roomHeight) {
+    if (!roomWidth || !roomHeight) return false;
+    uint64_t width = (uint64_t)roomWidth / SPATIAL_GRID_CELL_SIZE + 1;
+    uint64_t height = (uint64_t)roomHeight / SPATIAL_GRID_CELL_SIZE + 1;
+    return width <= INT16_MAX && height <= INT16_MAX && width * height <= 65536;
+}
+
+SpatialGrid* SpatialGrid_tryCreate(uint32_t roomWidth, uint32_t roomHeight) {
+    if (!SpatialGrid_dimensionsValid(roomWidth, roomHeight)) return NULL;
+    uint32_t width = roomWidth / SPATIAL_GRID_CELL_SIZE + 1;
+    uint32_t height = roomHeight / SPATIAL_GRID_CELL_SIZE + 1;
+    SpatialGrid *grid = (SpatialGrid *)calloc(1, sizeof(*grid));
+    if (!grid) return NULL;
+    grid->gridWidth = (int16_t)width;
+    grid->gridHeight = (int16_t)height;
+    grid->grid = (Instance ***)calloc((size_t)width * height, sizeof(Instance **));
+    if (!grid->grid) { free(grid); return NULL; }
+    return grid;
+}
+
 SpatialGrid* SpatialGrid_create(uint32_t roomWidth, uint32_t roomHeight) {
     SpatialGrid* grid = (SpatialGrid *)safeCalloc(1, sizeof(SpatialGrid));
 
