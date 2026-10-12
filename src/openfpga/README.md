@@ -94,6 +94,46 @@ make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
 make copy       # copy the core to a mounted Pocket SD card
 ```
 
+### Native Memories and sleep (experimental, Undertale only)
+
+The native save-state build requires a matching os25 runtime with
+`INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build
+openfpgaOS revision `7561ace` with
+`tools/openfpgaos/os25-savestates.patch` applied, then stage it into a separate SDK:
+
+The prototype patch uses the existing `INCLUDE_CLK90` option for os25. It
+runs the CPU and RAM at 90 MHz; its video and audio clocks are unchanged.
+
+```bash
+tools/stage-savestate-sdk.sh /path/to/built-openfpgaOS /path/to/base-SDK /path/to/new-SDK
+make SDK_ROOT=/path/to/new-SDK native-saves
+```
+
+The staging tool requires passing setup and hold timing reports. After an OS
+source change, rebuild its firmware and patch the matching bootloader into
+the bitstream before staging. The output is
+`out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
+The base SDK is read-only. The standard build still uses its existing SDK.
+Native container builds use the firmware image built by openfpgaOS; the app
+wrapper mounts both the SDK and this repository. Packaging needs Bash 4 or later
+on the host (Homebrew's Bash on macOS).
+
+Use the Pocket's Memories controls to save or load, or its power button to
+sleep. Exact snapshots are accepted in supported overworld scenes and the
+game's own menus. Battles, dialogue, cutscenes, the port's Select menu, and
+unsupported runtime resources produce an on-screen refusal. Select → Native
+saves shows the current scene's eligibility. A refusal stays visible until a
+fresh game-button press, including after the Pocket menu closes. A snapshot that exceeds the
+Pocket's blob limit is also refused. Ordinary game progress saves remain
+separate; loading a native snapshot rewinds its captured progress files.
+
+Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
+`BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with
+`BS_STATE_LOAD_PATH=<file>`. These run the same serializer at completed frame
+boundaries. `make snapshot-tests` checks the runner, audio, archive and envelope
+code with sanitizers, including the desktop SDK's audio queue. Native hardware
+behavior still requires Pocket tests.
+
 Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
 game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this
@@ -187,6 +227,7 @@ hardware gives a core no menu variables of its own.
 |---|---|
 | Resume | closes the menu |
 | Performance Mode | Speed or Accuracy, as L sets it |
+| Native saves | shows whether the current scene is eligible, and displays a refusal reason when selected |
 | Debug | opens the rows below |
 | Audio mode | Normal, Disabled, Music only or Sound only, to see what sound costs. Music is what the game streams or keeps in a file of its own, and sound is the effects embedded in its data, however long either is. What is muted is not decoded, mixed or read from the card, and still runs its course so that the game is not left waiting for it. Something that was playing unheard is rough until it next starts. `--mute` in `ARGS=` starts with Disabled |
 | Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |

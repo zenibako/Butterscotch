@@ -25,7 +25,9 @@ Store a versioned binary description of mutable state, never process pointers.
 Immutable code, textures and lookup tables are reloaded from the same game data.
 Preserve instance iteration order, shared array identity and array ownership.
 
-The platform envelope contains separate runner, audio and progress-file sections.
+The platform envelope contains separate runner, audio, progress-file and platform
+sections. Platform state preserves performance mode and desktop test counters;
+the latter cannot be inferred from runner frames across room transitions.
 It carries the game-data identity, format version, section lengths and checksum.
 The complete envelope must fit the service's 1 MiB window minus its header.
 Declare the actual blob size for each save handover. Never truncate a snapshot.
@@ -34,6 +36,9 @@ The runner section contains globals, all live instances, scalar instance fields,
 alarms, variables and reachable values; room identity and mutable visual state;
 RNG, game-time offset, frame/instance counters; supported DS pools; renderer
 settings. Derived object buckets, collision grids and draw caches are rebuilt.
+Runner data is bounded before compression; the compressed envelope remains
+subject to the service limit. The loaded game metadata and code are hashed at
+startup and combined with a build-time fingerprint of the complete game file.
 Unsupported resources cause refusal, including active physics, user surfaces,
 pending async work, open game file handles, unsupported values or saved-room
 resources without a restore path. Empty or dormant resources must not cause a

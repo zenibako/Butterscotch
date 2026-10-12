@@ -79,6 +79,9 @@ static inline bool SpatialGrid_instanceOverlapsRange(Instance* instance, Spatial
 }
 
 SpatialGrid* SpatialGrid_create(uint32_t gridWidth, uint32_t gridHeight);
+/* Snapshot preparation must reject hostile dimensions and allocation failure. */
+bool SpatialGrid_dimensionsValid(uint32_t roomWidth, uint32_t roomHeight);
+SpatialGrid* SpatialGrid_tryCreate(uint32_t roomWidth, uint32_t roomHeight);
 void SpatialGrid_free(SpatialGrid* grid);
 void SpatialGrid_removeInstance(SpatialGrid* grid, Instance* instance);
 
