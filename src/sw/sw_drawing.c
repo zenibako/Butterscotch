@@ -933,8 +933,11 @@ static void swrDrawSpriteInternal(
         //adjust source coordinates too
         diffxl = (int)((long)diffxl * osw / odw);
         diffyl = (int)((long)diffyl * osh / odh);
-        diffxu = (int)((long)(diffxu + 1) * osw / odw);
-        diffyu = (int)((long)(diffyu + 1) * osh / odh);
+        // A flipped draw advances its source start by the clipped amount.
+        // Adding the unflipped path's extra texel here starts one too far in,
+        // so the last flipped sample can read beyond the texture.
+        diffxu = (int)((long)(diffxu + (flipX ? 0 : 1)) * osw / odw);
+        diffyu = (int)((long)(diffyu + (flipY ? 0 : 1)) * osh / odh);
         sx += flipX ? diffxu : diffxl;
         sy += flipY ? diffyu : diffyl;
         sw -= diffxl + diffxu;

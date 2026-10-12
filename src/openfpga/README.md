@@ -106,6 +106,12 @@ script/builtin counts, native success/fallback accounting, report/reset, and
 off/on/off toggles between executions. Pass the same `PC_EXTRA_CFLAGS` sanitizer
 flags as an ASan build to check memory safety too.
 
+`make sprite-clipping-fixture WADS="16 17"` builds the asset-free
+`./undertale_pc_sprite_clipping_fixture`. It compares clipped sprites against
+crops of unclipped draws, including horizontal/vertical flips, scaling,
+transparency and an offset viewport. Pass sanitizer flags in `PC_EXTRA_CFLAGS`
+to check texture-read bounds as well.
+
 ## Deltarune (experimental)
 
 The core lists two games on the Pocket, Undertale and Deltarune. They are
