@@ -2,7 +2,7 @@
 
 > For agentic workers: execute the tasks with tests and review before integration.
 
-**Goal:** Exact native Memories and sleep for safe Undertale overworld/menu states.
+**Goal:** Exact save states and sleep for safe Undertale overworld/menu states.
 
 **Architecture:** A versioned platform envelope carries runner, audio and progress
 archive snapshots. Capture and restore occur at the completed frame boundary;
@@ -117,3 +117,19 @@ reported margin is 0.089 ns. The paired runtime and RISC-V app are packaged in
 snapshots are about 786 KiB, within the service envelope. Hardware behavior
 remains unverified. Task tracking is here because the configured GitLab work-item
 lookup is unavailable from this sandbox.
+
+## First Pocket test: open INI and refused sleep
+
+The Snowdin overworld save was refused because the runner kept an INI context
+open. The same refusal reproduced on desktop with a temporary copy of the
+Pocket's ordinary progress archive, in `room_tundra3`. The card's sleep payload
+still contained PICO-8 data with a valid outer CRC, explaining Undertale's wake
+rejection. The user confirmed sleep was attempted after the INI refusal; no
+successful Undertale save state preceded it.
+
+Current and cached INI sections, ordered keys/values, paths, and dirty state are
+now included in a bounded optional core trailer. Preparation and apply do not
+flush those edits to disk. Desktop save/cold-load of the same Snowdin scene now
+succeeds; subsequent movement frames match byte-for-byte, including under
+ASan/UBSan. Wrong-application payloads have a specific rejection message.
+User-facing terminology is "save states". Pocket sleep/wake retesting is pending.

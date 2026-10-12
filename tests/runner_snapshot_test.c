@@ -76,6 +76,32 @@ static void oversizedArrayShape(uint8_t *raw, size_t n) {
     }
     assert(false);
 }
+static void invalidIniMagic(uint8_t *raw, size_t n) {
+    for (size_t i = n - 8; i > 0; i--)
+        if (le32(raw + i) == 0x31494e49u) {
+            write32(raw + i, 0);
+            return;
+        }
+    assert(false);
+}
+static void removeIniAndMaybeDormantTail(uint8_t **bytes, size_t *size,
+                                         size_t drop) {
+    uint32_t rawLen = le32(*bytes + 24);
+    uint8_t *raw = malloc(rawLen);
+    mz_ulong n = rawLen;
+    assert(mz_uncompress(raw, &n, *bytes + 32, *size - 32) == MZ_OK && n == rawLen);
+    assert(drop <= rawLen);
+    rawLen -= (uint32_t)drop;
+    mz_ulong cap = mz_compressBound(rawLen);
+    uint8_t *out = malloc(cap + 32);
+    assert(mz_compress2(out + 32, &cap, raw, rawLen, MZ_DEFAULT_COMPRESSION) == MZ_OK);
+    memcpy(out, *bytes, 32);
+    write32(out + 16, (uint32_t)cap + 8);
+    write32(out + 24, rawLen);
+    write32(out + 28, hashBytes(raw, rawLen));
+    write32(out + 20, hashBytes(out + 24, cap + 8));
+    free(raw); free(*bytes); *bytes = out; *size = cap + 32;
+}
 
 static void fixture(Runner *r, DataWin *dw, VMContext *vm, Renderer *renderer,
                     RendererVtable *vtable, Room *room, GameObject *object) {
@@ -151,6 +177,8 @@ static void destroyFixture(Runner *r) {
     free(r->instancesByObject);
     free(r->instancesByExactObject);
     SpatialGrid_free(r->spatialGrid);
+    Ini_free(r->currentIni); free(r->currentIniPath);
+    Ini_free(r->cachedIni); free(r->cachedIniPath);
     arrfree(r->eventDispatchInstances);
     arrfree(r->cachedDrawables);
 }
@@ -403,6 +431,98 @@ static void testCumulativeArrayBudget(void) {
     free(bytes); destroyFixture(&r);
 }
 
+static void testOpenIniRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    r.currentIni = Ini_parse("[route]\nname=old\n[empty]\n");
+    r.currentIniPath = strdup("snowdin.ini");
+    Ini_setString(r.currentIni, "route", "name", "Snowdin\"line\nnext");
+    r.currentIniDirty = true;
+    r.cachedIni = Ini_parse("[cache]\nmarker=warm\n");
+    r.cachedIniPath = strdup("prior.ini");
+    IniFile *liveCurrent = r.currentIni, *liveCache = r.cachedIni;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    assert(Runner_snapshotCapture(&r, 54, &bytes, &size, &reason));
+    uint8_t *invalid = malloc(size);
+    memcpy(invalid, bytes, size);
+    size_t invalidSize = size;
+    repack(&invalid, &invalidSize, invalidIniMagic);
+    assert(Runner_snapshotPrepare(&r, 54, invalid, invalidSize, &reason) == NULL);
+    assert(r.currentIni == liveCurrent && r.cachedIni == liveCache && r.currentIniDirty);
+    free(invalid);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 54, bytes, size, &reason);
+    assert(s && r.currentIni == liveCurrent && r.cachedIni == liveCache);
+    Runner_snapshotFree(s);
+    assert(r.currentIni == liveCurrent && r.cachedIni == liveCache);
+    s = Runner_snapshotPrepare(&r, 54, bytes, size, &reason);
+    assert(s);
+    Ini_setString(r.currentIni, "route", "name", "later");
+    r.currentIniDirty = false;
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    assert(r.currentIni && r.cachedIni && r.currentIni != r.cachedIni);
+    assert(strcmp(r.currentIniPath, "snowdin.ini") == 0);
+    assert(strcmp(r.cachedIniPath, "prior.ini") == 0);
+    assert(r.currentIniDirty);
+    assert(strcmp(Ini_getString(r.currentIni, "route", "name"), "Snowdin\"line\nnext") == 0);
+    assert(Ini_hasSection(r.currentIni, "empty"));
+    assert(strcmp(Ini_getString(r.cachedIni, "cache", "marker"), "warm") == 0);
+    free(bytes);
+    Ini_free(r.currentIni); free(r.currentIniPath);
+    Ini_free(r.cachedIni); free(r.cachedIniPath);
+    r.currentIni = Ini_parse("[string]\nkind=memory\n");
+    r.currentIniPath = NULL; r.currentIniDirty = true;
+    r.cachedIni = Ini_parse("[old]\nkind=string-cache\n");
+    r.cachedIniPath = NULL;
+    bytes = NULL; size = 0;
+    assert(Runner_snapshotCapture(&r, 55, &bytes, &size, &reason));
+    s = Runner_snapshotPrepare(&r, 55, bytes, size, &reason);
+    assert(s); Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    assert(r.currentIni && r.currentIniPath == NULL && r.currentIniDirty);
+    assert(r.cachedIni && r.cachedIniPath == NULL);
+    assert(strcmp(Ini_getString(r.currentIni, "string", "kind"), "memory") == 0);
+    assert(strcmp(Ini_getString(r.cachedIni, "old", "kind"), "string-cache") == 0);
+    free(bytes); destroyFixture(&r);
+}
+
+static void testSharedIniEntryBudget(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    r.currentIni = calloc(1, sizeof(*r.currentIni));
+    r.currentIni->sections = calloc(65536, sizeof(IniSection));
+    r.currentIni->capacity = 65536;
+    for (int i = 0; i < 65536; i++)
+        r.currentIni->sections[i].name = strdup("s");
+    r.currentIni->count = 65535;
+    r.cachedIni = Ini_parse("[cached]\n");
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 57, &bytes, &size, &reason));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 57, bytes, size, &reason);
+    assert(s); Runner_snapshotFree(s); free(bytes);
+    r.currentIni->count = 65536;
+    bytes = NULL; size = 0; reason = NULL;
+    assert(!Runner_snapshotCapture(&r, 57, &bytes, &size, &reason));
+    assert(reason && strcmp(reason, "INI entry budget exceeded") == 0);
+    destroyFixture(&r);
+}
+
+static void testOlderCoreV3Trailers(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 56, &bytes, &size, &reason));
+    removeIniAndMaybeDormantTail(&bytes, &size, 8);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 56, bytes, size, &reason);
+    assert(s); Runner_snapshotFree(s);
+    removeIniAndMaybeDormantTail(&bytes, &size, 44);
+    s = Runner_snapshotPrepare(&r, 56, bytes, size, &reason);
+    assert(s); Runner_snapshotFree(s);
+    free(bytes); destroyFixture(&r);
+}
+
 static void testFreeCameraRefuses(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -529,6 +649,9 @@ int main(void) {
     testMalformedRoomCleanupAndDimensions();
     testRejectedPrepareKeepsLazyRoomUnloaded();
     testCumulativeArrayBudget();
+    testOpenIniRoundTrip();
+    testSharedIniEntryBudget();
+    testOlderCoreV3Trailers();
     testFreeCameraRefuses();
     testRoomLoadedAfterCaptureIsDiscarded();
     testOrphanedSharedArrayOwner();
