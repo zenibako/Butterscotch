@@ -21,6 +21,7 @@
 #define SNAP_OWNER_ORPHAN (UINT32_MAX - 1u)
 #define SNAP_DORMANT_POOL_COUNT 11u
 #define SNAP_DORMANT_SLOT_LIMIT 4096u
+#define SNAP_INI_MAGIC 0x31494e49u /* INI1 */
 
 typedef struct { uint8_t *p; size_t n, cap; bool ok; const char *failure; } Writer;
 typedef struct { const uint8_t *p; size_t n, pos; bool ok; } Reader;
@@ -195,6 +196,9 @@ struct RunnerSnapshot {
     Instance **instances;
     DsMapEntry **maps;
     DsList *lists;
+    IniFile *currentIni, *cachedIni;
+    char *currentIniPath, *cachedIniPath;
+    bool currentIniDirty;
     DsQueue *queues;
     DsStack *stacks;
     DsPriority *priorities;
@@ -222,6 +226,8 @@ struct RunnerSnapshot {
     Instance **oldInstances;
     DsMapEntry **oldMaps;
     DsList *oldLists;
+    IniFile *oldCurrentIni;
+    char *oldCurrentIniPath;
     DsQueue *oldQueues;
     DsStack *oldStacks;
     DsPriority *oldPriorities;
@@ -305,6 +311,8 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
         freeBuckets(s->oldByObject, s->objectCount);
         freeBuckets(s->oldByExact, s->objectCount);
         if (s->oldGrid) SpatialGrid_free(s->oldGrid);
+        if (s->oldCurrentIni) Ini_free(s->oldCurrentIni);
+        free(s->oldCurrentIniPath);
         if (s->oldCachedIni) Ini_free(s->oldCachedIni);
         free(s->oldCachedIniPath);
     } else {
@@ -318,6 +326,10 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
         freeBuckets(s->byObject, s->objectCount);
         freeBuckets(s->byExact, s->objectCount);
         if (s->grid) SpatialGrid_free(s->grid);
+        if (s->currentIni) Ini_free(s->currentIni);
+        free(s->currentIniPath);
+        if (s->cachedIni) Ini_free(s->cachedIni);
+        free(s->cachedIniPath);
     }
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) GMLArray_decRef(s->arrays[i]);
     arrfree(s->arrays); arrfree(s->owners); arrfree(s->slots);
@@ -375,7 +387,8 @@ static bool eligible(Runner *r, const char **reason, bool forCapture) {
             REFUSE("Loaded room tiles are unavailable");
     }
     if (arrlen(r->runtimeLayers)) REFUSE("Runtime layers are unsupported");
-    if (r->currentIni) REFUSE("Open INI is unsupported");
+    if (r->currentIni && r->currentIni == r->cachedIni)
+        REFUSE("Aliased INI cache is unsupported");
     for (int i = 0; i < MAX_OPEN_TEXT_FILES; i++) if (r->openTextFiles[i].isOpen) REFUSE("Open text file");
     for (int i = 0; i < MAX_OPEN_BINARY_FILES; i++) if (r->openBinaryFiles[i].isOpen) REFUSE("Open binary file");
     if (arrlen(r->fileFindResults)) REFUSE("File enumeration is active");
@@ -507,6 +520,38 @@ static void putString(Writer *w, const char *s) {
     if (n > SNAP_LIMIT) { w->ok = false; w->failure = "Runner snapshot string exceeds the size limit"; return; }
     put32(w, (uint32_t)n); put(w, s, n);
 }
+static void putIni(Writer *w, const IniFile *ini, uint32_t *entryBudget) {
+    if (!ini || ini->count < 0 || !countOK((uint32_t)ini->count) ||
+        (ini->count && !ini->sections)) {
+        w->ok = false; w->failure = "Invalid INI section count"; return;
+    }
+    if ((uint32_t)ini->count > *entryBudget) {
+        w->ok = false; w->failure = "INI entry budget exceeded"; return;
+    }
+    *entryBudget -= (uint32_t)ini->count;
+    put32(w, (uint32_t)ini->count);
+    for (int i = 0; i < ini->count && w->ok; i++) {
+        const IniSection *section = &ini->sections[i];
+        if (!section->name || section->count < 0 ||
+            !countOK((uint32_t)section->count) ||
+            (section->count && (!section->keys || !section->values))) {
+            w->ok = false; w->failure = "Invalid INI entry count"; return;
+        }
+        if ((uint32_t)section->count > *entryBudget) {
+            w->ok = false; w->failure = "INI entry budget exceeded"; return;
+        }
+        *entryBudget -= (uint32_t)section->count;
+        putString(w, section->name);
+        put32(w, (uint32_t)section->count);
+        for (int j = 0; j < section->count && w->ok; j++) {
+            if (!section->keys[j] || !section->values[j]) {
+                w->ok = false; w->failure = "Invalid INI entry"; return;
+            }
+            putString(w, section->keys[j]);
+            putString(w, section->values[j]);
+        }
+    }
+}
 static void putValue(Writer *w, const Graph *g, RValue *v) {
     put32(w, (uint32_t)v->type | ((uint32_t)v->gmlStackType << 8) |
              ((uint32_t)v->assetRefType << 16));
@@ -618,6 +663,18 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     put32(&w, (uint32_t)arrlen(r->audioEmitters));
     put32(&w, (uint32_t)arrlen(r->vertexFormats));
     put32(&w, (uint32_t)arrlen(r->vertexBuffers));
+    put32(&w, SNAP_INI_MAGIC);
+    uint32_t iniFlags = (r->currentIni ? 1u : 0u) |
+        (r->cachedIni ? 2u : 0u) |
+        (r->currentIniPath ? 4u : 0u) |
+        (r->cachedIniPath ? 8u : 0u) |
+        (r->currentIniDirty ? 16u : 0u);
+    put32(&w, iniFlags);
+    uint32_t iniEntryBudget = SNAP_MAX_ITEMS;
+    if (r->currentIniPath) putString(&w, r->currentIniPath);
+    if (r->currentIni) putIni(&w, r->currentIni, &iniEntryBudget);
+    if (r->cachedIniPath) putString(&w, r->cachedIniPath);
+    if (r->cachedIni) putIni(&w, r->cachedIni, &iniEntryBudget);
     arrfree(g.slots); arrfree(g.arrays);
     if (!w.ok || w.n > SNAP_LIMIT) {
         if (reason) *reason = w.failure ? w.failure : "Runner snapshot encoding failed";
@@ -660,6 +717,40 @@ static char *getString(Reader *rd) {
     get(rd, out, len); out[len] = 0;
     if (strlen(out) != len) { rd->ok = false; free(out); return NULL; }
     return out;
+}
+static IniFile *getIni(Reader *rd, uint32_t *entryBudget) {
+    uint32_t sections = get32(rd);
+    if (!rd->ok || !countOK(sections) || sections > (rd->n - rd->pos) / 8 ||
+        sections > *entryBudget) { rd->ok = false; return NULL; }
+    *entryBudget -= sections;
+    IniFile *ini = (IniFile *)calloc(1, sizeof(*ini));
+    if (!ini) { rd->ok = false; return NULL; }
+    ini->sections = (IniSection *)calloc(sections ? sections : 1, sizeof(IniSection));
+    if (!ini->sections) { free(ini); rd->ok = false; return NULL; }
+    ini->count = ini->capacity = (int)sections;
+    for (uint32_t i = 0; i < sections && rd->ok; i++) {
+        IniSection *section = &ini->sections[i];
+        section->name = getString(rd);
+        uint32_t count = get32(rd);
+        if (!rd->ok || !section->name || !countOK(count) ||
+            count > *entryBudget || count > (rd->n - rd->pos) / 8) {
+            rd->ok = false; break;
+        }
+        *entryBudget -= count;
+        section->keys = (char **)calloc(count ? count : 1, sizeof(char *));
+        section->values = (char **)calloc(count ? count : 1, sizeof(char *));
+        if (!section->keys || !section->values) {
+            rd->ok = false; break;
+        }
+        section->count = section->capacity = (int)count;
+        for (uint32_t j = 0; j < count && rd->ok; j++) {
+            section->keys[j] = getString(rd);
+            section->values[j] = getString(rd);
+            if (!section->keys[j] || !section->values[j]) rd->ok = false;
+        }
+    }
+    if (!rd->ok) { Ini_free(ini); return NULL; }
+    return ini;
 }
 static RValue *slotPointer(RunnerSnapshot *s, SlotRef ref) {
     switch (ref.kind) {
@@ -962,7 +1053,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     }
     uint32_t dormant[SNAP_DORMANT_POOL_COUNT] = {0};
     if (rd.ok && rd.pos != rd.n) {
-        if (rd.n - rd.pos != sizeof(dormant)) goto bad;
+        if (rd.n - rd.pos < sizeof(dormant)) goto bad;
         uint32_t total = 0;
         for (uint32_t i = 0; i < SNAP_DORMANT_POOL_COUNT; i++) {
             dormant[i] = get32(&rd);
@@ -994,6 +1085,20 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     for (ptrdiff_t i = 0; i < arrlen(s->stacks); i++) s->stacks[i].freed = true;
     for (ptrdiff_t i = 0; i < arrlen(s->priorities); i++) s->priorities[i].freed = true;
     for (ptrdiff_t i = 0; i < arrlen(s->grids); i++) s->grids[i].freed = true;
+    if (rd.ok && rd.pos != rd.n) {
+        uint32_t magic = get32(&rd), flags = get32(&rd);
+        if (!rd.ok || magic != SNAP_INI_MAGIC || (flags & ~31u)) goto bad;
+        uint32_t entries = SNAP_MAX_ITEMS;
+        if (flags & 4u) s->currentIniPath = getString(&rd);
+        if (flags & 1u) s->currentIni = getIni(&rd, &entries);
+        if (flags & 8u) s->cachedIniPath = getString(&rd);
+        if (flags & 2u) s->cachedIni = getIni(&rd, &entries);
+        if (!rd.ok || ((flags & 4u) && !s->currentIniPath) ||
+            ((flags & 1u) && !s->currentIni) ||
+            ((flags & 8u) && !s->cachedIniPath) ||
+            ((flags & 2u) && !s->cachedIni)) goto bad;
+        s->currentIniDirty = (flags & 16u) != 0;
+    }
     if (!rd.ok || rd.pos != rd.n) goto bad;
     for (uint32_t a = 0; a < arrayCount; a++) {
         uint32_t owner = s->owners[a];
@@ -1099,6 +1204,8 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     s->oldById = r->instancesById;
     s->oldByObject = r->instancesByObject; s->oldByExact = r->instancesByExactObject;
     s->oldGrid = r->spatialGrid;
+    s->oldCurrentIni = r->currentIni;
+    s->oldCurrentIniPath = r->currentIniPath;
     s->oldCachedIni = r->cachedIni; s->oldCachedIniPath = r->cachedIniPath;
 
     r->vmContext->globalScopeInstance = s->global;
@@ -1140,7 +1247,11 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
         room->width = state->width; room->height = state->height;
         room->speed = state->speed; room->persistent = state->persistent;
     }
-    r->cachedIni = NULL; r->cachedIniPath = NULL;
+    r->currentIni = s->currentIni;
+    r->currentIniPath = s->currentIniPath;
+    r->currentIniDirty = s->currentIniDirty;
+    r->cachedIni = s->cachedIni;
+    r->cachedIniPath = s->cachedIniPath;
     for (uint32_t i = 0; i < r->dataWin->room.count; i++)
         if (r->savedRoomStates) r->savedRoomStates[i].initialized = s->roomInitialized[i];
     applyPlain(r, &s->plain);

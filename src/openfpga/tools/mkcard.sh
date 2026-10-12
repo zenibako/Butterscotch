@@ -47,7 +47,7 @@ root = pathlib.Path(sys.argv[1])
 for path in root.glob('Cores/*/core.json'):
     data = json.loads(path.read_text())
     data['core']['framework']['sleep_supported'] = True
-    data['core']['metadata']['description'] = 'Undertale with native Memories and sleep (experimental)'
+    data['core']['metadata']['description'] = 'Undertale with save states and sleep (experimental)'
     path.write_text(json.dumps(data, indent=4) + '\n')
 for path in root.glob('Assets/*/*/Deltarune.json'):
     path.unlink()

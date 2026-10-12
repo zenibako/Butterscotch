@@ -881,13 +881,13 @@ static const char *menuSnapshotValue(void) {
 static bool menuSnapshotReason(int direction) {
     (void)direction;
     const char *why = ofSavestateReason(g_runner);
-    showNotice(why ? why : "Native save is ready");
+    showNotice(why ? why : "Use Pocket controls to save");
     return true;
 }
 static const OfMenuRow g_menuRows[] = {
     { "Resume",                    NULL,                 menuResume,       NULL },
     { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
-    { "Native saves",              menuSnapshotValue,    menuSnapshotReason, NULL },
+    { "Save states",              menuSnapshotValue,    menuSnapshotReason, NULL },
     { "Debug",                     NULL,                 NULL,             &g_debugPage },
 };
 

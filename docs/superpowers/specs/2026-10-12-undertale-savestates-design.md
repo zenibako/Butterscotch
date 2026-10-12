@@ -1,4 +1,4 @@
-# Undertale native Memories and sleep
+# Undertale save states and sleep
 
 Approved scope: Undertale first, exact overworld and menu restoration, with a
 visible refusal when the live state cannot be restored safely. Battles and
@@ -35,7 +35,9 @@ Declare the actual blob size for each save handover. Never truncate a snapshot.
 The runner section contains globals, all live instances, scalar instance fields,
 alarms, variables and reachable values; room identity and mutable visual state;
 RNG, game-time offset, frame/instance counters; supported DS pools; renderer
-settings. Derived object buckets, collision grids and draw caches are rebuilt.
+settings; current and cached INI contexts, including paths and pending dirty
+edits. Capturing an open INI does not close it or flush it to the progress file.
+Derived object buckets, collision grids and draw caches are rebuilt.
 Runner data is bounded before compression; the compressed envelope remains
 subject to the service limit. The loaded game metadata and code are hashed at
 startup and combined with a build-time fingerprint of the complete game file.

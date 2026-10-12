@@ -355,6 +355,8 @@ profiler-fixture: $(PC_OBJS)
 native-saves:
 	$(MAKE) GAME=undertale SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all
 
+save-states: native-saves
+
 snapshot-tests:
 	@SDK_ROOT="$(SDK_ROOT)" tools/test-snapshots.sh
 
@@ -399,4 +401,4 @@ clean: sdk-clean
 	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops $(APP)_pc $(APP)_pc_asan $(APP)_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves native-size snapshot-tests
+.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves save-states native-size snapshot-tests

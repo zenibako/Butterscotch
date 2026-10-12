@@ -68,9 +68,9 @@ static GMLReal number(Runner *r, Instance *instance, const char *name) {
 const char *utSavestateReason(Runner *r) {
 #if !defined(OF_PC) && !defined(UT_GAME_DELTARUNE)
 #ifdef UT_NATIVE_SAVESTATES
-    if (!g_service) return "Native save service is unavailable";
+    if (!g_service) return "Save-state service is unavailable";
 #else
-    return "This build has no native saves";
+    return "This build has no save states";
 #endif
 #endif
 #ifdef UT_GAME_DELTARUNE
@@ -105,7 +105,7 @@ bool utSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
     const char *why = utSavestateReason(r);
 #ifdef OF_PC
     if (r && r->vmContext && r->vmContext->globalScopeInstance)
-        logInfo("Native save profile: interact %.0f\n", (double)number(r, r->vmContext->globalScopeInstance, "interact"));
+        logInfo("Save-state profile: interact %.0f\n", (double)number(r, r->vmContext->globalScopeInstance, "interact"));
 #endif
     if (why) { *reason = why; return false; }
     uint8_t *parts[3] = {0}; size_t sizes[3] = {0};
@@ -131,7 +131,9 @@ bool utSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
 bool utSavestateRestore(Runner *r, const uint8_t *data, size_t size, const char **reason) {
     UtSnapshotSection parts[4];
     if (!utSnapshotUnpack(g_gameId, data, size, parts)) {
-        *reason = "State is damaged or incompatible"; return false;
+        *reason = data && size >= 4 && memcmp(data, "UTS1", 4) != 0
+            ? "Not an Undertale save state" : "State is damaged or incompatible";
+        return false;
     }
     UtSnapshotReader platform = {parts[3].data, parts[3].size, 0, true};
     uint32_t values[3];
@@ -177,7 +179,7 @@ static bool hostRequest(Runner *r, bool load, const char *path) {
         ok = f && fwrite(data, 1, size, f) == size;
         if (f && fclose(f) != 0) ok = false;
     }
-    logInfo("Native state %s: %s (%zu bytes)%s%s\n", load ? "load" : "save", ok ? "ok" : "refused",
+    logInfo("Save state %s: %s (%zu bytes)%s%s\n", load ? "load" : "save", ok ? "ok" : "refused",
         size, reason ? ": " : "", reason ? reason : "");
     if (!ok) utPlatformSnapshotNotice(reason ? reason : "State request failed");
     free(data); return ok;
