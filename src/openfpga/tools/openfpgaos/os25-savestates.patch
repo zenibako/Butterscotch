@@ -22,6 +22,6 @@ index a1e7864..7288ad9 100644
          INCLUDE_CPU_RING INCLUDE_GPU_WRITE_BURSTS EXCLUDE_GPU_COMMAND_DMA \
 -        INCLUDE_SPAN_DEDICATED_MULT
 +        INCLUDE_SPAN_DEDICATED_MULT INCLUDE_SAVESTATE INCLUDE_CLK90
- 
+
  # Separate span products from the shared perspective DSP operand mux.
  # Bit-exact and cycle-identical in Quake/Doom replays; paired seeds 15/20
