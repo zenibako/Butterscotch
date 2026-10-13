@@ -5,13 +5,14 @@
 #include "runner.h"
 #include "utils.h"
 
-#include <limits.h>
+/* Grid dimensions are int16_t; legacy C++ headers may omit INT16_MAX. */
+enum { SPATIAL_GRID_COORDINATE_MAX = 32767 };
 
 bool SpatialGrid_dimensionsValid(uint32_t roomWidth, uint32_t roomHeight) {
     if (!roomWidth || !roomHeight) return false;
     uint64_t width = (uint64_t)roomWidth / SPATIAL_GRID_CELL_SIZE + 1;
     uint64_t height = (uint64_t)roomHeight / SPATIAL_GRID_CELL_SIZE + 1;
-    return width <= INT16_MAX && height <= INT16_MAX && width * height <= 65536;
+    return width <= SPATIAL_GRID_COORDINATE_MAX && height <= SPATIAL_GRID_COORDINATE_MAX && width * height <= 65536;
 }
 
 SpatialGrid* SpatialGrid_tryCreate(uint32_t roomWidth, uint32_t roomHeight) {
