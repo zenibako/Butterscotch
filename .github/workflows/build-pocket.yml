@@ -56,7 +56,7 @@ jobs:
       - name: Check the interpreter loop is in block RAM
         working-directory: butterscotch/src/openfpga
         run: |
-          # UT_FAST_LOOP puts executeLoop in the app's uncached block RAM, below
+          # OF_FAST_LOOP puts executeLoop in the app's uncached block RAM, below
           # the SDRAM the rest of the program is linked into.
           for game in undertale deltarune; do
             line=$(riscv64-unknown-elf-nm -S out/.obj/$game/app.elf | grep -E ' executeLoop(\..*)?$' || true)
@@ -88,7 +88,7 @@ jobs:
           make profiler-fixture WADS="16 17" PC_OBJ_DIR="$PWD/out/.obj/profiler-fixture"
           ./undertale_pc_profiler_fixture
           make profiler-fixture WADS="16 17" PC_BIN=undertale_pc_generic \
-            PC_OBJ_DIR="$PWD/out/.obj/profiler-fixture-generic" PC_EXTRA_CFLAGS=-UUT_FAST_LOOP
+            PC_OBJ_DIR="$PWD/out/.obj/profiler-fixture-generic" PC_EXTRA_CFLAGS=-UOF_FAST_LOOP
           ./undertale_pc_generic_profiler_fixture
 
       - name: Check clipped sprite pixels and texture bounds

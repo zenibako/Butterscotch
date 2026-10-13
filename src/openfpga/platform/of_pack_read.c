@@ -17,7 +17,7 @@
 #include "gettime.h"
 #include "log.h"
 #include "of_hooks.h"
-#include "ut_bench.h"
+#include "of_bench.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,12 +27,12 @@
 
 /* Staging memory for direct reads; smaller sizes are tried if the OS cannot
  * give this much. */
-#define UT_PACK_STAGE_BYTES (64u * 1024u)
-#define UT_PACK_STAGE_MIN (16u * 1024u)
+#define OF_PACK_STAGE_BYTES (64u * 1024u)
+#define OF_PACK_STAGE_MIN (16u * 1024u)
 /* As for music: longer than the 2 s after which the OS drops a stalled read
  * (a screenshot being saved), after which direct reads are not used again. */
-#define UT_PACK_TIMEOUT_NANOS 3000000000ull
-#define UT_PACK_SETTLE_NANOS 3000000000ull
+#define OF_PACK_TIMEOUT_NANOS 3000000000ull
+#define OF_PACK_SETTLE_NANOS 3000000000ull
 
 static bool g_packProbed;
 static bool g_packDirect;
@@ -58,9 +58,9 @@ static void packProbe(const char *path) {
     g_packProbed = true;
     uint32_t slot = 0;
     uint32_t maxRead = of_file_async_max_read();
-    if (maxRead < UT_PACK_STAGE_MIN || of_file_slot_find(path, &slot) != 0) return;
-    uint32_t size = UT_PACK_STAGE_BYTES < maxRead ? UT_PACK_STAGE_BYTES : maxRead;
-    for (; size >= UT_PACK_STAGE_MIN && g_packStage == NULL; size /= 2) {
+    if (maxRead < OF_PACK_STAGE_MIN || of_file_slot_find(path, &slot) != 0) return;
+    uint32_t size = OF_PACK_STAGE_BYTES < maxRead ? OF_PACK_STAGE_BYTES : maxRead;
+    for (; size >= OF_PACK_STAGE_MIN && g_packStage == NULL; size /= 2) {
         g_packStage = of_file_dma_stage_alloc(size, 4096);
         if (g_packStage != NULL) g_packPiece = size;
     }
@@ -81,11 +81,11 @@ static bool packReadPiece(uint32_t offset, uint32_t size) {
     g_packRefusedNanos += nowNanos() - start;
     /* The poll is the OS's fallback for a lost interrupt. */
     while (!g_packDone && of_file_async_poll() != 1) {
-        if (nowNanos() - start > UT_PACK_TIMEOUT_NANOS) {
+        if (nowNanos() - start > OF_PACK_TIMEOUT_NANOS) {
             /* Do not go back to ordinary reads while the OS still counts
              * this one as in flight. */
             uint64_t gaveUp = nowNanos();
-            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < UT_PACK_SETTLE_NANOS) of_file_async_poll();
+            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < OF_PACK_SETTLE_NANOS) of_file_async_poll();
             logWarn("SWR: a direct texture read timed out; using fread from here on.\n");
             g_packDirect = false;
             return false;
@@ -117,9 +117,9 @@ static uint64_t timedRead(uint32_t slot, uint32_t offset, uint32_t size) {
         if (nowNanos() - start > 50000000ull) return 0;
     }
     while (!g_packDone && of_file_async_poll() != 1) {
-        if (nowNanos() - start > UT_PACK_TIMEOUT_NANOS) {
+        if (nowNanos() - start > OF_PACK_TIMEOUT_NANOS) {
             uint64_t gaveUp = nowNanos();
-            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < UT_PACK_SETTLE_NANOS) of_file_async_poll();
+            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < OF_PACK_SETTLE_NANOS) of_file_async_poll();
             return 0;
         }
     }
@@ -131,11 +131,11 @@ uint32_t swrTexturePackOffset(void);
 
 /* Each kind of read is timed a few times, every read at a part of its file
  * not read before in this probe, so nothing can come from a cache. */
-void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
+void ofPlatformReadCosts(unsigned tenths[OF_READ_COSTS]) {
     enum { SIZE = 4096, ROUNDS = 4, STRIDE = 96 * 1024 };
-    uint64_t total[UT_READ_COSTS] = { 0 };
-    unsigned counted[UT_READ_COSTS] = { 0 };
-    memset(tenths, 0, UT_READ_COSTS * sizeof(tenths[0]));
+    uint64_t total[OF_READ_COSTS] = { 0 };
+    unsigned counted[OF_READ_COSTS] = { 0 };
+    memset(tenths, 0, OF_READ_COSTS * sizeof(tenths[0]));
     uint32_t musicSlot = 0, dataSlot = 0;
     /* The texture pack is opened, and its first read made, by its first sprite. */
     uint32_t texAt = swrTexturePackOffset(), musicAt = 0, dataAt = 0;
@@ -146,29 +146,29 @@ void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
     #define COUNT(kind, nanos) do { uint64_t n_ = (nanos); if (n_ != 0) { total[kind] += n_; counted[kind]++; } } while (0)
     for (int round = 0; round < ROUNDS; round++) {
         TEX();
-        COUNT(UT_READ_TEX_TEX, TEX());
-        COUNT(UT_READ_TEX_MUSIC, MUSIC());
-        COUNT(UT_READ_MUSIC_TEX, TEX());
+        COUNT(OF_READ_TEX_TEX, TEX());
+        COUNT(OF_READ_TEX_MUSIC, MUSIC());
+        COUNT(OF_READ_MUSIC_TEX, TEX());
         MUSIC();
-        COUNT(UT_READ_MUSIC_MUSIC, MUSIC());
+        COUNT(OF_READ_MUSIC_MUSIC, MUSIC());
         TEX();
         uint64_t idle = nowNanos();
         while (nowNanos() - idle < 100000000ull) {}
-        COUNT(UT_READ_IDLE_TEX, TEX());
+        COUNT(OF_READ_IDLE_TEX, TEX());
         timedRead(dataSlot, (dataAt += STRIDE), SIZE);
-        COUNT(UT_READ_FILE_TEX, TEX());
+        COUNT(OF_READ_FILE_TEX, TEX());
     }
     #undef TEX
     #undef MUSIC
     #undef COUNT
-    for (int kind = 0; kind < UT_READ_COSTS; kind++)
+    for (int kind = 0; kind < OF_READ_COSTS; kind++)
         if (counted[kind] != 0) tenths[kind] = (unsigned) (total[kind] / counted[kind] / 100000u);
 }
 
 #else
 
-void utPlatformReadCosts(unsigned tenths[UT_READ_COSTS]) {
-    memset(tenths, 0, UT_READ_COSTS * sizeof(tenths[0]));
+void ofPlatformReadCosts(unsigned tenths[OF_READ_COSTS]) {
+    memset(tenths, 0, OF_READ_COSTS * sizeof(tenths[0]));
 }
 
 uint64_t platformPackRefusedNanos(void) {

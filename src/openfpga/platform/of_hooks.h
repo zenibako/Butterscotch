@@ -22,14 +22,14 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 bool platformPackRead(const char *path, uint32_t offset, uint32_t size, void *dest);
 uint64_t platformPackRefusedNanos(void);
 /* Port-internal: a file stored in the audio pack (of_audio_system.c). */
-bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize);
-bool utAudioHasPackFile(const char *path);
+bool ofAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize);
+bool ofAudioHasPackFile(const char *path);
 
 /* What is heard (a debug setting): a muted sound runs its course unheard and costs almost nothing. Music is
  * what the game streams or keeps in a file of its own, a sound effect what is embedded in its data. */
-typedef enum { UT_AUDIO_NORMAL, UT_AUDIO_DISABLED, UT_AUDIO_MUSIC_ONLY, UT_AUDIO_SOUND_ONLY, UT_AUDIO_MODE_COUNT } UtAudioMode;
-void utAudioSetMode(UtAudioMode mode);
-UtAudioMode utAudioMode(void);
+typedef enum { OF_AUDIO_NORMAL, OF_AUDIO_DISABLED, OF_AUDIO_MUSIC_ONLY, OF_AUDIO_SOUND_ONLY, OF_AUDIO_MODE_COUNT } OfAudioMode;
+void ofAudioSetMode(OfAudioMode mode);
+OfAudioMode ofAudioMode(void);
 void platformLog(const logType type, const char *format, va_list va) __attribute__((format(printf, 2, 0)));
 
 #endif

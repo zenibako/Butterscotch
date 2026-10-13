@@ -16,7 +16,7 @@
  *     from the group files given.
  * Stored files ride along because a core has only three data slots; the
  * game's file layer reads them back (Deltarune's lang_en.json).
- * See platform/ut_music_pack.h for the format.
+ * See platform/of_music_pack.h for the format.
  *
  * Host tool only; assumes a little-endian machine.
  */
@@ -30,7 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../platform/ut_music_pack.h"
+#include "../platform/of_music_pack.h"
 
 int stb_vorbis_decode_filename(const char *filename, int *channels, int *sample_rate, short **output);
 int stb_vorbis_decode_memory(const unsigned char *mem, int len, int *channels, int *sample_rate, short **output);
@@ -152,21 +152,21 @@ static int16_t *toMono(const short *pcm, int frames, int channels, int rate, int
     return out;
 }
 
-static uint32_t encodeSample(UtAdpcmState *state, int16_t sample) {
-    int32_t step = utAdpcmStepTable[state->stepIndex];
+static uint32_t encodeSample(OfAdpcmState *state, int16_t sample) {
+    int32_t step = ofAdpcmStepTable[state->stepIndex];
     int32_t diff = sample - state->predictor;
     uint32_t code = 0;
     if (diff < 0) { code = 8; diff = -diff; }
     if (diff >= step) { code |= 4; diff -= step; }
     if (diff >= step >> 1) { code |= 2; diff -= step >> 1; }
     if (diff >= step >> 2) { code |= 1; }
-    utAdpcmDecode(state, code);
+    ofAdpcmDecode(state, code);
     return code;
 }
 
 /* One pending conversion: either an .ogg path or an embedded blob. */
 typedef struct {
-    char name[UT_MUSIC_NAME_LEN];
+    char name[OF_MUSIC_NAME_LEN];
     char path[2048];
     const uint8_t *blob;
     uint32_t blobLen;
@@ -176,12 +176,12 @@ typedef struct {
 #define MAX_GROUPS 16
 
 static int compareSources(const void *a, const void *b) {
-    return strncmp(((const Source *) a)->name, ((const Source *) b)->name, UT_MUSIC_NAME_LEN);
+    return strncmp(((const Source *) a)->name, ((const Source *) b)->name, OF_MUSIC_NAME_LEN);
 }
 
 static bool setName(Source *source, const char *text, size_t len) {
-    if (len == 0 || len >= UT_MUSIC_NAME_LEN) return false;
-    memset(source->name, 0, UT_MUSIC_NAME_LEN);
+    if (len == 0 || len >= OF_MUSIC_NAME_LEN) return false;
+    memset(source->name, 0, OF_MUSIC_NAME_LEN);
     for (size_t i = 0; i < len; i++) source->name[i] = (char) tolower((unsigned char) text[i]);
     return true;
 }
@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
             /* A streamed file of the same name wins. */
             bool duplicate = false;
             for (uint32_t j = 0; j < count && !duplicate; j++)
-                duplicate = strncmp(sources[j].name, sources[count].name, UT_MUSIC_NAME_LEN) == 0;
+                duplicate = strncmp(sources[j].name, sources[count].name, OF_MUSIC_NAME_LEN) == 0;
             if (duplicate) continue;
 
             sources[count].blobLen = readU32(audio);
@@ -299,19 +299,19 @@ int main(int argc, char **argv) {
 
     FILE *out = fopen(argv[3], "wb");
     if (!out) { perror(argv[3]); return 1; }
-    UtMusicTrack *tracks = calloc(count, sizeof(UtMusicTrack));
-    uint32_t offset = 8 + count * (uint32_t) sizeof(UtMusicTrack);
+    OfMusicTrack *tracks = calloc(count, sizeof(OfMusicTrack));
+    uint32_t offset = 8 + count * (uint32_t) sizeof(OfMusicTrack);
     fseek(out, (long) offset, SEEK_SET);
 
     double seconds = 0.0, noise = 0.0, signal = 0.0;
     for (uint32_t t = 0; t < count; t++) {
-        memcpy(tracks[t].name, sources[t].name, UT_MUSIC_NAME_LEN);
+        memcpy(tracks[t].name, sources[t].name, OF_MUSIC_NAME_LEN);
         tracks[t].offset = offset;
         tracks[t].sampleRate = (uint32_t) outRate;
 
         if (sources[t].raw) {
             fwrite(sources[t].blob, 1, sources[t].blobLen, out);
-            tracks[t].sampleRate = UT_MUSIC_RAW_FILE;
+            tracks[t].sampleRate = OF_MUSIC_RAW_FILE;
             tracks[t].sampleCount = sources[t].blobLen;
             offset += sources[t].blobLen;
             continue;
@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
         free(pcm);
 
         uint8_t *bytes = malloc(samples / 2 + 1);
-        UtAdpcmState state = {0, 0};
+        OfAdpcmState state = {0, 0};
         for (uint32_t i = 0; i < samples; i += 2) {
             uint32_t lo = encodeSample(&state, mono[i]);
             double e0 = (double) mono[i] - state.predictor;
@@ -353,9 +353,9 @@ int main(int argc, char **argv) {
     }
 
     fseek(out, 0, SEEK_SET);
-    fwrite(UT_MUSIC_MAGIC, 1, 4, out);
+    fwrite(OF_MUSIC_MAGIC, 1, 4, out);
     fwrite(&count, sizeof(count), 1, out);
-    fwrite(tracks, sizeof(UtMusicTrack), count, out);
+    fwrite(tracks, sizeof(OfMusicTrack), count, out);
     fclose(out);
 
     printf("%s: %u tracks (%u streamed files, %u embedded sounds), %.0f min at %d Hz mono, %.1f MB, ADPCM SNR %.1f dB\n",

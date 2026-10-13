@@ -8,11 +8,11 @@
  * checks the script's bytecode against the hash below, so any other version
  * of the game simply runs its own bytecode.
  *
- * To add one: disassemble the entry (UT_DISASM=<name>), write it out, get
- * the length and hash from UT_CODEHASH=<name> on the desktop build, and
- * compare frames with and without it (UT_NO_NATIVE=1). */
+ * To add one: disassemble the entry (BS_DISASM=<name>), write it out, get
+ * the length and hash from BS_CODEHASH=<name> on the desktop build, and
+ * compare frames with and without it (BS_NO_NATIVE=1). */
 
-#include "ut_native.h"
+#include "of_native.h"
 
 #include <stdlib.h>
 
@@ -22,7 +22,7 @@
 #include "rvalue.h"
 #include "vm.h"
 
-#define UT_GRASS_MAX_CELLS 4096
+#define OF_GRASS_MAX_CELLS 4096
 
 /* a < b as the VM's Cmp does it. */
 static bool lessThan(GMLReal a, GMLReal b) {
@@ -75,9 +75,9 @@ static bool purpleGrassDraw(VMContext *ctx) {
 
     /* The image of each cell, in the order the script draws them; then the
      * whole grid in one call if the renderer takes it, else cell by cell. */
-    static int32_t subimgs[UT_GRASS_MAX_CELLS];
-    bool whole = cols > 0 && rows > 0 && cols <= UT_GRASS_MAX_CELLS && rows <= UT_GRASS_MAX_CELLS &&
-                 cols * rows <= UT_GRASS_MAX_CELLS && runner->renderer->vtable->drawSpriteGrid != NULL;
+    static int32_t subimgs[OF_GRASS_MAX_CELLS];
+    bool whole = cols > 0 && rows > 0 && cols <= OF_GRASS_MAX_CELLS && rows <= OF_GRASS_MAX_CELLS &&
+                 cols * rows <= OF_GRASS_MAX_CELLS && runner->renderer->vtable->drawSpriteGrid != NULL;
     GMLReal ci = 0;
     for (int32_t col = 0; col < cols; col++, ci = ci + 1) {
         GMLReal cj = 0;
@@ -154,7 +154,7 @@ static bool viewGet(VMContext *ctx, RValue *args, int32_t argCount, RValue *resu
  *
  *   return ds_map_find_value(global.chemg_sprite_map, name)
  */
-static int32_t g_spriteMapVar = -1; /* the VM's own id for the name; utNativeInstall forgets it for each new VM */
+static int32_t g_spriteMapVar = -1; /* the VM's own id for the name; ofNativeInstall forgets it for each new VM */
 static bool get84Sprite(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
     static BuiltinFunc find = NULL;
     if (find == NULL) find = VM_findBuiltin(ctx, "ds_map_find_value");
@@ -185,19 +185,19 @@ static const struct {
     { "gml_Object_obj_purplegrass_Draw_0", 348, 0x8cf611b685a27620ull, purpleGrassDraw },
 };
 
-void utNativeInstall(Runner *runner) {
+void ofNativeInstall(Runner *runner) {
     VMContext *vm = runner->vmContext;
     if (vm == NULL) return;
     g_spriteMapVar = -1; /* a game_change gives a new VM, with ids of its own */
 #ifdef OF_PC
-    /* UT_CODEHASH=<code entry> prints what a table row needs; UT_NO_NATIVE=1 leaves the bytecode in charge. */
-    const char *ask = getenv("UT_CODEHASH");
+    /* BS_CODEHASH=<code entry> prints what a table row needs; BS_NO_NATIVE=1 leaves the bytecode in charge. */
+    const char *ask = getenv("BS_CODEHASH");
     if (ask != NULL) {
         uint32_t length = 0;
         uint64_t hash = VM_codeHash(vm, ask, &length);
-        printf("[undertale] %s: length %u, hash 0x%016llxull\n", ask, (unsigned) length, (unsigned long long) hash);
+        printf("[butterscotch] %s: length %u, hash 0x%016llxull\n", ask, (unsigned) length, (unsigned long long) hash);
     }
-    if (getenv("UT_NO_NATIVE") != NULL) return;
+    if (getenv("BS_NO_NATIVE") != NULL) return;
 #endif
     for (size_t n = 0; n < sizeof(g_natives) / sizeof(g_natives[0]); n++) {
         uint32_t length = 0;

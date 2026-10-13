@@ -1,5 +1,5 @@
-#ifndef UT_FONT_H
-#define UT_FONT_H
+#ifndef OF_FONT_H
+#define OF_FONT_H
 
 #include <stdint.h>
 
@@ -11,16 +11,16 @@
  * on the texture cache or loses its glyphs to it. If the game has no font
  * that fits, the log overlay's small font is used instead. */
 struct Runner;
-void utFontSetRunner(struct Runner *runner);
+void ofFontSetRunner(struct Runner *runner);
 
 /* Scale for a frame: 1 at 320x240, 2 at 640x480, so text is the same size on
  * the screen whatever the room's resolution. */
-int utFontScale(int frameWidth);
+int ofFontScale(int frameWidth);
 /* Height of a line and width of a string, in frame pixels. */
-int utFontLineHeight(int scale);
-int utFontWidth(const char *text, int scale);
+int ofFontLineHeight(int scale);
+int ofFontWidth(const char *text, int scale);
 /* Draws one line of text with its top left at (x, y); returns the x after it.
  * Pixels outside the frame are left out. */
-int utFontDraw(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color, int scale);
+int ofFontDraw(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color, int scale);
 
 #endif

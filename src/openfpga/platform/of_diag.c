@@ -13,17 +13,17 @@
 
 #include "of_diag.h"
 #include "of_perf.h"
-#include "ut_bench.h"
+#include "of_bench.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-void utDiagHalt(const char *why) {
-    utLogPrint("[undertale] %s -- halted.\n", why);
+void ofDiagHalt(const char *why) {
+    ofLogPrint("[butterscotch] %s -- halted.\n", why);
     /* Keep the log: on the screen there is room for its last lines only. */
-    if (utLogDump()) utLogPrint("Log saved; quit from the Analogue menu to keep it.\n");
-    utPlatformShowLogAndHalt();
+    if (ofLogDump()) ofLogPrint("Log saved; quit from the Analogue menu to keep it.\n");
+    ofPlatformShowLogAndHalt();
 
     /* Still on the OS terminal (nothing drawn yet): park there. */
     of_video_set_display_mode(OF_DISPLAY_TERMINAL);
@@ -34,35 +34,35 @@ void utDiagHalt(const char *why) {
 }
 
 static void onExit(void) {
-    utDiagHalt("app exited");
+    ofDiagHalt("app exited");
 }
 
 /* Replaces libc's abort(): Butterscotch's safeMalloc and friends call it on
  * allocation failure, right after logging what went wrong. */
 void abort(void) {
-    utDiagHalt("abort() called (see message above)");
+    ofDiagHalt("abort() called (see message above)");
 }
 
-void utDiagInstall(void) {
+void ofDiagInstall(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     atexit(onExit);
 
     const struct of_capabilities *caps = of_get_caps();
-    printf("[undertale] heap %u KB at %08x\n",
+    printf("[butterscotch] heap %u KB at %08x\n",
            (unsigned) (caps->heap_size / 1024), (unsigned) caps->heap_base);
 }
 
-void utDiagCheckFile(const char *name) {
+void ofDiagCheckFile(const char *name) {
     FILE *f = fopen(name, "rb");
     if (f == NULL) {
-        printf("[undertale] cannot open %s\n", name);
+        printf("[butterscotch] cannot open %s\n", name);
         exit(1);
     }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fclose(f);
-    printf("[undertale] %s: %ld bytes\n", name, size);
+    printf("[butterscotch] %s: %ld bytes\n", name, size);
 }
 
 #endif /* !OF_PC */

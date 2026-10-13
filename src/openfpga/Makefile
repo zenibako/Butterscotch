@@ -35,7 +35,7 @@ WADS     ?= 17
 # Sounds of audio group 1 live in their own file, and the game reads its
 # text from lang_en.json; both go into the audio pack.
 MUSIC_EXTRAS = group:1:$(G)audiogroup1.dat file:$(G)lang_en.json
-GAME_DEFS = -DUT_GAME_DELTARUNE
+GAME_DEFS = -DGAME_DELTARUNE
 else
 $(error GAME=$(GAME) is not known; use undertale or deltarune)
 endif
@@ -82,9 +82,9 @@ BS_VENDOR_SRCS = $(wildcard $(BS_VENDOR)/bzip2/*.c) \
 BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics_disabled.c
 
 SRCS = main.c platform/of_platform.c platform/of_diag.c platform/of_log.c \
-       platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/ut_bench.c \
-       platform/ut_strings.c platform/ut_save_fs.c platform/ut_native.c \
-       platform/ut_font.c platform/ut_menu.c \
+       platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
+       platform/of_strings.c platform/of_save_fs.c platform/of_native.c \
+       platform/of_font.c platform/of_menu.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
        $(BS_VIDEO_SRCS) $(BS_STB_SRCS) $(BS_VENDOR_SRCS) $(BS_PHYSICS_SRCS)
 SRCS_CXX =
@@ -99,7 +99,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-BS_DEFS = $(GAME_DEFS) -DUT_GAME_NAME='"$(APP)"' -DUT_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DUT_LOG_SLOT_FILE='"$(APP)_1.sav"' -DUT_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+BS_DEFS = $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DOF_LOG_SLOT_FILE='"$(APP)_1.sav"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DPLATFORM_PACK_READ -DSW_TEXTURE_PACK_HOST='"music.bin"' -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
@@ -113,13 +113,13 @@ BS_DEFS += -DTEXTURE_CACHE_BYTES='($(TEXTURE_CACHE_MB)u*1024u*1024u)' \
            -DTEXTURE_CACHE_RESERVE_BYTES='($(TEXTURE_RESERVE_MB)u*1024u*1024u)'
 
 ifeq ($(TRACE),1)
-BS_DEFS += -DUT_TRACE_FRAMES
+BS_DEFS += -DOF_TRACE_FRAMES
 endif
 
 BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
           -Wno-sign-compare -Wno-missing-field-initializers
 
-# UT_OPT: extra optimisation flags for the device build, after the SDK's -O2
+# OF_OPT: extra optimisation flags for the device build, after the SDK's -O2
 # (the last -O wins), named in a benchmark report's title. Build with some
 # into an OBJ_DIR of their own and hand mkcompare.sh "<name>:<app.elf>" to
 # get a benchmark entry for it. Tried on the Pocket, 2026-10-09: -O3 and
@@ -128,9 +128,9 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
 # Experiments ride the same way as defines. Tried so and dropped: a pool for
 # script call frames in place of calloc and free (0.2 to 0.3 ms of a 46 ms
 # undrawn battle frame, within run-to-run variation).
-UT_OPT ?=
-CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(UT_OPT) -DUT_BUILD_NOTE='"$(UT_OPT)"'
-LDFLAGS += $(UT_OPT)
+OF_OPT ?=
+CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(OF_OPT) -DOF_BUILD_NOTE='"$(OF_OPT)"'
+LDFLAGS += $(OF_OPT)
 
 # Data files bundled into the per-target deliverable (override per core).
 # data.win is your own copy of the game data (gitignored); when present it is
@@ -164,7 +164,7 @@ MKTEXPACK_SRCS = tools/mktexpack.c platform/of_log.c $(BS_SRC)/log.c $(BS_SRC)/g
 # The header sets the tile size, so a change there rebuilds the tool and the packs.
 $(MKTEXPACK): $(MKTEXPACK_SRCS) $(BS_SRC)/sw/sw_texture_pack.h
 	@mkdir -p $(dir $@)
-	$(PC_CC) -O2 -DUT_HOST_TOOL $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(MKTEXPACK_SRCS) -lm -o $@
+	$(PC_CC) -O2 -DOF_HOST_TOOL $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(MKTEXPACK_SRCS) -lm -o $@
 
 $(G)textures.bin: $(G)data.win $(MKTEXPACK)
 	$(MKTEXPACK) $(G)data.win $@
@@ -174,7 +174,7 @@ $(G)textures.bin: $(G)data.win $(MKTEXPACK)
 MKMUSIC = $(ROOT)/.obj/$(APP)-tools/mkmusic
 MUSIC_RATE ?= 32000
 
-$(MKMUSIC): tools/mkmusic.c platform/ut_music_pack.h
+$(MKMUSIC): tools/mkmusic.c platform/of_music_pack.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -w tools/mkmusic.c $(BS_VENDOR)/stb/vorbis/stb_vorbis.c -lm -o $@
 
@@ -194,7 +194,7 @@ MKSAVE = $(ROOT)/.obj/$(APP)-tools/mksave
 SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
 SAVE_FILE ?= $(APP)_0.sav
 
-$(MKSAVE): tools/mksave.c platform/ut_save_format.h
+$(MKSAVE): tools/mksave.c platform/of_save_format.h
 	@mkdir -p $(dir $@)
 	$(PC_CC) -O2 -Wall -Wextra tools/mksave.c -o $@
 
@@ -319,7 +319,7 @@ asan:
 	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" undertale_pc_asan
 
 # The desktop build again, counting every bytecode instruction the game runs,
-# as undertale_pc_ops. Run it with UT_EXIT_FRAME=<n>: it prints the ranking
+# as undertale_pc_ops. Run it with BS_EXIT_FRAME=<n>: it prints the ranking
 # when it leaves the main loop. A separate binary because the count is a
 # compile-time option of Butterscotch's and costs time on every instruction.
 ops:
