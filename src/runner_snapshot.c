@@ -995,6 +995,9 @@ static bool buildIndexes(RunnerSnapshot *s, Runner *r) {
 RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
                                        const uint8_t *data, size_t size,
                                        const char **reason) {
+#ifdef PLATFORM_BUSY_TICK
+    uint64_t prep[6] = {nowNanos(), 0, 0, 0, 0, 0};
+#endif
     if (reason) *reason = NULL;
     if (!r || !r->dataWin || !r->vmContext || !data || size < 32 || size > SNAP_OUTPUT_LIMIT) {
         if (reason) *reason = "Invalid runner snapshot"; return NULL;
@@ -1041,6 +1044,9 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         if (reason) *reason = "Runner snapshot decompression failed";
         free(raw); return NULL;
     }
+#ifdef PLATFORM_BUSY_TICK
+    prep[1] = nowNanos();
+#endif
     Reader rd = {raw, rawLen, 0, true};
     rd.strg = &r->dataWin->strg;
     rd.stringRefs = version == SNAP_VERSION;
@@ -1095,7 +1101,14 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             }
             DataWin shadow = *r->dataWin;
             shadow.room.rooms = shadowRooms;
+#ifdef PLATFORM_BUSY_TICK
+            uint64_t roomStarted = nowNanos();
+#endif
             DataWin_loadRoomPayload(&shadow, (int32_t)i);
+#ifdef PLATFORM_BUSY_TICK
+            logInfo("State room payload: room %u, %llu ms\n", i,
+                (unsigned long long)((nowNanos() - roomStarted) / 1000000));
+#endif
             state->stagedPayload = shadowRooms[i];
             state->stagedLoaded = true;
         } else if (!room->payloadLoaded) goto bad;
@@ -1104,6 +1117,9 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         get(&rd, state->tiles, (size_t)state->tileCount * sizeof(RoomTile));
     }
     free(shadowRooms); shadowRooms = NULL;
+#ifdef PLATFORM_BUSY_TICK
+    prep[2] = nowNanos();
+#endif
     if (!s->roomStates[s->plain.roomIndex].payloadLoaded ||
         s->roomStates[s->plain.roomIndex].persistent) goto bad;
     uint32_t arrayCount = get32(&rd);
@@ -1264,6 +1280,9 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         s->arrays[a]->owner = slot && slot->type == RVALUE_ARRAY &&
             slot->array == s->arrays[a] ? (void *)slot : (void *)s->arrays[a];
     }
+#ifdef PLATFORM_BUSY_TICK
+    prep[3] = nowNanos();
+#endif
     uint8_t *colors = (uint8_t *)calloc(arrayCount ? arrayCount : 1, 1);
     if (!colors) goto bad;
     bool acyclic = true;
@@ -1271,7 +1290,19 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         if (!visitArray(s, a, colors, 0)) { acyclic = false; break; }
     free(colors);
     if (!acyclic || !buildIndexes(s, r)) goto bad;
+#ifdef PLATFORM_BUSY_TICK
+    prep[4] = nowNanos();
+#endif
     free(raw);
+#ifdef PLATFORM_BUSY_TICK
+    prep[5] = nowNanos();
+    logInfo("State prepare phases: decode %llu rooms %llu values %llu indexes %llu free %llu ms\n",
+        (unsigned long long)((prep[1] - prep[0]) / 1000000),
+        (unsigned long long)((prep[2] - prep[1]) / 1000000),
+        (unsigned long long)((prep[3] - prep[2]) / 1000000),
+        (unsigned long long)((prep[4] - prep[3]) / 1000000),
+        (unsigned long long)((prep[5] - prep[4]) / 1000000));
+#endif
     return s;
 bad:
     free(shadowRooms);

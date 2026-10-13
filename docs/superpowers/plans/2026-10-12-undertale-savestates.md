@@ -282,3 +282,20 @@ progress-file persistence uses CRAM and datatable updates, not an SD write.
 Add separate timings for those four application calls before changing their
 behavior. The red warning is consistent with delayed completion, but a numeric
 host deadline is not established. Clearing the warning remains a hardware gate.
+
+The next device run disproved a consistently slow apply operation: archive
+12 ms, runner 3 ms, audio 9 ms and input/clock 0 ms; total apply 26 ms. Game
+preparation instead took 10,874 ms, and total manual load 11,248 ms. The same
+238,139-byte state still restored successfully. That game interval also includes
+the loading notice. Core preparation can read absent room definitions from
+`data.win`, so file-service contention is a candidate, not an established cause.
+
+Add notice timing, core decode/room/value/index/free timings, and individual
+staged room-read timings. Preserve codec and acknowledgement semantics until
+those measurements distinguish asset I/O from allocation and graph work.
+
+The preparation diagnostic passes the snapshot suite, completion tests and lint;
+its fresh-process restore reproduces the reference future frame byte for byte.
+The native ELF contains the new timers. The card's OS and bitstream match the
+staged runtime exactly, so this test can replace only
+`Assets/butterscotch/common/undertale.elf` from `prepare-profile-test`.

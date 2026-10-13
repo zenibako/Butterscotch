@@ -199,7 +199,10 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
         *reason = "Invalid platform state"; return false;
     }
     utAudioSnapshotLock(true);
+    uint64_t noticeStarted = nowNanos();
     captureProgress("Loading: game state");
+    logInfo("State prepare notice: %llu ms\n",
+        (unsigned long long)((nowNanos() - noticeStarted) / 1000000));
     RunnerSnapshot *core = Runner_snapshotPrepare(r, g_gameId, parts[0].data, parts[0].size, reason);
     phases[1] = nowNanos();
     void *audio = NULL, *files = NULL;
