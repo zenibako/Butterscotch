@@ -463,7 +463,7 @@ bool ofSaveFsApplySnapshot(FileSystem *base, void *ptr) {
 #ifdef OF_NATIVE_SAVESTATES
         timings[4] = nowNanos();
 #endif
-        if (slot) fclose(slot);
+        if (slot && fclose(slot) != 0) ok = false;
 #ifdef OF_NATIVE_SAVESTATES
         timings[5] = nowNanos();
         logInfo("State archive phases: lookup %llu open %llu buffer %llu write %llu close %llu ms; %zu bytes, %s\n",

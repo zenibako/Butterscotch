@@ -292,6 +292,70 @@ static void testRejectsBadInputAndLiveResources(void) {
     destroyFixture(&r);
 }
 
+static void testDynamicSpriteCaptureEligibility(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    dw.sprt.sprites = calloc(1, sizeof(Sprite));
+    assert(dw.sprt.sprites);
+    dw.sprt.count = 1;
+    dw.sprt.parsedCount = 1;
+    dw.sprt.sprites[0].name = "__newsprite0"; /* A loaded asset's name is irrelevant. */
+    dw.sprt.sprites[0].textureCount = 1;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    assert(Runner_snapshotCapture(&r, 7, &bytes, &size, &reason));
+    uint32_t dynamic = DataWin_allocSpriteSlot(&dw, 1);
+    assert(dynamic == 1);
+    dw.sprt.sprites[dynamic].textureCount = 1;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    const char *allocatedName = dw.sprt.sprites[dynamic].name;
+    dw.sprt.sprites[dynamic].name = "renamed";
+    assert(Runner_snapshotCheck(&r) != NULL);
+    dw.sprt.sprites[dynamic].name = NULL;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    dw.sprt.sprites[dynamic].name = allocatedName;
+    uint8_t *rejected = NULL; size_t rejectedSize = 0;
+    assert(!Runner_snapshotCapture(&r, 7, &rejected, &rejectedSize, &reason));
+    assert(reason && rejected == NULL && rejectedSize == 0);
+    assert(Runner_snapshotPrepare(&r, 7, bytes, size, &reason) == NULL);
+    dw.sprt.sprites[dynamic].textureCount = 0; /* Deleted sprite leaves a reusable slot. */
+    assert(Runner_snapshotCheck(&r) == NULL);
+    dw.sprt.parsedCount = dw.sprt.count + 1;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    dw.sprt.parsedCount = 1;
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 7, bytes, size, &reason);
+    assert(prepared);
+    Runner_snapshotFree(prepared);
+    free((void *)dw.sprt.sprites[dynamic].name);
+    free(dw.sprt.sprites);
+    free(bytes);
+    destroyFixture(&r);
+}
+
+static void testPausedCaptureEligibility(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 7, &bytes, &size, &reason));
+    r.paused = true;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    uint8_t *rejected = NULL; size_t rejectedSize = 0;
+    assert(!Runner_snapshotCapture(&r, 7, &rejected, &rejectedSize, &reason));
+    assert(reason && rejected == NULL && rejectedSize == 0);
+    assert(Runner_snapshotPrepare(&r, 7, bytes, size - 1, &reason) == NULL);
+    assert(r.paused); /* A rejected prepare leaves the target unchanged. */
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 7, bytes, size, &reason);
+    assert(prepared);
+    assert(r.paused); /* Prepare does not change the live runner. */
+    Runner_snapshotApply(&r, prepared);
+    Runner_snapshotFree(prepared);
+    assert(!r.paused); /* Supported snapshots were captured while unpaused. */
+    free(bytes);
+    destroyFixture(&r);
+}
+
 static void testAllLoadedRoomsAndDefinitions(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room rooms[2]; GameObject object;
@@ -935,6 +999,8 @@ int main(void) {
     testZstdV4FrameValidation();
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
+    testPausedCaptureEligibility();
+    testDynamicSpriteCaptureEligibility();
     testAllLoadedRoomsAndDefinitions();
     testDormantPoolHoleRefuses();
     testMalformedRoomCleanupAndDimensions();

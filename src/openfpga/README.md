@@ -124,7 +124,8 @@ on the host (Homebrew's Bash on macOS).
 Use the Pocket's Memories controls to save or load, or its power button to
 sleep. Exact snapshots are accepted in supported overworld scenes and the
 game's own menus. Battles, dialogue, cutscenes, the port's Select menu, and
-unsupported runtime resources produce an on-screen refusal. Select → Save states
+unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+produce an on-screen refusal. Select → Save states
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
 fresh game-button press, including after the Pocket menu closes. A snapshot that exceeds the
@@ -177,7 +178,9 @@ Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
 `BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with
 `BS_STATE_LOAD_PATH=<file>`. These run the same serializer at completed frame
 boundaries. `make snapshot-tests` checks the runner, audio, archive and envelope
-code with sanitizers, including the desktop SDK's audio queue. Native hardware
+code with sanitizers, including the desktop SDK's audio queue, native close
+failure handling, notice bounds, and request completion. It also checks
+container-supplied game fingerprints. Native hardware
 behavior still requires Pocket tests.
 
 Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
