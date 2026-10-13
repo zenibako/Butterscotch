@@ -443,3 +443,36 @@ blob could arrive while NV-slot I/O holds CRAM0 and overflow the unbackpressured
 bridge FIFO. Removed that write before packaging. Automatic audits now occur
 only before SAVE readiness/refusal, with handles closed before acknowledgement.
 LOAD trace remains in the in-memory log for the user's ordinary Save log action.
+
+
+### October 13: second sleep reaches capture but audio refuses
+
+The diagnostic card log at 16:25:48 matches sleep envelope ID `42cf9a7c`.
+The fresh 100 MHz capture produced 242,156 bytes and woke successfully from
+that exact payload. The subsequent sleep request reached the app in room 45,
+and game serialization succeeded (178,440 bytes), but audio capture refused
+with "Audio cannot be captured safely". The unchanged sleep file is therefore
+consistent with an explicit refused second capture, rather than a missing
+request. This evidence does not identify clock frequency as the cause, and
+repeated physical 90 MHz cycles have not been verified.
+
+Audio capture now logs the specific rejected safety check, ring capacity,
+free/unread/reserved pairs, accepted-write count, PCM shadow availability and
+encoding allocation size; rejected voice cursors include their track, slot and
+buffer bounds. Safety checks and the save format are unchanged. The sanitizer
+fixture exercises two further PCM capture/restore cycles with Pocket's reserved
+pair and requires queue-shadow refusal diagnostics. This fixture does not
+simulate hardware playback or allocation pressure; the device refusal is not
+yet reproduced, and no fix is claimed. The next ELF-only run should distinguish
+queue accounting, invalid voices and allocation failure before changing behavior.
+
+
+Read-only runtime/RTL review found a candidate for queue-shadow refusal: Pocket
+`audio.c` resets the voice's position but `audio_mixer.v` updates its readback
+`pos_latch` only on advancement. The saved audio has three unread PCM pairs,
+below the stream's four-pair advancement threshold. A stale position may thus
+produce a phantom backlog, suppress replenishment and violate the shadow's
+accepted-write bound. The saved streamed voice itself satisfies cursor bounds.
+A refusal with a small accepted-write count and a large reported queue would
+support this mechanism. This is a source-level hypothesis, not a verified fix;
+no runtime or RTL behavior has been changed for this diagnostic.
