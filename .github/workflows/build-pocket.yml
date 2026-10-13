@@ -44,7 +44,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf libsdl2-dev pkg-config
+          sudo apt-get install -y --no-install-recommends clang libclang-rt-18-dev gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf libsdl2-dev pkg-config
           riscv64-unknown-elf-gcc --version | head -1
 
       - name: Build the RISC-V programs

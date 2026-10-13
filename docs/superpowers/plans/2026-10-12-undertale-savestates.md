@@ -601,3 +601,12 @@ against the prior references. Independent review found no blockers. The
 snapshot suite now runs in Pocket CI. These new changes have not been retested
 on the Pocket. A failed native close can leave archive bytes already written;
 this fix rejects LOAD and preserves live memory, without claiming SD rollback.
+
+The first hosted run passed the app builds but exposed Linux-only fixture
+portability gaps: strict C11 hid POSIX declarations, and GNU section retention
+kept filesystem/audio vtable dependencies that Darwin's dead-strip removed.
+The test runner now enables GNU declarations on Linux, links the real array
+implementation for the audio fixture, and supplies explicit archive-pack and
+profiler test stubs. CI installs the sanitizer runtime explicitly. The entire
+suite passes on Ubuntu 24.04 with ASan/UBSan; these corrections do not change
+the app. The hosted rerun remains the final verification.
