@@ -299,3 +299,28 @@ its fresh-process restore reproduces the reference future frame byte for byte.
 The native ELF contains the new timers. The card's OS and bitstream match the
 staged runtime exactly, so this test can replace only
 `Assets/butterscotch/common/undertale.elf` from `prepare-profile-test`.
+
+### Proven room read and immutable ROOM cache
+
+The next hardware log identifies the delay: staging room 47 took 8,347 ms.
+Core decode took 452 ms, values 2,064 ms, indexes 5 ms, and raw-buffer cleanup
+0 ms. Application remained 26 ms. The loading notice took 7 ms. Total restore
+was 11,292 ms and returned success.
+
+Save-state builds now retain the owned ROOM chunk already read by the per-chunk
+loader. This costs 4,507,012 bytes (4.30 MiB) of resident heap without another
+startup read. A memory-only reader preserves absolute offsets and fails rather
+than falling back to file access. Lazy payload creation/unloading and room-reset
+semantics remain intact; root game-data teardown frees the cache. Generic and
+Deltarune builds do not enable it. Snapshot versions and game identity remain
+unchanged, including compatibility with existing version-5 states.
+
+Verification: fixture tests cover parity, reload after closing the file, invalid
+offset rejection and cache-backed cold snapshot preparation. The same parity
+test passes for all 336 rooms in the actual Undertale data. The exact cached
+feature under ASan/UBSan preserves the reference future frame after capture and
+fresh-process restore; an existing version-5 state also matches that frame.
+Snapshot tests, lint and native build pass. The card runtime pair matches; replace
+only `Assets/butterscotch/common/undertale.elf` from `room-cache-test`.
+Pocket load timing, warning removal and the additional heap footprint remain
+hardware verification gates.

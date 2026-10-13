@@ -3193,7 +3193,17 @@ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options) {
         // Free the chunk buffer and revert to FILE*-based reads for the next header
         if (chunkBuffer != nullptr) {
             BinaryReader_clearBuffer(&reader);
-            free(chunkBuffer);
+            if (options.cacheRawRoomChunk && options.lazyLoadRooms &&
+                memcmp(chunkName, "ROOM", 4) == 0) {
+                free(dw->roomChunkBuffer);
+                dw->roomChunkBuffer = chunkBuffer;
+                dw->roomChunkBase = chunkDataStart;
+                dw->roomChunkSize = chunkLength;
+                logInfo("DataWin: retained ROOM chunk %zu bytes at 0x%zX\n",
+                        dw->roomChunkSize, dw->roomChunkBase);
+            } else {
+                free(chunkBuffer);
+            }
         } else if (borrowedChunkBuffer) {
             BinaryReader_clearBuffer(&reader);
         }
@@ -3453,6 +3463,7 @@ void DataWin_free(DataWin* dw) {
     // Owned buffers
     if (!dw->mappedFile)
         free(dw->strgBuffer);
+    free(dw->roomChunkBuffer);
     free(dw->bytecodeBuffer);
 
     // Close the lazy-load file handle (only open when lazyLoadRooms/lazyLoadTextures was enabled)
@@ -3509,10 +3520,16 @@ void DataWin_loadRoomPayload(DataWin* dw, int32_t roomIndex) {
     require(roomIndex >= 0 && dw->room.count > (uint32_t) roomIndex);
     Room* room = &dw->room.rooms[roomIndex];
     if (room->payloadLoaded) return;
-    requireMessage(dw->lazyLoadFile != nullptr, "DataWin_loadRoomPayload called without an open lazy-load FILE*");
+    requireMessage(dw->roomChunkBuffer != nullptr || dw->lazyLoadFile != nullptr,
+                   "DataWin_loadRoomPayload called without a ROOM cache or lazy-load FILE*");
 
-    FILE* f = dw->lazyLoadFile;
-    BinaryReader lazyReader = BinaryReader_create(f, dw->fileSize);
+    // A cached ROOM payload must never fall back to file I/O during a state load.
+    BinaryReader lazyReader = BinaryReader_create(
+        dw->roomChunkBuffer != nullptr ? nullptr : dw->lazyLoadFile, dw->fileSize);
+    if (dw->roomChunkBuffer != nullptr) {
+        BinaryReader_setBuffer(&lazyReader, dw->roomChunkBuffer,
+                               dw->roomChunkBase, dw->roomChunkSize);
+    }
     readRoomPayload(&lazyReader, dw, room);
 }
 

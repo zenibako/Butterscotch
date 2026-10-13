@@ -1090,7 +1090,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         if (s->roomInitialized[i] && state->persistent) goto bad;
         if (!state->payloadLoaded) continue;
         Room *room = &r->dataWin->room.rooms[i];
-        if (!room->payloadLoaded && r->dataWin->lazyLoadRooms && !r->dataWin->lazyLoadFile)
+        if (!room->payloadLoaded && r->dataWin->lazyLoadRooms &&
+            !r->dataWin->roomChunkBuffer && !r->dataWin->lazyLoadFile)
             goto bad;
         if (!room->payloadLoaded && r->dataWin->lazyLoadRooms) {
             if (!shadowRooms) {
