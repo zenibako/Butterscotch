@@ -359,15 +359,29 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
     free(s->roomInitialized); free(s);
 }
 
+static bool hasLiveDynamicSprite(const DataWin *dw) {
+    /* The SPRT parser records the original boundary; renderer-created slots
+     * begin after it, even when their generated names are changed or absent. */
+    for (uint32_t i = dw->sprt.parsedCount; i < dw->sprt.count; i++)
+        if (dw->sprt.sprites[i].textureCount) return true;
+    return false;
+}
+
 static bool eligible(Runner *r, const char **reason, bool forCapture) {
 #define REFUSE(msg) do { if (reason) *reason = msg; return false; } while (0)
     if (!r || !r->dataWin || !r->vmContext || !r->renderer || !r->currentRoom)
         REFUSE("Runner is not ready");
     if (r->dataWin->gen8.wadVersion != 16) REFUSE("Only WAD16 Undertale state is supported");
+    if (r->dataWin->sprt.parsedCount > r->dataWin->sprt.count ||
+        (r->dataWin->sprt.count && !r->dataWin->sprt.sprites))
+        REFUSE("Invalid sprite registry");
     if (r->currentRoomIndex < 0 || (uint32_t)r->currentRoomIndex >= r->dataWin->room.count)
         REFUSE("Invalid room");
     if (forCapture && r->currentRoom->persistent) REFUSE("Persistent room is unsupported");
     if (forCapture && !r->currentRoom->payloadLoaded) REFUSE("Current room payload is unavailable");
+    if (forCapture && r->paused) REFUSE("Paused runner is unsupported for capture");
+    if (hasLiveDynamicSprite(r->dataWin))
+        REFUSE("Dynamic sprite is unsupported");
     if (forCapture && !SpatialGrid_dimensionsValid(r->currentRoom->width,
                                                     r->currentRoom->height))
         REFUSE("Room dimensions exceed the collision grid limit");
@@ -1439,6 +1453,9 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     for (uint32_t i = 0; i < r->dataWin->room.count; i++)
         if (r->savedRoomStates) r->savedRoomStates[i].initialized = s->roomInitialized[i];
     applyPlain(r, &s->plain);
+    /* Capture refuses paused runners, so every supported snapshot resumes.
+     * The caller restores audio after this core commit. */
+    r->paused = false;
     if (r->eventDispatchInstances) arrsetlen(r->eventDispatchInstances, 0);
     if (r->cachedDrawables) arrsetlen(r->cachedDrawables, 0);
     r->vmContext->currentInstance = NULL;

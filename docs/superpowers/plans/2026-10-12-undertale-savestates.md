@@ -578,3 +578,26 @@ macro. A compilation fixture with INT16_MAX deliberately undefined fails
 before the change and passes in C99 and GNU C++98 afterward. Boundary checks
 cover the coordinate limit, 65536-cell limit, zero dimensions and uint32
 extremes; the accepted dimension bounds are unchanged.
+
+### October 13: PR review regressions
+
+Addressed five unique findings from PR #18. Container-supplied game fingerprints
+now reach the compiler even when the container cannot see data.win. Immediate
+failure notices defer until the framebuffer and active display dimensions match,
+and avoid copying an aliased surface. Native progress-archive apply rejects a
+failed fclose before swapping live filesystem ownership. The runner refuses
+live runtime-created sprites using the original SPRT boundary, and refuses
+captures while debug-paused. Supported snapshots resume a paused target only
+at successful apply; preparation and rejection leave it unchanged.
+
+Regression fixtures reproduced the missing fingerprint, notice heap overflow,
+native close failure, and unsupported runner capture paths before their fixes.
+The complete ASan/UBSan snapshot suite passes, including named/renamed/nameless
+dynamic sprite slots, deleted slots, paused restore transaction boundaries,
+native close retry ownership, padded notice surfaces, and request completion.
+Pocket lint passes; desktop sanitizer and native RISC-V builds succeed. Two
+full-game cold restores produce byte-identical future frames 1100 and 1200
+against the prior references. Independent review found no blockers. The
+snapshot suite now runs in Pocket CI. These new changes have not been retested
+on the Pocket. A failed native close can leave archive bytes already written;
+this fix rejects LOAD and preserves live memory, without claiming SD rollback.

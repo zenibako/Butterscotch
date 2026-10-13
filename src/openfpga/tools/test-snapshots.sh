@@ -40,3 +40,8 @@ echo "runner snapshot: passed"
     -DUT_PC_SDL_SOURCE='"of_sdl2.c"' $(pkg-config --cflags sdl2) \
     "$repo/tests/ut_pc_audio_snapshot_test.c" $(pkg-config --libs sdl2) -lm -o "$out/pc-audio"
 "$out/pc-audio"
+export SDK_ROOT
+for test in test_game_fingerprint test_snapshot_notice test_save_fs_native_close \
+    test_snapshot_completion test_restore_commit; do
+    python3 "$port/tests/$test.py"
+done

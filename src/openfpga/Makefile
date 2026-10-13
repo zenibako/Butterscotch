@@ -148,6 +148,8 @@ endif
 ifeq ($(STATE_GAME_ID),)
 $(error Could not fingerprint data.win; when compiling in a container pass STATE_GAME_ID=<host SHA256 prefix>)
 endif
+endif
+ifneq ($(STATE_GAME_ID),)
 BS_DEFS += -DOF_STATE_GAME_ID=0x$(STATE_GAME_ID)ULL
 endif
 

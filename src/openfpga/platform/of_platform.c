@@ -1114,12 +1114,15 @@ void platformSleepUntil(uint64_t time) {
 void ofPlatformSnapshotNotice(const char *text) {
     showNotice(text);
     g_snapshotNotice = true; g_noticeUntil = UINT64_MAX;
-    if (!g_nextFb || g_nextW <= 0 || g_nextH <= 0) return;
+    if (!g_nextFb || g_nextW <= 0 || g_nextH <= 0 || !g_showingFramebuffer ||
+        g_nextW != g_modeW || g_nextH != g_modeH) return;
     drawSnapshotNotice(g_nextFb, g_nextW, g_nextH);
     uint8_t *surface = of_video_surface();
-    for (int y = 0; y < g_nextH; y++)
-        memcpy(surface + (size_t)y * (size_t)g_modeStride, g_nextFb + (size_t)y * (size_t)g_nextW,
-               (size_t)g_nextW * sizeof(uint16_t));
+    if ((uint8_t *)g_nextFb != surface) {
+        for (int y = 0; y < g_nextH; y++)
+            memcpy(surface + (size_t)y * (size_t)g_modeStride, g_nextFb + (size_t)y * (size_t)g_nextW,
+                   (size_t)g_nextW * sizeof(uint16_t));
+    }
     of_video_flip();
 }
 
