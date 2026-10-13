@@ -559,3 +559,12 @@ transactional restore tests and Pocket lint pass. Compile commands confirm
 the generic CMake build excludes the codec and Zstandard; Pocket's source
 list still includes both. The hosted cross-platform rerun remains the final
 CI verification.
+
+
+The hosted rerun passed the Linux/BSD, AppKit, PowerPC macOS and initial
+console builds, but MSVC 4.0 then exposed a separate missing `INT16_MAX`
+definition in the project's fallback `compat/stdint/stdint.h`. Added the
+standard signed-16-bit bound to that shim. A fallback-header compilation
+fails before this definition and passes afterward; the native system header
+and checked-grid arithmetic are unchanged. The hosted MSVC rerun is still
+required to confirm its complete build.
