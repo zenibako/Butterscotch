@@ -684,8 +684,11 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     uint32_t rawCrc = checksum(w.p + 24, rawLen);
     mz_ulong compressedCap = mz_compressBound(rawLen);
     uint8_t *compressed = (uint8_t *)malloc(compressedCap);
+    /* The Pocket waits for capture before it can read any state. Level 2
+     * bounds match searching and uses greedy parsing; level 1 leaves too
+     * little envelope headroom in Snowdin. The zlib format is unchanged. */
     if (!compressed || mz_compress2(compressed, &compressedCap, w.p + 24,
-                                     rawLen, MZ_DEFAULT_COMPRESSION) != MZ_OK) {
+                                     rawLen, 2) != MZ_OK) {
         if (reason) *reason = "Runner snapshot compression failed";
         free(compressed); free(w.p); return false;
     }
