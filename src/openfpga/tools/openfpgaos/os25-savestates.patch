@@ -1,3 +1,230 @@
+diff --git a/src/firmware/api/of_services.h b/src/firmware/api/of_services.h
+index c4788f8..df4a2cc 100644
+--- a/src/firmware/api/of_services.h
++++ b/src/firmware/api/of_services.h
+@@ -336,6 +336,11 @@ struct of_services_table {
+     int       (*savestate_save)(const void *blob, uint32_t len);
+     int       (*savestate_load)(void *buf, uint32_t cap);
+     void      (*savestate_finish)(int ok);
++
++    /* -- Heap capacity query (append-only) --
++     * Read-only sufficient condition for a fresh mmap carve, including a
++     * tracking slot. Zero means unknown; it is not allocation failure. */
++    int       (*heap_can_reserve)(uint32_t bytes);
+ };
+
+ #ifndef OF_PC
+diff --git a/src/firmware/os/kernel/services_table.c b/src/firmware/os/kernel/services_table.c
+index 5e4c454..74c99fc 100644
+--- a/src/firmware/os/kernel/services_table.c
++++ b/src/firmware/os/kernel/services_table.c
+@@ -61,6 +61,7 @@ static void svc_input_read_mouse_state(void *out) {
+
+ /* Timer policy is owned by syscall.c (shared 1 kHz tick + SW-mixer pump). */
+ extern void of_os_timer_set_callback(void (*cb)(void), uint32_t app_hz, int self_divide);
++extern int syscall_heap_can_reserve(uint32_t bytes);
+
+ static inline uint32_t svc_irq_save_local(void)
+ {
+@@ -289,6 +290,7 @@ void services_table_init(void) {
+     svc->savestate_save   = of_savestate_save;
+     svc->savestate_load   = of_savestate_load;
+     svc->savestate_finish = of_savestate_finish;
++    svc->heap_can_reserve = syscall_heap_can_reserve;
+ }
+
+ void services_table_set_smp_bank(const void *base, uint32_t size) {
+diff --git a/src/firmware/os/kernel/syscall.c b/src/firmware/os/kernel/syscall.c
+index 204f98a..3fad68a 100644
+--- a/src/firmware/os/kernel/syscall.c
++++ b/src/firmware/os/kernel/syscall.c
+@@ -2056,6 +2056,28 @@ static int mmap_alloc_slot(void) {
+     return -1;
+ }
+
++/* Read-only sufficient condition, not a free-memory estimate. Deliberately
++ * ignore reusable mappings: proving those usable could require splitting or
++ * coalescing. No allocation, memset, reclamation, or tracker writes here.
++ * Call synchronously with app allocation quiescent (as with mmap itself).
++ * A positive answer is immediate capacity, not a reservation across calls. */
++int syscall_heap_can_reserve(uint32_t bytes)
++{
++    if (!bytes || bytes > UINT32_MAX - 4095u) return 0;
++    uintptr_t len = ((uintptr_t)bytes + 4095u) & ~(uintptr_t)4095u;
++    uintptr_t mb = *(volatile uintptr_t *)&mmap_bottom;
++    uintptr_t cb = *(volatile uintptr_t *)&current_brk;
++    uintptr_t bb = *(volatile uintptr_t *)&brk_base;
++    if (bb < 0x10000000u || cb < bb || cb > mb ||
++        mb > 0x40000000u || (mb & 4095u) || len > mb - cb)
++        return 0;
++    if (mmap_slots_used < 0 || mmap_slots_used >= MMAP_SLOTS)
++        return 0;
++    /* Bounded scan of at most MMAP_SLOTS entries; base==0 means unused,
++     * while a free mapping still occupies its bookkeeping slot. */
++    return mmap_alloc_slot() >= 0;
++}
++
+ static long sys_mmap2(long addr, long length, long prot,
+                       long flags, long fd, long pgoffset) {
+     (void)addr; (void)prot; (void)flags; (void)fd; (void)pgoffset;
+diff --git a/src/firmware/os/targets/pocket/file.c b/src/firmware/os/targets/pocket/file.c
+index 9f73aa6..ee86c23 100644
+--- a/src/firmware/os/targets/pocket/file.c
++++ b/src/firmware/os/targets/pocket/file.c
+@@ -64,6 +64,7 @@ static struct {
+     volatile uint32_t copy_off;       /* bounce copy progress in bytes     */
+     int               copy_result;
+     volatile uint32_t age_ms;         /* 1 kHz ticks with no DONE (watchdog) */
++    volatile int      quarantined;    /* logically failed DMA, host still owns it */
+ } async_state;
+
+ /* Local IRQ mask save/restore for tick-vs-app-context critical sections
+@@ -191,6 +192,7 @@ void of_file_init(void) {
+     async_state.bounce_to_dest = 0;
+     async_state.callback = (void *)0;
+     async_token_counter = 0;
++    async_state.quarantined = 0;
+     dma_stage_next = 0;
+
+ #if OF_TARGET_PLATFORM_ID == OF_PLATFORM_SIM
+@@ -360,7 +362,30 @@ static int ds_issue_command(uint32_t cmd) {
+  * uncopied async read. */
+ static void async_copy_drain(void);
+
++/* A logical timeout cannot cancel an APF command. READY/WR_IDLE alone can
++ * already be high before its host ACK: require its latched DONE as well.
++ * No new file command may reset that latch or reuse its staging window until
++ * all old writes have drained. Clear the old IRQ before publishing reuse. */
++static int async_quarantine_gate(void) {
++    uint32_t irq = file_irq_save();
++    if (async_state.quarantined) {
++        uint32_t st = DS_STATUS;
++        uint32_t finished = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE;
++        if ((st & finished) != finished) {
++            file_irq_restore(irq);
++            return OF_ERR_BUSY;
++        }
++        IRQ_MASK &= ~IRQ_MASK_DATASLOT;
++        DS_STATUS = DS_STATUS_IRQ_PENDING;
++        async_state.quarantined = 0;
++    }
++    file_irq_restore(irq);
++    return 0;
++}
++
+ static int async_gate(void) {
++    if (async_quarantine_gate())
++        return OF_ERR_BUSY;
+     if (async_state.copy_pending) {
+         async_copy_drain();
+         return 0;
+@@ -1155,7 +1180,7 @@ int of_file_read_async(uint32_t slot_id, uint32_t slot_offset,
+      * completion inline so back-to-back streaming can't wedge on it. */
+     if (async_state.copy_pending)
+         async_copy_drain();
+-    if (async_state.active)
++    if (async_gate())
+         return OF_ERR_BUSY;
+     if (length > OF_TARGET_CRAM0_DMA_CHUNK_SIZE)
+         return OF_ERR_BAD_RANGE;
+@@ -1241,6 +1266,21 @@ void of_file_async_irq_service(void) {
+     async_complete(st);
+ }
+
++/* Caller holds the IRQ guard and has checked completion first. While active,
++ * savestate_poll cannot park CRAM0 (the file HAL is not quiet). SAVE only:
++ * LOAD may need file reads during app startup. Do not acknowledge the save or
++ * change ownership here; just return the same negative result as age-out.
++ * Direct-CRAM callers must retain their DMA buffer until the host drains it,
++ * exactly as with an aged-out read. No bounce copy will touch the app buffer. */
++static void async_abort_pending_save(void) {
++    if (async_state.active && !async_state.copy_pending &&
++        of_savestate_poll() == 1) {
++        async_state.quarantined = 1;
++        IRQ_MASK &= ~IRQ_MASK_DATASLOT;
++        async_finalize(OF_ERR_TIMEOUT);
++    }
++}
++
+ int of_file_async_poll(void) {
+     if (async_state.copy_pending)
+         async_copy_drain();
+@@ -1267,6 +1307,8 @@ int of_file_async_poll(void) {
+                     == (DS_STATUS_READY | DS_STATUS_WR_IDLE))) {
+             DS_STATUS = DS_STATUS_IRQ_PENDING;
+             async_complete(st);
++        } else {
++            async_abort_pending_save();
+         }
+         file_irq_restore(irq);
+
+@@ -1294,7 +1336,9 @@ int of_file_async_poll(void) {
+  *  (c) Age-out: a transfer with no DONE after ASYNC_AGE_LIMIT_MS is
+  *      failed to the app (OF_ERR_TIMEOUT).  The APF host cannot be
+  *      canceled — if the zombie completes later its IRQ lands in the
+- *      !active branch of the IRQ service and is cleared harmlessly.
++ *      !active branch of the IRQ service and is cleared harmlessly. Both
++ *      age-out and a pending SAVE quarantine it until DONE + bridge idle;
++ *      clearing logical busy lets the app reach its save boundary promptly.
+  *      Recovery-only: today that state wedges the async API forever. */
+ #define ASYNC_COPY_SLICE_BYTES 2048u
+ #define ASYNC_AGE_LIMIT_MS     2000u   /* < the CD ring depth (5 s), so a
+@@ -1304,16 +1348,21 @@ int of_file_async_poll(void) {
+                                         * aged-out guard in the IRQ path. */
+
+ void of_file_async_tick(void) {
++    uint32_t irq = file_irq_save();
+     if (async_state.copy_pending) {
+         async_copy_slice(ASYNC_COPY_SLICE_BYTES);
++        file_irq_restore(irq);
+         return;
+     }
+-    if (!async_state.active)
++    if (!async_state.active) {
++        file_irq_restore(irq);
+         return;
++    }
+
+     uint32_t st = DS_STATUS;
+     if (st & DS_STATUS_IRQ_PENDING) {
+         of_file_async_irq_service();
++        file_irq_restore(irq);
+         return;
+     }
+     if ((st & DS_STATUS_DONE) &&
+@@ -1321,24 +1370,29 @@ void of_file_async_tick(void) {
+          == (DS_STATUS_READY | DS_STATUS_WR_IDLE))) {
+         DS_STATUS = DS_STATUS_IRQ_PENDING;
+         async_complete(st);
++        file_irq_restore(irq);
+         return;
+     }
+
+-    if (++async_state.age_ms >= ASYNC_AGE_LIMIT_MS) {
++    async_abort_pending_save();
++    if (async_state.active && ++async_state.age_ms >= ASYNC_AGE_LIMIT_MS) {
+         of_term_printf("[file] async age-out: no DONE after %us (st=%02x)\n",
+                        (unsigned)(ASYNC_AGE_LIMIT_MS / 1000u),
+                        (unsigned)(st & 0xFF));
+         IRQ_MASK &= ~IRQ_MASK_DATASLOT;
++        async_state.quarantined = 1;
+         async_finalize(OF_ERR_TIMEOUT);
+     }
++    file_irq_restore(irq);
+ }
+
+ int of_file_async_busy(void) {
+     return async_state.active;
+ }
+
+-/* No async transfer in flight and no deferred bounce copy pending: nothing
+- * will touch CRAM0 until the next file call. */
++/* No CPU-side completion/copy can claim CRAM0. A quarantined host DMA can
++ * still write its original file staging region, separate from the savestate
++ * window; it cannot invoke a callback or reclaim CRAM0 ownership. */
+ int of_file_cram0_quiet(void) {
+     return !async_state.active && !async_state.copy_pending;
+ }
 diff --git a/src/fpga/targets/pocket/seeds/os25.seed b/src/fpga/targets/pocket/seeds/os25.seed
 index 209e3ef..45a4fb7 100644
 --- a/src/fpga/targets/pocket/seeds/os25.seed
@@ -25,3 +252,224 @@ index a1e7864..7288ad9 100644
 
  # Separate span products from the shared perspective DSP operand mux.
  # Bit-exact and cycle-identical in Quake/Doom replays; paired seeds 15/20
+diff --git a/src/firmware/api/of_heap.h b/src/firmware/api/of_heap.h
+new file mode 100644
+index 0000000..c5b70b3
+--- /dev/null
++++ b/src/firmware/api/of_heap.h
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: Apache-2.0
++#ifndef OF_HEAP_H
++#define OF_HEAP_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include "of_services.h"
++
++/* Positive only when the OS can prove an immediate fresh mmap allocation
++ * fits the untouched gap and has a tracking slot. This does not reserve
++ * memory or inspect musl's free lists; add allocator headroom to the payload.
++ * Zero (including unsupported firmware) requires the caller's normal malloc
++ * probe. Call with app allocation quiescent; never cache a positive result. */
++static inline int of_heap_can_reserve(uint32_t bytes)
++{
++#ifndef OF_PC
++    const struct of_services_table *svc = OF_SVC;
++    const uint32_t index = (uint32_t)(
++        (offsetof(struct of_services_table, heap_can_reserve) - 12u) / sizeof(void *));
++    if (!bytes || !svc || svc->magic != OF_SVC_MAGIC ||
++        svc->version != OF_SVC_VERSION || svc->count <= index ||
++        !svc->heap_can_reserve)
++        return 0;
++    return svc->heap_can_reserve(bytes) > 0;
++#else
++    (void)bytes;
++    return 0;
++#endif
++}
++
++#endif /* OF_HEAP_H */
+diff --git a/tools/tests/test_async_save_abort.py b/tools/tests/test_async_save_abort.py
+new file mode 100644
+index 0000000..edf63ac
+--- /dev/null
++++ b/tools/tests/test_async_save_abort.py
+@@ -0,0 +1,178 @@
++#!/usr/bin/env python3
++"""Host exercise of the actual Pocket async routines with simulated MMIO.
++
++CSR IRQ masking, savestate sampling and command dispatch are stubbed. Extract
++routines rather than compiling unrelated RISC-V file/cache HAL code. Translate
++the DS_STATUS W1C assignment into simulated W1C; all async logic is unchanged.
++The fixture supplies subsequent hardware status samples.
++"""
++from pathlib import Path
++import subprocess
++import tempfile
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/firmware/os/targets/pocket/file.c"
++
++
++def function(source, name):
++    import re
++    match = re.search(r"^(?:static )?(?:inline )?(?:int|void|uint32_t) " + name + r"\([^;]*?\)\s*\{", source, re.M)
++    assert match, name
++    start = match.start()
++    pos = source.index("{", match.start())
++    depth = 1
++    end = pos + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def main():
++    source = SOURCE.read_text()
++    state = source[source.index("static struct {"):source.index("/* Local IRQ mask")]
++    routines = ["async_finalize", "async_complete", "async_copy_slice", "async_copy_drain"]
++    if "static int async_quarantine_gate(" in source:
++        routines += ["async_quarantine_gate"]
++    routines += ["async_gate", "of_file_read_async", "of_file_async_irq_service"]
++    if "static void async_abort_pending_save(" in source:
++        routines += ["async_abort_pending_save"]
++    routines += ["of_file_async_poll", "of_file_async_tick", "of_file_async_busy", "of_file_cram0_quiet"]
++    prelude = r'''
++#include <assert.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#define OF_ERR_BUSY -16
++#define OF_ERR_TIMEOUT -12
++#define OF_ERR_BAD_RANGE -3
++#define DS_STATUS_ACK 1u
++#define DS_STATUS_DONE 2u
++#define DS_STATUS_ERR_MASK 0x1cu
++#define DS_STATUS_ERR_SHIFT 2
++#define DS_STATUS_READY 32u
++#define DS_STATUS_WR_IDLE 64u
++#define DS_STATUS_IRQ_PENDING 128u
++#define IRQ_MASK_DATASLOT 32u
++#define CRAM0_MODE_CPU 1u
++#define CRAM0_MODE_BRIDGE 0u
++#define CRAM0_BASE 0x30000000u
++#define OF_TARGET_CRAM0_ASYNC_BOUNCE_OFFSET 0x410000u
++#define OF_TARGET_CRAM0_DMA_CHUNK_SIZE 65536u
++#define TIMER_CTRL_ENABLE 1u
++#define ASYNC_COPY_SLICE_BYTES 2048u
++#define ASYNC_AGE_LIMIT_MS 2000u
++#define DS_CMD_READ 1u
++#define of_term_printf(...) ((void)0)
++static uint32_t DS_STATUS, IRQ_MASK, CRAM0_MODE, TIMER_CTRL;
++static uint32_t DS_SLOT_ID, DS_SLOT_OFFSET, DS_BRIDGE_ADDR, DS_LENGTH;
++static int async_token_counter, bridge_warmup_active = 1;
++static int request, polls, commands, callbacks, last_token, last_result;
++static uint32_t mie = 8u;
++static uint32_t file_irq_save(void) { uint32_t p = mie; mie = 0; return p; }
++static void file_irq_restore(uint32_t p) { mie = p; }
++static void bridge_warmup_once(void) { assert(0); }
++static int async_dest_in_cram0(void *p, uint32_t n) { (void)p; (void)n; return 1; }
++static uint32_t cpu_to_bridge(void *p) { return (uint32_t)(uintptr_t)p; }
++int of_savestate_poll(void) {
++    assert(mie == 0 && async_state.active && !async_state.copy_pending);
++    ++polls; return request;
++}
++static void ds_status_w1c(uint32_t bits) { DS_STATUS &= ~bits; }
++static int ds_issue_command(uint32_t cmd) {
++    assert(cmd == DS_CMD_READ);
++    /* Old pending IRQ must be W1C-cleared before dispatch. Acceptance resets
++       the DONE latch even when READY/WR_IDLE remain high before host ACK. */
++    assert(!(DS_STATUS & DS_STATUS_IRQ_PENDING));
++    ++commands; DS_STATUS = DS_STATUS_READY | DS_STATUS_WR_IDLE; return 0;
++}
++static void callback(int token, int result) {
++    assert(mie == 0); ++callbacks; last_token = token; last_result = result;
++}
++'''
++    # The savestate stub observes the real async state declaration.
++    prefix, rest = prelude.split("int of_savestate_poll", 1)
++    body = prefix + state + "int of_savestate_poll" + rest
++    body += "\n".join(function(source, name).replace("DS_STATUS = DS_STATUS_IRQ_PENDING;", "ds_status_w1c(DS_STATUS_IRQ_PENDING);") for name in routines)
++    body += r'''
++static int issue(void) {
++    uint32_t irq = file_irq_save();
++    int token = of_file_read_async(4, 0, (void *)(uintptr_t)0x30500000u, 64, callback);
++    file_irq_restore(irq); return token;
++}
++int main(void) {
++    DS_STATUS = DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    int first = issue(); assert(first >= 0 && commands == 1);
++    unsigned char app_buffer[64], bounce_buffer[64];
++    memset(app_buffer, 0x11, sizeof(app_buffer));
++    memset(bounce_buffer, 0x22, sizeof(bounce_buffer));
++    async_state.dest = app_buffer;
++    async_state.dma_dest = bounce_buffer;
++    async_state.bounce_to_dest = 1;
++    request = 1; /* SAVE while accepted file read has no ACK/DONE */
++    assert(of_file_async_poll() == 1);
++    assert(callbacks == 1 && last_token == first && last_result == OF_ERR_TIMEOUT);
++    assert(!of_file_async_busy() && of_file_cram0_quiet());
++    assert(CRAM0_MODE == CRAM0_MODE_BRIDGE && mie == 8u);
++    assert(!(IRQ_MASK & IRQ_MASK_DATASLOT));
++    for (unsigned i = 0; i < sizeof(app_buffer); ++i) assert(app_buffer[i] == 0x11);
++    assert(issue() == OF_ERR_BUSY && commands == 1); /* READY alone isn't DONE */
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_IRQ_PENDING;
++    assert(issue() == OF_ERR_BUSY && commands == 1); /* writes still draining */
++    of_file_async_irq_service(); /* stale completion cannot copy or callback */
++    assert(callbacks == 1 && CRAM0_MODE == CRAM0_MODE_BRIDGE);
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE | DS_STATUS_IRQ_PENDING;
++    request = 0;
++    int second = issue(); assert(second > first && commands == 2);
++    assert(of_file_async_poll() == 0 && callbacks == 1); /* no stale token result */
++    request = 2; /* LOAD must keep this read alive */
++    assert(of_file_async_poll() == 0 && of_file_async_busy());
++    of_file_async_tick(); assert(callbacks == 1 && of_file_async_busy());
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    assert(of_file_async_poll() == 1);
++    assert(callbacks == 2 && last_token == second && last_result == 0);
++    assert(CRAM0_MODE == CRAM0_MODE_CPU);
++    DS_STATUS = DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    int third = issue(); request = 1;
++    of_file_async_tick(); /* timer path also breaks mutual wait promptly */
++    assert(callbacks == 3 && last_token == third && last_result == OF_ERR_TIMEOUT);
++    assert(!of_file_async_busy() && of_file_async_poll() == 1);
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    request = 0; assert(issue() > third);
++    async_state.age_ms = ASYNC_AGE_LIMIT_MS - 1;
++    of_file_async_tick(); /* legacy age-out receives the same quarantine */
++    assert(callbacks == 4 && last_result == OF_ERR_TIMEOUT);
++    assert(issue() == OF_ERR_BUSY);
++    assert(async_gate() == OF_ERR_BUSY); /* sync fallback also blocked */
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    int fifth = issue(); request = 1;
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE | DS_STATUS_IRQ_PENDING;
++    assert(of_file_async_poll() == 1); /* completion wins over pending SAVE */
++    assert(callbacks == 5 && last_token == fifth && last_result == 0);
++    DS_STATUS = DS_STATUS_READY | DS_STATUS_WR_IDLE;
++    int sixth = issue();
++    async_state.dest = app_buffer;
++    async_state.dma_dest = bounce_buffer;
++    async_state.bounce_to_dest = 1;
++    TIMER_CTRL = TIMER_CTRL_ENABLE;
++    DS_STATUS = DS_STATUS_DONE | DS_STATUS_READY | DS_STATUS_WR_IDLE | DS_STATUS_IRQ_PENDING;
++    of_file_async_tick(); /* deferred successful bounce copy is not aborted */
++    assert(async_state.copy_pending && callbacks == 5);
++    assert(of_file_async_poll() == 1);
++    assert(callbacks == 6 && last_token == sixth && last_result == 0);
++    assert(memcmp(app_buffer, bounce_buffer, sizeof(app_buffer)) == 0);
++    assert(polls > 0 && mie == 8u);
++    puts("PASS: SAVE abort, quarantine, late IRQ, LOAD, completion and age-out");
++    return 0;
++}
++'''
++    with tempfile.TemporaryDirectory() as temp:
++        c = Path(temp) / "test.c"
++        exe = Path(temp) / "test"
++        c.write_text(body)
++        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", str(c), "-o", str(exe)], check=True)
++        subprocess.run([str(exe)], check=True)
++
++
++if __name__ == "__main__":
++    main()

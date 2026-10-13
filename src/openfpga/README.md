@@ -114,6 +114,9 @@ source change, rebuild its firmware and patch the matching bootloader into
 the bitstream before staging. The output is
 `out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
 The base SDK is read-only. The standard build still uses its existing SDK.
+The patched runtime prioritizes a pending save over an unfinished asynchronous
+read and provides a conservative heap-capacity query. Install the complete
+package when updating it: the app, OS, and bitstream must match.
 Native container builds use the firmware image built by openfpgaOS; the app
 wrapper mounts both the SDK and this repository. Packaging needs Bash 4 or later
 on the host (Homebrew's Bash on macOS).
@@ -140,6 +143,17 @@ It also splits core capture into phases, reports the Pocket's read-word count,
 and separates seek/read time for texture-pack reads that take at least 100 ms.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
+Core format revision 4 uses lossless Zstandard compression; revision 3 states
+remain readable. Native builds avoid the renderer's large allocation probe
+when the OS can prove the reserve fits, otherwise retaining the original probe.
+The first reserve check logs the allocation and query timings for comparison.
+
+The runtime fault tests use the patched OS checkout:
+
+```bash
+OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_async_save_abort.py
+OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_heap_reserve.py
+```
 
 Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
 `BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with

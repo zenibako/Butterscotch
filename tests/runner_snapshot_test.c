@@ -4,6 +4,8 @@
 #include "log.h"
 #include "spatial_grid.h"
 #include "miniz.h"
+#define ZSTD_STATIC_LINKING_ONLY
+#include "zstd.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +33,41 @@ static uint32_t hashBytes(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
     return h;
 }
+static uint8_t *decodeRaw(const uint8_t *bytes, size_t size, uint32_t *rawLenOut) {
+    uint32_t rawLen = le32(bytes + 24);
+    uint8_t *raw = malloc(rawLen);
+    assert(raw);
+    if (le32(bytes + 4) == 4) {
+        assert(ZSTD_decompress(raw, rawLen, bytes + 32, size - 32) == rawLen);
+    } else {
+        mz_ulong n = rawLen;
+        assert(le32(bytes + 4) == 3);
+        assert(mz_uncompress(raw, &n, bytes + 32, size - 32) == MZ_OK && n == rawLen);
+    }
+    *rawLenOut = rawLen;
+    return raw;
+}
+static void encodeRaw(uint8_t **bytes, size_t *size, const uint8_t *raw,
+                      uint32_t rawLen, uint32_t version) {
+    size_t cap = version == 4 ? ZSTD_compressBound(rawLen) : mz_compressBound(rawLen);
+    uint8_t *out = malloc(cap + 32);
+    assert(out);
+    if (version == 4) {
+        cap = ZSTD_compress(out + 32, cap, raw, rawLen, 1);
+        assert(!ZSTD_isError(cap));
+    } else {
+        mz_ulong n = cap;
+        assert(mz_compress2(out + 32, &n, raw, rawLen, MZ_DEFAULT_COMPRESSION) == MZ_OK);
+        cap = n;
+    }
+    memcpy(out, *bytes, 32);
+    write32(out + 4, version);
+    write32(out + 16, (uint32_t)cap + 8);
+    write32(out + 24, rawLen);
+    write32(out + 28, hashBytes(raw, rawLen));
+    write32(out + 20, hashBytes(out + 24, cap + 8));
+    free(*bytes); *bytes = out; *size = cap + 32;
+}
 static size_t roomBlock(const uint8_t *p, size_t n, uint32_t rooms) {
     for (size_t i = 0; i + 14 < n; i++)
         if (le32(p + i) == rooms && le32(p + i + 4 + rooms) == 320 &&
@@ -39,19 +76,11 @@ static size_t roomBlock(const uint8_t *p, size_t n, uint32_t rooms) {
 }
 static void repack(uint8_t **bytes, size_t *size,
                    void (*change)(uint8_t *, size_t)) {
-    uint32_t rawLen = le32(*bytes + 24);
-    uint8_t *raw = malloc(rawLen);
-    mz_ulong n = rawLen;
-    assert(mz_uncompress(raw, &n, *bytes + 32, *size - 32) == MZ_OK && n == rawLen);
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(*bytes, *size, &rawLen);
     change(raw, rawLen);
-    mz_ulong cap = mz_compressBound(rawLen);
-    uint8_t *out = malloc(cap + 32);
-    assert(mz_compress2(out + 32, &cap, raw, rawLen, MZ_DEFAULT_COMPRESSION) == MZ_OK);
-    memcpy(out, *bytes, 32);
-    write32(out + 16, (uint32_t)cap + 8);
-    write32(out + 28, hashBytes(raw, rawLen));
-    write32(out + 20, hashBytes(out + 24, cap + 8));
-    free(raw); free(*bytes); *bytes = out; *size = cap + 32;
+    encodeRaw(bytes, size, raw, rawLen, le32(*bytes + 4));
+    free(raw);
 }
 static void invalidRoomFlag(uint8_t *raw, size_t n) {
     size_t at = roomBlock(raw, n, 1);
@@ -86,21 +115,12 @@ static void invalidIniMagic(uint8_t *raw, size_t n) {
 }
 static void removeIniAndMaybeDormantTail(uint8_t **bytes, size_t *size,
                                          size_t drop) {
-    uint32_t rawLen = le32(*bytes + 24);
-    uint8_t *raw = malloc(rawLen);
-    mz_ulong n = rawLen;
-    assert(mz_uncompress(raw, &n, *bytes + 32, *size - 32) == MZ_OK && n == rawLen);
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(*bytes, *size, &rawLen);
     assert(drop <= rawLen);
     rawLen -= (uint32_t)drop;
-    mz_ulong cap = mz_compressBound(rawLen);
-    uint8_t *out = malloc(cap + 32);
-    assert(mz_compress2(out + 32, &cap, raw, rawLen, MZ_DEFAULT_COMPRESSION) == MZ_OK);
-    memcpy(out, *bytes, 32);
-    write32(out + 16, (uint32_t)cap + 8);
-    write32(out + 24, rawLen);
-    write32(out + 28, hashBytes(raw, rawLen));
-    write32(out + 20, hashBytes(out + 24, cap + 8));
-    free(raw); free(*bytes); *bytes = out; *size = cap + 32;
+    encodeRaw(bytes, size, raw, rawLen, le32(*bytes + 4));
+    free(raw);
 }
 
 static void fixture(Runner *r, DataWin *dw, VMContext *vm, Renderer *renderer,
@@ -514,6 +534,10 @@ static void testOlderCoreV3Trailers(void) {
     fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 56, &bytes, &size, &reason));
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    encodeRaw(&bytes, &size, raw, rawLen, 3);
+    free(raw);
     removeIniAndMaybeDormantTail(&bytes, &size, 8);
     RunnerSnapshot *s = Runner_snapshotPrepare(&r, 56, bytes, size, &reason);
     assert(s); Runner_snapshotFree(s);
@@ -521,6 +545,51 @@ static void testOlderCoreV3Trailers(void) {
     s = Runner_snapshotPrepare(&r, 56, bytes, size, &reason);
     assert(s); Runner_snapshotFree(s);
     free(bytes); destroyFixture(&r);
+}
+
+static void testZstdV4FrameValidation(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 58, &bytes, &size, &reason));
+    assert(le32(bytes + 4) == 4);
+    assert(ZSTD_getFrameContentSize(bytes + 32, size - 32) == le32(bytes + 24));
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 58, bytes, size, &reason);
+    assert(s); Runner_snapshotFree(s);
+    assert(Runner_snapshotPrepare(&r, 58, bytes, size - 1, &reason) == NULL);
+    uint8_t *bad = malloc(size + 1);
+    /* A truncated frame with a repaired outer checksum must reach the codec. */
+    memcpy(bad, bytes, size - 1);
+    write32(bad + 16, (uint32_t)(size - 1 - 24));
+    write32(bad + 20, hashBytes(bad + 24, size - 1 - 24));
+    assert(Runner_snapshotPrepare(&r, 58, bad, size - 1, &reason) == NULL);
+    memcpy(bad, bytes, size);
+    bad[size] = 0;
+    write32(bad + 16, (uint32_t)(size + 1 - 24));
+    write32(bad + 20, hashBytes(bad + 24, size + 1 - 24));
+    assert(Runner_snapshotPrepare(&r, 58, bad, size + 1, &reason) == NULL);
+    memcpy(bad, bytes, size);
+    bad[32] ^= 0x80;
+    write32(bad + 20, hashBytes(bad + 24, size - 24));
+    assert(Runner_snapshotPrepare(&r, 58, bad, size, &reason) == NULL);
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    ZSTD_CCtx *ctx = ZSTD_createCCtx();
+    assert(ctx);
+    assert(!ZSTD_isError(ZSTD_CCtx_setParameter(ctx, ZSTD_c_contentSizeFlag, 0)));
+    size_t cap = ZSTD_compressBound(rawLen);
+    uint8_t *unknown = malloc(cap + 32);
+    memcpy(unknown, bytes, 32);
+    size_t compressed = ZSTD_compress2(ctx, unknown + 32, cap, raw, rawLen);
+    assert(!ZSTD_isError(compressed));
+    assert(ZSTD_getFrameContentSize(unknown + 32, compressed) == ZSTD_CONTENTSIZE_UNKNOWN);
+    write32(unknown + 16, (uint32_t)compressed + 8);
+    write32(unknown + 20, hashBytes(unknown + 24, compressed + 8));
+    assert(Runner_snapshotPrepare(&r, 58, unknown, compressed + 32, &reason) == NULL);
+    free(unknown); ZSTD_freeCCtx(ctx); free(raw);
+    free(bad); free(bytes);
+    destroyFixture(&r);
 }
 
 static void testFreeCameraRefuses(void) {
@@ -642,6 +711,7 @@ static void testLargeCompressibleMap(void) {
 }
 
 int main(void) {
+    testZstdV4FrameValidation();
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
     testAllLoadedRoomsAndDefinitions();

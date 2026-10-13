@@ -4,6 +4,8 @@
 #include "spatial_grid.h"
 #include "stb_ds.h"
 #include "miniz.h"
+#define ZSTD_STATIC_LINKING_ONLY
+#include "zstd.h"
 #ifdef PLATFORM_BUSY_TICK
 #include "log.h"
 #endif
@@ -16,7 +18,8 @@
 
 /* This is a same-build, WAD16-only wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 3u
+#define SNAP_VERSION 4u
+#define SNAP_LEGACY_VERSION 3u
 #define SNAP_OUTPUT_LIMIT (1024u * 1024u)
 #define SNAP_LIMIT (4u * 1024u * 1024u)
 #define SNAP_MAX_ITEMS 65536u
@@ -697,13 +700,14 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 #ifdef PLATFORM_BUSY_TICK
     phase[3] = nowNanos();
 #endif
-    mz_ulong compressedCap = mz_compressBound(rawLen);
+    size_t compressedCap = ZSTD_compressBound(rawLen);
     uint8_t *compressed = (uint8_t *)malloc(compressedCap);
-    /* The Pocket waits for capture before it can read any state. Level 2
-     * bounds match searching and uses greedy parsing; level 1 leaves too
-     * little envelope headroom in Snowdin. The zlib format is unchanged. */
-    if (!compressed || mz_compress2(compressed, &compressedCap, w.p + 24,
-                                     rawLen, 2) != MZ_OK) {
+    if (!compressed) {
+        if (reason) *reason = "Runner snapshot compression failed";
+        free(compressed); free(w.p); return false;
+    }
+    compressedCap = ZSTD_compress(compressed, compressedCap, w.p + 24, rawLen, 1);
+    if (ZSTD_isError(compressedCap)) {
         if (reason) *reason = "Runner snapshot compression failed";
         free(compressed); free(w.p); return false;
     }
@@ -727,7 +731,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     uint32_t crc = checksum(out.p + 24, out.n - 24);
 #ifdef PLATFORM_BUSY_TICK
     phase[5] = nowNanos();
-    logInfo("State core phases: graph %llu encode %llu crc %llu deflate %llu pack %llu ms; raw %u compressed %lu\n",
+    logInfo("State core phases: graph %llu encode %llu crc %llu zstd %llu pack %llu ms; raw %u compressed %lu\n",
         (unsigned long long)((phase[1] - phase[0]) / 1000000),
         (unsigned long long)((phase[2] - phase[1]) / 1000000),
         (unsigned long long)((phase[3] - phase[2]) / 1000000),
@@ -915,15 +919,37 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint64_t id = get64(&hdr);
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
-    if (!hdr.ok || magic != SNAP_MAGIC || version != SNAP_VERSION || id != gameId ||
+    if (!hdr.ok || magic != SNAP_MAGIC || (version != SNAP_VERSION && version != SNAP_LEGACY_VERSION) || id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
         rawLen < sizeof(RunnerPlain) || rawLen > SNAP_LIMIT - 24) {
         if (reason) *reason = "Runner snapshot header or checksum mismatch"; return NULL;
     }
     uint8_t *raw = (uint8_t *)malloc(rawLen);
-    mz_ulong decompressedLen = rawLen;
-    if (!raw || mz_uncompress(raw, &decompressedLen, data + 32, size - 32) != MZ_OK ||
-        decompressedLen != rawLen || checksum(raw, rawLen) != rawCrc) {
+    bool decoded = false;
+    if (raw && version == SNAP_LEGACY_VERSION) {
+        mz_ulong decompressedLen = rawLen;
+        decoded = mz_uncompress(raw, &decompressedLen, data + 32, size - 32) == MZ_OK &&
+                  decompressedLen == rawLen;
+    } else if (raw) {
+        ZSTD_frameHeader frame = {0};
+        size_t headerResult = ZSTD_getFrameHeader(&frame, data + 32, size - 32);
+        size_t frameLen = ZSTD_findFrameCompressedSize(data + 32, size - 32);
+        if (headerResult == 0 && frame.frameType == ZSTD_frame &&
+            frame.frameContentSize == rawLen && frame.windowSize <= SNAP_LIMIT &&
+            !ZSTD_isError(frameLen) && frameLen == size - 32) {
+            ZSTD_DCtx *ctx = ZSTD_createDCtx();
+            if (ctx) {
+                size_t bounded = ZSTD_DCtx_setParameter(ctx, ZSTD_d_windowLogMax, 22);
+                if (!ZSTD_isError(bounded)) {
+                    size_t decodedLen = ZSTD_decompressDCtx(ctx, raw, rawLen,
+                                                               data + 32, size - 32);
+                    decoded = !ZSTD_isError(decodedLen) && decodedLen == rawLen;
+                }
+                ZSTD_freeDCtx(ctx);
+            }
+        }
+    }
+    if (!decoded || checksum(raw, rawLen) != rawCrc) {
         if (reason) *reason = "Runner snapshot decompression failed";
         free(raw); return NULL;
     }

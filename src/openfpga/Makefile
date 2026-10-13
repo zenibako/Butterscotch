@@ -86,7 +86,8 @@ BS_STB_SRCS    = $(BS_SRC)/embedded/stb_impl.c
 BS_VENDOR_SRCS = $(wildcard $(BS_VENDOR)/bzip2/*.c) \
                  $(BS_VENDOR)/sha1/sha1.c $(BS_VENDOR)/md5/md5.c \
                  $(BS_VENDOR)/base64/base64.c \
-                 $(BS_VENDOR)/miniz/miniz.c $(BS_VENDOR)/miniz/miniz_tdef.c $(BS_VENDOR)/miniz/miniz_tinfl.c
+                 $(BS_VENDOR)/miniz/miniz.c $(BS_VENDOR)/miniz/miniz_tdef.c $(BS_VENDOR)/miniz/miniz_tinfl.c \
+                 $(BS_VENDOR)/zstd/zstd.c
 # Box2D physics is left out (ENABLE_PHYSICS off): Undertale does not use it.
 BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics_disabled.c
 
@@ -103,7 +104,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
               -I$(BS_SRC)/debug_font \
               -I$(BS_VENDOR)/stb/ds -I$(BS_VENDOR)/stb/image -I$(BS_VENDOR)/stb/vorbis \
               -I$(BS_VENDOR)/bzip2 -I$(BS_VENDOR)/sha1 -I$(BS_VENDOR)/md5 \
-              -I$(BS_VENDOR)/base64 -I$(BS_VENDOR)/miniz
+              -I$(BS_VENDOR)/base64 -I$(BS_VENDOR)/miniz -I$(BS_VENDOR)/zstd
 
 # Undertale v1.08 is WAD 16; building only that version shrinks the
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
