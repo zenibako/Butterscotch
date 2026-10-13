@@ -476,3 +476,24 @@ accepted-write bound. The saved streamed voice itself satisfies cursor bounds.
 A refusal with a small accepted-write count and a large reported queue would
 support this mechanism. This is a source-level hypothesis, not a verified fix;
 no runtime or RTL behavior has been changed for this diagnostic.
+
+
+### October 13: phantom audio backlog reproduced in actual mixer RTL
+
+The next device audit identifies queue-shadow refusal directly: capacity
+131072, free 15102, queued 115969, reserved 1, written 3, shadow present, zero
+bytes encoded. The first capture (ID `99da25ff`, 241843 bytes) and its wake load
+succeeded; the second game capture succeeded and audio refused. Allocation and
+voice-cursor checks are not the cause of this particular refusal.
+
+Added `test_stream_restore_position_readback` to the real mixer harness: play
+until position is nonzero, deactivate, queue a reset to zero, restore three PCM
+pairs, verify real position and registered readback, then refill and repeat.
+Before the change the voice table correctly holds zero but readback stays 253,
+producing a phantom backlog. Exactly six new assertions fail across two cycles
+(183 pass). Updating `pos_latch` on a non-volume queued CPU write's S_IDLE
+commit makes all 189 mixer checks pass, including PCM and memory-stall parity.
+The existing registered read latency and queued-write ownership are preserved.
+The patch applies cleanly to `865d627` and the resulting source/test match the
+verified clone byte for byte. This reproduces a frequency-independent RTL bug;
+Pocket behavior and a new fit's timing still require verification.
