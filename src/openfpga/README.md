@@ -135,12 +135,11 @@ The Pocket can still power off after a refused save. In the hardware test, wake
 then replayed an older sleep payload. A refusal therefore means the current
 position will not be restored; check eligibility before sleeping.
 
-During a save, the screen reports the capture stage and Pocket transfer.
-If saving freezes, report the last visible stage. `Save transfer returned`
-means the OS call returned; it does not confirm that the Pocket wrote a file.
-The log records capture sizes, elapsed time, and the transfer return code.
-It also splits core capture into phases, reports the Pocket's read-word count,
-and separates seek/read time for texture-pack reads that take at least 100 ms.
+Routine saves and loads use the Pocket's normal interface; the app shows
+refusals and failures without extra stage overlays. For troubleshooting,
+Select → Save log writes the log to the spare save slot; leave through the
+Analogue menu to keep it. The log records capture sizes, elapsed time,
+transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
 Core format revision 5 uses lossless Zstandard compression and references strings
@@ -162,8 +161,7 @@ across repeated sleep/wake cycles.
 audio restoration and input/clock reset.
 `State prepare phases` separates decode, rooms, values, indexes and temporary
 buffer cleanup. Individual `State room payload` lines time asset reads for
-missing room definitions. Save/load stage diagnostics stay in the log; only
-refusals and failures show an app notice.
+missing room definitions.
 Save-state builds retain the raw ROOM chunk already read at startup, so lazy
 room reloads use memory during restoration. Room parsing and unloading remain
 lazy. The cache uses additional heap space and is released with the game data.
@@ -463,6 +461,11 @@ is hidden by then and writing to it is slow.
   reboot-looped before the OS banner appeared.
 - Music, sound effects and saves work on hardware, including a save
   imported from the desktop game.
+- Undertale save-state test builds passed Pocket save/load and repeated
+  sleep/wake checks in supported overworld scenes, including the quieter UI.
+  The final integration with main passed desktop restore checks and native
+  compilation; it has not had a separate Pocket run. Build prerequisites and
+  supported scenes are listed under “Save states and sleep” above.
 - Not everything runs at full speed. Which scenes do, and by how much the
   others miss, is what the benchmark is for.
 - Deltarune Chapter 1 plays on the desktop build through the opening and a
