@@ -153,3 +153,15 @@ SS_STATUS read uses the pinned runtime register layout. The audio regression
 failed before the guard, then passed with unchanged voice/buffer state while
 deferred and successful real-file refill after resuming. An already accepted
 read can still race a request; this change does not cancel host transfers.
+
+The guarded device retest still showed a six-second read stall before capture;
+the first deferral message appeared only after transfer returned. Source review
+then found that os25's hardware-mixer boot leaves the machine timer disabled,
+while the existing two-second async watchdog runs only from that timer ISR.
+The save-state app now installs an empty 1 kHz callback through the existing
+SDK API to enable OS housekeeping. It logs timer control before/after.
+Failed optional direct reads no longer fall through to another blocking host
+read, and their staging allocation remains alive for late completion. A second
+regression injects a request after refill entry and verifies no new file read,
+preserved unread bytes, and normal resumed refill. Hardware confirmation of
+watchdog timing and save delivery remains required.

@@ -13,7 +13,10 @@ static int freePairs;
 static int16_t submitted[32];
 static int submittedCount;
 static bool stateRequestPending;
-bool utSavestateDeferFileReads(void) { return stateRequestPending; }
+static int deferAfterChecks = -1;
+bool utSavestateDeferFileReads(void) {
+    return stateRequestPending || (deferAfterChecks >= 0 && deferAfterChecks-- == 0);
+}
 int of_audio_free(void) { return freePairs; }
 void of_audio_init(void) { submittedCount = 0; }
 void utPcAudioSnapshotReset(void) { submittedCount = 0; }
@@ -79,6 +82,17 @@ int main(void) {
     refillVoice(&ut, &deferred);
     assert(deferred.fileBytePos == sizeof(adpcm));
     assert(deferred.bufferPos == 0 && deferred.bufferLen == sizeof(adpcm) - 4);
+    /* A request can arrive after the refill entry check. Do not start a
+     * fallback file read; retaining the compacted unread tail is sufficient. */
+    deferred = beforeVoice;
+    memcpy(deferred.data, beforeBuffer, sizeof(beforeBuffer));
+    deferAfterChecks = 1;
+    refillVoice(&ut, &deferred);
+    assert(deferred.fileBytePos == beforeVoice.fileBytePos);
+    assert(deferred.bufferPos == 0 && deferred.bufferLen == 8);
+    deferAfterChecks = -1;
+    refillVoice(&ut, &deferred);
+    assert(deferred.fileBytePos == sizeof(adpcm));
     assert(ut.voices[0].instanceId == 100012 && ut.nextInstanceId == 100013);
     for (size_t n = 0; n < size; n++)
         assert(utAudioPrepareSnapshot(&ut.base, bytes, n, &reason) == NULL);
