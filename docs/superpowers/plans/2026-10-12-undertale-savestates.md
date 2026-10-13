@@ -49,19 +49,19 @@ void Runner_snapshotFree(RunnerSnapshot *snapshot);
 
 ### Task 2: Audio and progress-file sections
 
-Files: `src/openfpga/platform/ut_snapshot_parts.h`, `of_audio_system.c`,
-`ut_save_fs.c`, and targeted tests.
+Files: `src/openfpga/platform/of_snapshot_parts.h`, `of_audio_system.c`,
+`of_save_fs.c`, and targeted tests.
 
 Interfaces (opaque plans keep allocation and I/O out of commit):
 ```c
-bool utAudioSnapshot(AudioSystem*, uint8_t**, size_t*, const char**);
-void *utAudioPrepareSnapshot(AudioSystem*, const uint8_t*, size_t, const char**);
-void utAudioApplySnapshot(AudioSystem*, void*);
-void utAudioFreeSnapshot(void*);
-bool utSaveFsSnapshot(FileSystem*, uint8_t**, size_t*, const char**);
-void *utSaveFsPrepareSnapshot(FileSystem*, const uint8_t*, size_t, const char**);
-bool utSaveFsApplySnapshot(FileSystem*, void*);
-void utSaveFsFreeSnapshot(void*);
+bool ofAudioSnapshot(AudioSystem*, uint8_t**, size_t*, const char**);
+void *ofAudioPrepareSnapshot(AudioSystem*, const uint8_t*, size_t, const char**);
+void ofAudioApplySnapshot(AudioSystem*, void*);
+void ofAudioFreeSnapshot(void*);
+bool ofSaveFsSnapshot(FileSystem*, uint8_t**, size_t*, const char**);
+void *ofSaveFsPrepareSnapshot(FileSystem*, const uint8_t*, size_t, const char**);
+bool ofSaveFsApplySnapshot(FileSystem*, void*);
+void ofSaveFsFreeSnapshot(void*);
 ```
 
 - [x] Test archive rollback and malformed archive rejection; test voice cursor,
@@ -72,7 +72,7 @@ void utSaveFsFreeSnapshot(void*);
 
 ### Task 3: Envelope, frame boundary and visible refusal
 
-Files: `src/openfpga/platform/ut_savestate.c`, `ut_savestate.h`,
+Files: `src/openfpga/platform/of_state_requests.c`, `of_state_requests.h`,
 `of_platform.c`, `of_hooks.h`, `src/loop.c`, `src/openfpga/main.c`, Makefile.
 
 - [x] Test envelope lengths, checksum and game identity; reject before mutation.
@@ -524,3 +524,38 @@ remain. Existing native completion tests now assert successful requests emit
 no app notices and rejected requests emit one; they fail with the previous
 stage notices and pass after removal. Transactional restore tests and lint
 also pass. This is an ELF-only update to the hardware-tested mixer package.
+
+
+### October 13: final PR integration
+
+The user confirmed the quieter save/load ELF works on the Pocket and requested
+shipping. Integrated current main (`0fe413c`) before opening the Butterscotch PR.
+Resolved the Makefile conflict by retaining both save-state targets and main's
+profiler/clipping fixtures, and the texture-loader conflict by retaining main's
+windowed/direct reader instead of obsolete per-tile diagnostic code. Snapshot,
+completion/transaction tests and lint pass after integration; the native ELF
+and desktop ASan/UBSan build succeed. Two cold restores still produce byte-
+identical future frames 1100 and 1200 versus the pre-integration references.
+The prior hardware confirmation applies to the tested pre-merge ELF; the
+integrated source has these desktop/native checks, not a new Pocket run.
+
+
+### October 13: generic CI source scope
+
+Pocket and game tests passed CI, while generic builds failed because their
+core-source wildcards unintentionally compiled the Pocket-only snapshot codec.
+Observed failures included strict C initializer warnings, C++ goto/initialization
+errors, and missing Zstandard headers in legacy Makefile builds. Generic
+frontends have no snapshot API consumers. Removed the codec from generic
+Makefile/CMake source lists and removed CMake's unused Zstandard library;
+Pocket and dedicated snapshot tests still compile the full codec and Zstandard.
+This scopes the dependency without reducing compiler warnings or CI coverage.
+
+Reproduced the generic Makefile failure locally before the change. Afterward,
+an isolated Linux GNU C++98 build with -Wall -Wvla -Werror passes. A strict
+CMake/noop build passes (with a local macOS SDK deprecation-warning exemption
+for pre-existing vendored stb code). Snapshot ASan/UBSan, request completion,
+transactional restore tests and Pocket lint pass. Compile commands confirm
+the generic CMake build excludes the codec and Zstandard; Pocket's source
+list still includes both. The hosted cross-platform rerun remains the final
+CI verification.
