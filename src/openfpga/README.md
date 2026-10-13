@@ -151,6 +151,8 @@ The first reserve check logs the allocation and query timings for comparison.
 State-request logs include refusal reasons and separate load receive,
 preparation, application and cleanup times. Successful loads notify the Pocket
 after committing restored state, before freeing the state they replace.
+`State apply phases` separates progress-archive writes, runner replacement,
+audio restoration and input/clock reset.
 
 The runtime fault tests use the patched OS checkout:
 
