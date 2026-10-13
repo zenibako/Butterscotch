@@ -21,7 +21,7 @@ names (a branch made before the rename, after it merges main):
 
 It stops before changing anything if a new name would collide with one the
 openfpgaOS SDK already defines. Running it twice changes nothing the second
-time.
+time. A line marked "rename-ut: keep", and the line after it, are left alone.
 """
 
 import argparse
@@ -38,8 +38,12 @@ KNOWN_ENV = {
     "DUMP_EVERY", "DUMP_FRAME", "DUMP_PATH", "DUMP_STATE", "EXIT_FRAME",
     "GOTO", "MENU", "MIRROR_FAINT", "NOFLIP", "NO_MIRROR", "NO_NATIVE",
     "NO_TILELAYER", "OVERLAY", "PLAYBACK", "PROFILE", "RECORD", "SCRIPT",
-    "SEED", "SET", "SKIP", "SMOOTH", "UNCAPPED",
+    "SEED", "SET", "SKIP", "SMOOTH", "UNCAPPED", "RUN_DIR",
 }
+
+# A line holding this marker, and the line after it, are left as they are
+# (the fallbacks that still read the old names).
+KEEP = "rename-ut: keep"
 
 # Game-specific names that get a game's name, not the generic prefix.
 SPECIAL = {
@@ -96,6 +100,23 @@ def env_names(root, files):
 
 
 def rewrite(text, env):
+    lines = text.splitlines(keepends=True)
+    out, keep = [], False
+    for line in lines:
+        if KEEP in line:
+            out.append(line)
+            keep = True
+        elif keep:
+            out.append(line)
+            keep = False
+        else:
+            out.append(rewrite_line(line, env))
+    text = "".join(out)
+    # Aliases such as "#define UT_SCREEN_W OF_SCREEN_W" are now no-ops.
+    return re.sub(r"^[ \t]*#define[ \t]+(OF_[A-Z0-9_]+)[ \t]+\1[ \t]*\n", "", text, flags=re.M)
+
+
+def rewrite_line(text, env):
     def ut(m):
         whole = "UT_" + m.group(1)
         if whole in SPECIAL:
@@ -110,10 +131,7 @@ def rewrite(text, env):
     text = re.sub(r"\but_([a-z0-9])", r"of_\1", text)
     text = text.replace("[undertale]", "[butterscotch]")
     text = re.sub(r"\bundertale-pocket-(build|perf|verify)\b", r"butterscotch-pocket-\1", text)
-    text = text.replace("ut-frames.sh", "bs-frames.sh")
-    # Aliases such as "#define UT_SCREEN_W OF_SCREEN_W" are now no-ops.
-    text = re.sub(r"^[ \t]*#define[ \t]+(OF_[A-Z0-9_]+)[ \t]+\1[ \t]*\n", "", text, flags=re.M)
-    return text
+    return text.replace("ut-frames.sh", "bs-frames.sh")
 
 
 def sdk_names(sdk):

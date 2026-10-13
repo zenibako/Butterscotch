@@ -1,8 +1,10 @@
 # Everything the build writes.
 /out/
-# Desktop test binary and user-supplied game data.
+# Desktop test binaries, and the user's own game data (games/<game>/; it
+# was beside this file for Undertale until 2026-10-13).
 /undertale_pc
 /undertale_pc_asan
+/bs_pc*
 /data.win
 /textures.bin
 /music.bin

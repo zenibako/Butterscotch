@@ -26,7 +26,8 @@ This file says what is here and how to use it. It carries no measurements:
 frame times, load times and sizes change from build to build, and the
 benchmark (see On-device diagnostics) reports them for the build in hand.
 
-You must supply your own `data.win` from Undertale v1.08.
+You must supply your own game data: `data.win` from Undertale v1.08, or a
+Deltarune chapter (see Deltarune below).
 
 ## Layout
 
@@ -34,6 +35,9 @@ You must supply your own `data.win` from Undertale v1.08.
 |------|------|
 | `main.c` | Entry point: registers `data.win` on data slot 4 and starts the runner |
 | `platform/of_platform.c` | Butterscotch platform hooks on the `of_*` API (video, pad, timing) |
+| `platform/of_*.c` | The rest of the platform layer; the same for every game |
+| `platform/game_undertale.c`, `platform/game_deltarune.c` | What differs per game (prompt patches, native scripts, benchmark route); the build compiles the one `GAME` names (see `platform/of_game.h`) |
+| `games/<game>/` | Your own game data (`data.win`, `music/`) and the packs built from it; not tracked |
 | `../` | Butterscotch itself; `../sw/` is the software renderer |
 | `dist/` | Pocket core definition (core, data slots, instance JSON) |
 | `out/` | Everything the build writes; not tracked |
@@ -64,8 +68,9 @@ cd butterscotch-pocket/src/openfpga
 
 # Your own game data: data.win (named game.ios inside the macOS app) and
 # the folder holding the game's .ogg files.
-cp /path/to/data.win data.win
-ln -s /path/to/folder-with-ogg-files music
+mkdir -p games/undertale
+cp /path/to/data.win games/undertale/data.win
+ln -s /path/to/folder-with-ogg-files games/undertale/music
 
 make            # builds the core and its data packs into out/build/pocket/butterscotch/
 make copy       # copies it to a mounted Pocket SD card
@@ -82,32 +87,35 @@ export USE_SDK_CONTAINER=0
 
 ```bash
 make            # RISC-V ELF + Pocket SD tree in out/build/pocket/butterscotch/
-make test       # desktop binary ./undertale_pc (run it next to a data.win)
+make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
+                # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
 ```
 
-Put your `data.win` in this directory (on macOS it is `game.ios` inside
+Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
-game's `.ogg` files as `music/`. The build copies it to
+game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this
+directory; the build stops and says so if it finds them here.) The build copies it to
 `Assets/butterscotch/common/` in the SD tree.
 
-Desktop extras: `BS_DUMP_FRAME=<n> BS_DUMP_PATH=out.ppm ./undertale_pc`
+Desktop extras: `BS_DUMP_FRAME=<n> BS_DUMP_PATH=out.ppm ../../undertale_pc` (from `games/undertale/`)
 writes frame `n` of the 320x240 output and exits. `BS_UNCAPPED=1` disables
 frame pacing for timing runs. `BS_SEED=<n>` fixes the game's RNG and
 `BS_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
 E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
-enables older bytecode versions for testing other games.
+enables older bytecode versions for testing other games. These settings were
+named `UT_*` until 2026-10-13; the old names still work and the log says so.
 
 `make profiler-fixture WADS="16 17"` builds the asset-free
-`./undertale_pc_profiler_fixture` check for Script times. It exercises nested
+`./<PC_BIN>_profiler_fixture` check (CI names it `bs_pc`) for Script times. It exercises nested
 script/builtin counts, native success/fallback accounting, report/reset, and
 off/on/off toggles between executions. Pass the same `PC_EXTRA_CFLAGS` sanitizer
 flags as an ASan build to check memory safety too.
 
 `make sprite-clipping-fixture WADS="16 17"` builds the asset-free
-`./undertale_pc_sprite_clipping_fixture`. It compares clipped sprites against
+`./<PC_BIN>_sprite_clipping_fixture`. It compares clipped sprites against
 crops of unclipped draws, including horizontal/vertical flips, scaling,
 transparency and an offset viewport. Pass sanitizer flags in `PC_EXTRA_CFLAGS`
 to check texture-read bounds as well.
@@ -116,7 +124,8 @@ to check texture-read bounds as well.
 
 The core lists two games on the Pocket, Undertale and Deltarune. They are
 the same code built twice (`GAME=deltarune` enables the newer bytecode
-version), and the SD tree is assembled from every game built so far:
+version and compiles `platform/game_deltarune.c` in place of
+`platform/game_undertale.c`), and the SD tree is assembled from every game built so far:
 
 ```bash
 tools/deltarune-setup.sh "<...>/DELTARUNE.app/Contents/Resources" 1   # links your files into games/deltarune/

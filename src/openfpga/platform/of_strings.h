@@ -3,8 +3,8 @@
 
 #include "data_win.h"
 
-/* Renames keyboard keys in the game's on-screen prompts to Pocket buttons. */
+/* Renames keyboard keys in the game's on-screen prompts to Pocket buttons,
+ * then makes any change to the game's code its game_<name>.c asks for. */
 void ofPatchStrings(DataWin *dw);
-void ofPatchInstructions(DataWin *dw);
 
 #endif /* OF_STRINGS_H */

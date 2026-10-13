@@ -1,5 +1,6 @@
 /*
- * undertale — Butterscotch (GameMaker: Studio runner) on openfpgaOS
+ * Butterscotch (GameMaker: Studio runner) on openfpgaOS, one program per
+ * game (GAME=undertale or GAME=deltarune; see the Makefile)
  *
  * Build: make
  * Copy:  make copy
@@ -29,7 +30,7 @@ extern int swrMirrorFaintAlpha;
  * optional music pack. */
 /* The Makefile names the game being built (GAME=...). */
 #ifndef OF_GAME_NAME
-#define OF_GAME_NAME "undertale"
+#error "OF_GAME_NAME is not set; build with the Makefile (GAME=undertale or GAME=deltarune)"
 #endif
 
 #define OF_SLOT_DATA_WIN 4
@@ -42,10 +43,36 @@ extern int swrMirrorFaintAlpha;
 #ifdef OF_PC
 /* In loop.c, which has no header for it: writes the input recording out. */
 void saveInputRecording(void);
+
+extern char **environ;
+
+/* The desktop settings were UT_* until 2026-10-13 and are BS_* now. An old
+ * name still works, unless the new one is set too, and is pointed out.
+ * (rename-ut: keep) */
+static void adoptOldSettings(void) {
+    /* Gathered first: setenv may move environ while it is being walked. */
+    const char *old[64];
+    int count = 0;
+    for (char **env = environ; env != NULL && *env != NULL && count < 64; env++)
+        if (strncmp(*env, "UT_", 3) == 0) old[count++] = *env;
+
+    char name[64];
+    for (int i = 0; i < count; i++) {
+        const char *equals = strchr(old[i], '=');
+        size_t length = equals != NULL ? (size_t) (equals - old[i]) : 0;
+        if (length < 4 || length >= sizeof(name)) continue;
+        snprintf(name, sizeof(name), "BS_%.*s", (int) (length - 3), old[i] + 3);
+        if (getenv(name) != NULL) continue;
+        printf("[butterscotch] %.*s is now %s\n", (int) length, old[i], name);
+        setenv(name, equals + 1, 0);
+    }
+}
 #endif
 
 int main(int argc, char **argv) {
-#ifndef OF_PC
+#ifdef OF_PC
+    adoptOldSettings();
+#else
     of_file_slot_register(OF_SLOT_DATA_WIN, OF_DATA_WIN_NAME);
     of_file_slot_register(OF_SLOT_TEXTURES, OF_TEXTURES_NAME);
     of_file_slot_register(OF_SLOT_MUSIC, OF_MUSIC_NAME);

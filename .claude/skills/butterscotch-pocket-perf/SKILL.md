@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-perf
-description: Measure and diagnose performance of the Undertale port on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
+description: Measure and diagnose performance of the Butterscotch port (Undertale and Deltarune) on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
 argument-hint: "[card: SD mount path] [harness: path or host:path of the os25 harness, if any]"
 ---
 
