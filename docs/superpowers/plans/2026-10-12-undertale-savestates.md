@@ -133,3 +133,13 @@ flush those edits to disk. Desktop save/cold-load of the same Snowdin scene now
 succeeds; subsequent movement frames match byte-for-byte, including under
 ASan/UBSan. Wrong-application payloads have a specific rejection message.
 User-facing terminology is "save states". Pocket sleep/wake retesting is pending.
+
+The later device diagnostic recorded successful core capture in 10,593 ms
+and total capture in 10,881 ms, followed by a 10,862 ms transfer call that
+returned zero despite the Pocket showing Save failed. The OS includes a
+10-second host-read wait and returns zero even on its timeout, so the transfer
+result alone is not proof of a written state. Capture latency is the current
+timeout hypothesis. Compression level 2 preserves the zlib snapshot format;
+the Snowdin desktop capture dropped from 47 ms to 22 ms, stayed below the
+combined payload limit, and restored byte-identical future frames. Hardware
+save and sleep/wake retesting remains required.
