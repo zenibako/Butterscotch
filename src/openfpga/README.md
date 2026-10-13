@@ -132,6 +132,11 @@ The Pocket can still power off after a refused save. In the hardware test, wake
 then replayed an older sleep payload. A refusal therefore means the current
 position will not be restored; check eligibility before sleeping.
 
+During a save, the screen reports the capture stage and Pocket transfer.
+If saving freezes, report the last visible stage. `Save transfer returned`
+means the OS call returned; it does not confirm that the Pocket wrote a file.
+The log records capture sizes, elapsed time, and the transfer return code.
+
 Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
 `BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with
 `BS_STATE_LOAD_PATH=<file>`. These run the same serializer at completed frame

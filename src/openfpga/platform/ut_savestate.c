@@ -6,6 +6,7 @@
 #include "of.h"
 #include "stb_ds.h"
 #include "log.h"
+#include "gettime.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,15 @@
 #endif
 
 static uint64_t g_gameId;
+/* Native capture can stall before a refusal can be presented. Publish the
+ * current stage first; desktop captures retain their original frame output. */
+static void captureProgress(const char *stage) {
+#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+    utPlatformSnapshotNotice(stage);
+#else
+    (void)stage;
+#endif
+}
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
 static bool g_service;
 #endif
@@ -110,10 +120,21 @@ bool utSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
     if (why) { *reason = why; return false; }
     uint8_t *parts[3] = {0}; size_t sizes[3] = {0};
     utAudioSnapshotLock(true);
-    bool ok = Runner_snapshotCapture(r, g_gameId, &parts[0], &sizes[0], reason) &&
-        utAudioSnapshot(r->audioSystem, &parts[1], &sizes[1], reason) &&
-        utSaveFsSnapshot(r->fileSystem, &parts[2], &sizes[2], reason);
+    uint64_t started = nowNanos();
+    captureProgress("Saving: game state");
+    bool ok = Runner_snapshotCapture(r, g_gameId, &parts[0], &sizes[0], reason);
+    logInfo("State game: %zu bytes, %llu ms, %s\n", sizes[0],
+        (unsigned long long)((nowNanos() - started) / 1000000), ok ? "ok" : "failed");
     if (ok) {
+        captureProgress("Saving: audio");
+        ok = utAudioSnapshot(r->audioSystem, &parts[1], &sizes[1], reason);
+    }
+    if (ok) {
+        captureProgress("Saving: progress files");
+        ok = utSaveFsSnapshot(r->fileSystem, &parts[2], &sizes[2], reason);
+    }
+    if (ok) {
+        captureProgress("Saving: packing state");
         uint32_t values[3]; uint8_t platform[12];
         utPlatformSnapshotGet(values);
         for (unsigned i = 0; i < 3; i++) for (unsigned j = 0; j < 4; j++)
@@ -125,6 +146,9 @@ bool utSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
         if (!ok) *reason = "State is too large to save";
     }
     for (unsigned i = 0; i < 3; i++) free(parts[i]);
+    logInfo("State capture: %zu bytes, %llu ms, audio %zu, files %zu, %s%s%s\n",
+        *size, (unsigned long long)((nowNanos() - started) / 1000000), sizes[1], sizes[2],
+        ok ? "ok" : "failed", !ok && *reason ? ": " : "", !ok && *reason ? *reason : "");
     utAudioSnapshotLock(false); return ok;
 }
 
@@ -194,10 +218,18 @@ bool platformSnapshotBoundary(Runner *r) {
     const char *reason = NULL; uint8_t *data = NULL; size_t size = 0; bool ok = false;
     if (request == OF_SAVESTATE_SAVE) {
         if (utSavestateCapture(r, &data, &size, &reason)) {
-            of_savestate_enable((uint32_t)size);
-            ok = of_savestate_save(data, (uint32_t)size) == 0;
-            of_savestate_enable(UT_SNAPSHOT_LIMIT);
+            captureProgress("Saving: Pocket transfer");
+            int declared = of_savestate_enable((uint32_t)size);
+            logInfo("State declare: result %d, %zu bytes\n", declared, size);
+            uint64_t started = nowNanos();
+            int result = of_savestate_save(data, (uint32_t)size);
+            logInfo("State transfer: result %d, %llu ms\n", result,
+                (unsigned long long)((nowNanos() - started) / 1000000));
+            ok = result == 0;
+            int rearmed = of_savestate_enable(UT_SNAPSHOT_LIMIT);
+            logInfo("State rearm: result %d\n", rearmed);
             if (!ok) reason = "The Pocket could not save";
+            else captureProgress("Save transfer returned");
         }
     } else if (request == OF_SAVESTATE_LOAD) {
         data = malloc(UT_SNAPSHOT_LIMIT);
