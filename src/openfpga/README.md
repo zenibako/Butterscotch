@@ -153,6 +153,9 @@ preparation, application and cleanup times. Successful loads notify the Pocket
 after committing restored state, before freeing the state they replace.
 `State apply phases` separates progress-archive writes, runner replacement,
 audio restoration and input/clock reset.
+`State prepare phases` separates decode, rooms, values, indexes and temporary
+buffer cleanup. Individual `State room payload` lines time asset reads for
+missing room definitions; `State prepare notice` times the loading notice.
 
 The runtime fault tests use the patched OS checkout:
 
