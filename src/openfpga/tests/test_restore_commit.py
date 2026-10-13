@@ -23,7 +23,6 @@ static Runner live;
 static RunnerSnapshot core;
 static int audio, files, failure, callbacks, frees, locked;
 static uint64_t nowNanos(void) { static uint64_t n;return n+=1000000; }
-static void captureProgress(const char *s) { (void)s; }
 static void logInfo(const char *s,...) { (void)s; }
 static bool utSnapshotUnpack(uint64_t id,const uint8_t *d,size_t n,UtSnapshotSection *p) {
  (void)id;(void)d;(void)n;static uint8_t b[12];

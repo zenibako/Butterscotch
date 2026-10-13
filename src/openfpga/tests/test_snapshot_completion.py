@@ -22,7 +22,7 @@ pre=r'''
 #define UT_SNAPSHOT_LIMIT 1024u
 static bool g_service=true;
 typedef struct{int currentRoomIndex;}Runner;
-static int scenario,pending,finishes,dumps;
+static int scenario,pending,finishes,dumps,notices;
 static uint32_t status;
 static uint8_t arena[1024];
 static void *allocation(size_t n){(void)n;return scenario==4?NULL:arena;}
@@ -30,11 +30,10 @@ static void *allocation(size_t n){(void)n;return scenario==4?NULL:arena;}
 #define free(p) ((void)(p))
 static uint64_t nowNanos(void){return 0;}
 static void logInfo(const char*s,...){(void)s;}
-static void captureProgress(const char*s){(void)s;}
 static void stateServiceTrace(const char*s){(void)s;}
 static uint32_t stateEnvelopeId(const uint8_t*d,size_t n){(void)d;(void)n;return 0;}
 static bool utLogDump(void){dumps++;return false;}
-static void utPlatformSnapshotNotice(const char*s){(void)s;}
+static void utPlatformSnapshotNotice(const char*s){(void)s;notices++;}
 static int of_savestate_poll(void){return pending;}
 static void of_savestate_finish(int ok){(void)ok;assert(pending);pending=0;finishes++;}
 static void finishLoadedState(void){of_savestate_finish(1);}
@@ -56,9 +55,10 @@ static bool restoreState(Runner*r,const uint8_t*d,size_t n,const char**reason,vo
 '''
 post=r'''
 int main(void){Runner r={46};for(scenario=0;scenario<8;scenario++){
- pending=scenario>=5?1:2;finishes=0;dumps=0;status=pending;
+ pending=scenario>=5?1:2;finishes=0;dumps=0;notices=0;status=pending;
  assert(platformSnapshotBoundary(&r));assert(finishes==1);
  assert(pending==((scenario==0)?2:(scenario==2)?1:(scenario==6)?2:0));
+ assert(notices==((scenario==2 || scenario==3 || scenario==7)?0:1));
  assert(dumps==(scenario>=5?1:0)); /* no post-ACK LOAD audit/CRAM hold */
 }puts("PASS: retries preserve completion ownership; failed audit does not prevent successful save");}
 '''

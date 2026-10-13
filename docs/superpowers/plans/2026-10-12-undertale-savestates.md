@@ -509,3 +509,18 @@ archive contents are byte-checked and contain no progress saves. Artifact:
 `out/butterscotch-os25-100-audio-reset-test.zip`, with hashes and verification
 limits in `out/os25-100-audio-reset-proof.json`. Repeated Pocket sleep/wake
 verification remains pending.
+
+
+### October 13: Pocket confirmation and quieter save/load UI
+
+The user confirmed the rebuilt mixer package works on the Pocket after the
+requested repeated sleep/wake test. This establishes hardware success for that
+run; the 100 MHz fit remains outside setup timing requirements.
+
+Removed app-rendered save/load stage notices, including the Pocket-transfer
+and transfer-return messages. Routine work no longer draws the debug-font
+snapshot overlay. Refusal/error notices and detailed capture/restore logs
+remain. Existing native completion tests now assert successful requests emit
+no app notices and rejected requests emit one; they fail with the previous
+stage notices and pass after removal. Transactional restore tests and lint
+also pass. This is an ELF-only update to the hardware-tested mixer package.
