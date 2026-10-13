@@ -272,7 +272,13 @@ static bool readDirect(OfAudioSystem *ut, uint32_t filePos, uint32_t want) {
         if (nowNanos() - start > 50000000ull) return false;
     }
     /* The poll is the OS's fallback for a lost interrupt. */
+    bool sawStateRequest = false;
     while (!g_directDone && of_file_async_poll() != 1) {
+        if (!sawStateRequest && ofSavestateDeferFileReads()) {
+            sawStateRequest = true;
+            logInfo("State request seen during music read, %llu ms after submission\n",
+                (unsigned long long)((nowNanos() - start) / 1000000));
+        }
         if (nowNanos() - start > OF_DIRECT_TIMEOUT_NANOS) {
             /* Do not go back to ordinary reads while the OS still counts
              * this one as in flight. */

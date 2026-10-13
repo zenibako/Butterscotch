@@ -4,6 +4,9 @@
 #include "spatial_grid.h"
 #include "stb_ds.h"
 #include "miniz.h"
+#ifdef PLATFORM_BUSY_TICK
+#include "log.h"
+#endif
 #ifdef ENABLE_SW_RENDERER
 #include "sw/sw_renderer.h"
 #endif
@@ -581,12 +584,18 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (data) *data = NULL; if (size) *size = 0;
     if (reason) *reason = NULL;
     if (!data || !size) { if (reason) *reason = "Invalid output"; return false; }
+#ifdef PLATFORM_BUSY_TICK
+    uint64_t phase[6]; phase[0] = nowNanos();
+#endif
     if (!eligible(r, reason, true)) return false;
     Graph g = {0};
     if (!collectGraph(r, &g)) {
         if (reason) *reason = "Unsupported value graph";
         arrfree(g.slots); arrfree(g.arrays); return false;
     }
+#ifdef PLATFORM_BUSY_TICK
+    phase[1] = nowNanos();
+#endif
     Writer w = {.ok = true};
     put32(&w, SNAP_MAGIC); put32(&w, SNAP_VERSION); put64(&w, gameId);
     put32(&w, 0); put32(&w, 0); /* length and checksum filled below */
@@ -681,7 +690,13 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         free(w.p); return false;
     }
     uint32_t rawLen = (uint32_t)(w.n - 24);
+#ifdef PLATFORM_BUSY_TICK
+    phase[2] = nowNanos();
+#endif
     uint32_t rawCrc = checksum(w.p + 24, rawLen);
+#ifdef PLATFORM_BUSY_TICK
+    phase[3] = nowNanos();
+#endif
     mz_ulong compressedCap = mz_compressBound(rawLen);
     uint8_t *compressed = (uint8_t *)malloc(compressedCap);
     /* The Pocket waits for capture before it can read any state. Level 2
@@ -692,6 +707,9 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         if (reason) *reason = "Runner snapshot compression failed";
         free(compressed); free(w.p); return false;
     }
+#ifdef PLATFORM_BUSY_TICK
+    phase[4] = nowNanos();
+#endif
     if (compressedCap > SNAP_OUTPUT_LIMIT - 32) {
         if (reason) *reason = "Compressed runner snapshot exceeds the size limit";
         free(compressed); free(w.p); return false;
@@ -707,6 +725,15 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         free(out.p); return false;
     }
     uint32_t crc = checksum(out.p + 24, out.n - 24);
+#ifdef PLATFORM_BUSY_TICK
+    phase[5] = nowNanos();
+    logInfo("State core phases: graph %llu encode %llu crc %llu deflate %llu pack %llu ms; raw %u compressed %lu\n",
+        (unsigned long long)((phase[1] - phase[0]) / 1000000),
+        (unsigned long long)((phase[2] - phase[1]) / 1000000),
+        (unsigned long long)((phase[3] - phase[2]) / 1000000),
+        (unsigned long long)((phase[4] - phase[3]) / 1000000),
+        (unsigned long long)((phase[5] - phase[4]) / 1000000), rawLen, (unsigned long)compressedCap);
+#endif
     out.p[20] = (uint8_t)crc; out.p[21] = (uint8_t)(crc >> 8);
     out.p[22] = (uint8_t)(crc >> 16); out.p[23] = (uint8_t)(crc >> 24);
     *data = out.p; *size = out.n; return true;

@@ -254,6 +254,10 @@ bool platformSnapshotBoundary(Runner *r) {
             int result = of_savestate_save(data, (uint32_t)size);
             logInfo("State transfer: result %d, %llu ms\n", result,
                 (unsigned long long)((nowNanos() - started) / 1000000));
+            logInfo("State host read: %u words, expected %u; status %x\n",
+                *(volatile const uint32_t *)(uintptr_t)0x4e00000cu,
+                ((uint32_t)size + 32u + 3u) / 4u,
+                *(volatile const uint32_t *)(uintptr_t)0x4e000004u);
             ok = result == 0;
             int rearmed = of_savestate_enable(UT_SNAPSHOT_LIMIT);
             logInfo("State rearm: result %d\n", rearmed);
