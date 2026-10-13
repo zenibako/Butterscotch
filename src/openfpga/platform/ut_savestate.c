@@ -37,6 +37,25 @@ void utSavestateStartup(void) {
 #endif
 }
 
+bool utSavestateDeferFileReads(void) {
+#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+    if (!g_service) return false;
+    /* Pinned openfpgaOS 7561ace, SS_STATUS at 0x4e000004: requests in
+     * bits 0/1, Pocket menu in bit 2, completion toggles in bits 8/9.
+     * Unlike of_savestate_poll(), this read never changes CRAM ownership. */
+    uint32_t status = *(volatile const uint32_t *)(uintptr_t)0x4e000004u;
+    bool deferred = (status & 4u) || ((status ^ (status >> 8)) & 3u);
+    static bool wasDeferred;
+    if (deferred != wasDeferred) {
+        logInfo("State music reads: %s (status %x)\n", deferred ? "deferred" : "resumed", status);
+        wasDeferred = deferred;
+    }
+    return deferred;
+#else
+    return false;
+#endif
+}
+
 void utSavestateInit(Runner *runner) {
     DataWin *dw = runner->dataWin;
     uint64_t h = BS_FNV64_OFFSET;

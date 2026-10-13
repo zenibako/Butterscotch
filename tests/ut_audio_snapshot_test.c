@@ -12,6 +12,8 @@ void utPerfAddLoad(UtLoadKind kind, uint64_t value) { (void)kind; (void)value; }
 static int freePairs;
 static int16_t submitted[32];
 static int submittedCount;
+static bool stateRequestPending;
+bool utSavestateDeferFileReads(void) { return stateRequestPending; }
 int of_audio_free(void) { return freePairs; }
 void of_audio_init(void) { submittedCount = 0; }
 void utPcAudioSnapshotReset(void) { submittedCount = 0; }
@@ -63,6 +65,20 @@ int main(void) {
     mixVoice(&ut, &ut.voices[0], actual, 30);
     mixVoice(&ut, &ut.voices[1], actual, 30);
     assert(memcmp(expected, actual, sizeof(actual)) == 0);
+    /* A Pocket state request must reach the frame boundary without issuing
+     * another music read. Preserve read-ahead and decoder state until then. */
+    UtVoice deferred = ut.voices[1];
+    deferred.bufferPos = 4; deferred.bufferLen = 12; deferred.fileBytePos = 12;
+    uint8_t beforeBuffer[64]; memcpy(beforeBuffer, deferred.data, sizeof(beforeBuffer));
+    UtVoice beforeVoice = deferred;
+    stateRequestPending = true;
+    refillVoice(&ut, &deferred);
+    assert(memcmp(&beforeVoice, &deferred, sizeof(deferred)) == 0);
+    assert(memcmp(beforeBuffer, deferred.data, sizeof(beforeBuffer)) == 0);
+    stateRequestPending = false;
+    refillVoice(&ut, &deferred);
+    assert(deferred.fileBytePos == sizeof(adpcm));
+    assert(deferred.bufferPos == 0 && deferred.bufferLen == sizeof(adpcm) - 4);
     assert(ut.voices[0].instanceId == 100012 && ut.nextInstanceId == 100013);
     for (size_t n = 0; n < size; n++)
         assert(utAudioPrepareSnapshot(&ut.base, bytes, n, &reason) == NULL);

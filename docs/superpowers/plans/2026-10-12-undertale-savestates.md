@@ -143,3 +143,13 @@ timeout hypothesis. Compression level 2 preserves the zlib snapshot format;
 the Snowdin desktop capture dropped from 47 ms to 22 ms, stayed below the
 combined payload limit, and restored byte-identical future frames. Hardware
 save and sleep/wake retesting remains required.
+
+The level-2 device retest captured in 6,440 ms, then again waited 10,957 ms
+in transfer. Both device runs also logged a six-second direct music-read
+timeout immediately before capture. The next change defers optional music
+refills while the Pocket menu or an outstanding state request is visible,
+before modifying buffered data or issuing any file call. A side-effect-free
+SS_STATUS read uses the pinned runtime register layout. The audio regression
+failed before the guard, then passed with unchanged voice/buffer state while
+deferred and successful real-file refill after resuming. An already accepted
+read can still race a request; this change does not cancel host transfers.
