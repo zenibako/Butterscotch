@@ -37,7 +37,7 @@ static uint8_t *decodeRaw(const uint8_t *bytes, size_t size, uint32_t *rawLenOut
     uint32_t rawLen = le32(bytes + 24);
     uint8_t *raw = malloc(rawLen);
     assert(raw);
-    if (le32(bytes + 4) == 4) {
+    if (le32(bytes + 4) >= 4) {
         assert(ZSTD_decompress(raw, rawLen, bytes + 32, size - 32) == rawLen);
     } else {
         mz_ulong n = rawLen;
@@ -49,10 +49,10 @@ static uint8_t *decodeRaw(const uint8_t *bytes, size_t size, uint32_t *rawLenOut
 }
 static void encodeRaw(uint8_t **bytes, size_t *size, const uint8_t *raw,
                       uint32_t rawLen, uint32_t version) {
-    size_t cap = version == 4 ? ZSTD_compressBound(rawLen) : mz_compressBound(rawLen);
+    size_t cap = version >= 4 ? ZSTD_compressBound(rawLen) : mz_compressBound(rawLen);
     uint8_t *out = malloc(cap + 32);
     assert(out);
-    if (version == 4) {
+    if (version >= 4) {
         cap = ZSTD_compress(out + 32, cap, raw, rawLen, 1);
         assert(!ZSTD_isError(cap));
     } else {
@@ -551,12 +551,26 @@ static void testZstdV4FrameValidation(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
     fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    assert(sizeof(r.score) == sizeof(uint32_t));
+    const uint32_t scoreBits = 0x3eaaaaabu, livesBits = 0x80000000u;
+    memcpy(&r.score, &scoreBits, sizeof(scoreBits));
+    memcpy(&r.lives, &livesBits, sizeof(livesBits));
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 58, &bytes, &size, &reason));
+    assert(le32(bytes + 4) == 5);
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    encodeRaw(&bytes, &size, raw, rawLen, 4);
     assert(le32(bytes + 4) == 4);
     assert(ZSTD_getFrameContentSize(bytes + 32, size - 32) == le32(bytes + 24));
     RunnerSnapshot *s = Runner_snapshotPrepare(&r, 58, bytes, size, &reason);
-    assert(s); Runner_snapshotFree(s);
+    assert(s);
+    r.score = 0; r.lives = 1;
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    uint32_t actualScore, actualLives;
+    memcpy(&actualScore, &r.score, sizeof(actualScore));
+    memcpy(&actualLives, &r.lives, sizeof(actualLives));
+    assert(actualScore == scoreBits && actualLives == livesBits);
     assert(Runner_snapshotPrepare(&r, 58, bytes, size - 1, &reason) == NULL);
     uint8_t *bad = malloc(size + 1);
     /* A truncated frame with a repaired outer checksum must reach the codec. */
@@ -573,8 +587,6 @@ static void testZstdV4FrameValidation(void) {
     bad[32] ^= 0x80;
     write32(bad + 20, hashBytes(bad + 24, size - 24));
     assert(Runner_snapshotPrepare(&r, 58, bad, size, &reason) == NULL);
-    uint32_t rawLen;
-    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
     ZSTD_CCtx *ctx = ZSTD_createCCtx();
     assert(ctx);
     assert(!ZSTD_isError(ZSTD_CCtx_setParameter(ctx, ZSTD_c_contentSizeFlag, 0)));
@@ -710,7 +722,145 @@ static void testLargeCompressibleMap(void) {
     destroyFixture(&r);
 }
 
+static void testStaticStringReferences(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    char staticText[129]; memset(staticText, 'q', 128); staticText[128] = 0;
+    const char *strings[] = {staticText, "other"};
+    dw.strg.strings = strings; dw.strg.count = 2;
+    DsList list = {0};
+    for (int i = 0; i < 64; i++)
+        arrput(list.items, RValue_makeOwnedString(strdup(staticText)));
+    arrput(list.items, RValue_makeOwnedString(strdup("dynamic-value")));
+    arrput(r.dsListPool, list);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 91, &bytes, &size, &reason));
+    assert(le32(bytes + 4) == 5);
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    dw.strg.count = 0;
+    uint8_t *literal = NULL; size_t literalSize = 0;
+    assert(Runner_snapshotCapture(&r, 91, &literal, &literalSize, &reason));
+    assert(le32(literal + 24) - rawLen >= 64u * 128u);
+    free(literal);
+    dw.strg.count = 2;
+    size_t ref = rawLen;
+    for (size_t i = 4; i + 4 <= rawLen; i++)
+        if ((le32(raw + i - 4) & 255u) == RVALUE_STRING &&
+            le32(raw + i) == 0x80000000u) {
+            ref = i; break;
+        }
+    assert(ref < rawLen);
+    assert(Runner_snapshotPrepare(&r, 91, bytes, size - 1, &reason) == NULL);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 91, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    assert(arrlen(r.dsListPool[0].items) == 65);
+    for (int i = 0; i < 64; i++) {
+        RValue *value = &r.dsListPool[0].items[i];
+        assert(value->type == RVALUE_STRING && value->ownsReference);
+        assert(strcmp(value->string, staticText) == 0 && value->string != staticText);
+        if (i) assert(value->string != r.dsListPool[0].items[i - 1].string);
+    }
+    assert(strcmp(r.dsListPool[0].items[64].string, "dynamic-value") == 0);
+    strings[0] = NULL;
+    assert(Runner_snapshotPrepare(&r, 91, bytes, size, &reason) == NULL);
+    strings[0] = staticText;
+    char *oversized = malloc(65537); assert(oversized);
+    memset(oversized, 'x', 65536); oversized[65536] = 0;
+    strings[0] = oversized;
+    assert(Runner_snapshotPrepare(&r, 91, bytes, size, &reason) == NULL);
+    strings[0] = staticText;
+    free(oversized);
+    dw.strg.count = 131073;
+    assert(Runner_snapshotPrepare(&r, 91, bytes, size, &reason) == NULL);
+    uint8_t *tooMany = NULL; size_t tooManySize = 0;
+    assert(!Runner_snapshotCapture(&r, 91, &tooMany, &tooManySize, &reason));
+    dw.strg.count = 2;
+    uint8_t *bad = malloc(size); assert(bad); memcpy(bad, bytes, size);
+    write32(raw + ref, 0x80000002u);
+    size_t badSize = size;
+    encodeRaw(&bad, &badSize, raw, rawLen, 5);
+    assert(Runner_snapshotPrepare(&r, 91, bad, badSize, &reason) == NULL);
+    free(bad); free(raw); free(bytes);
+    destroyFixture(&r);
+}
+
+static void testStaticStringExpansionBudget(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    char *text = malloc(65537); assert(text);
+    memset(text, 'x', 65536); text[65536] = 0;
+    const char *strings[] = {text};
+    dw.strg.strings = strings; dw.strg.count = 1;
+    DsList list = {0};
+    for (int i = 0; i < 64; i++)
+        arrput(list.items, RValue_makeOwnedString(strdup(text)));
+    arrput(r.dsListPool, list);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(!Runner_snapshotCapture(&r, 92, &bytes, &size, &reason));
+    assert(bytes == NULL && size == 0);
+    destroyFixture(&r);
+    free(text);
+}
+
+static void testDecoderStaticStringExpansionBudget(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    char *longText = malloc(65537); assert(longText);
+    memset(longText, 'x', 65536); longText[65536] = 0;
+    const char *strings[] = {"short", longText};
+    dw.strg.strings = strings; dw.strg.count = 2;
+    DsList list = {0};
+    const char *liveStrings[64];
+    for (int i = 0; i < 64; i++) {
+        RValue value = RValue_makeOwnedString(strdup("short"));
+        liveStrings[i] = value.string;
+        arrput(list.items, value);
+    }
+    arrput(r.dsListPool, list);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 93, &bytes, &size, &reason));
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    size_t run = rawLen;
+    uint32_t runs = 0;
+    for (size_t at = 0; at + 64u * 8u <= rawLen; at++) {
+        int j = 0;
+        for (; j < 64; j++) {
+            size_t value = at + (size_t)j * 8u;
+            if ((le32(raw + value) & 255u) != RVALUE_STRING ||
+                le32(raw + value + 4) != 0x80000000u) break;
+        }
+        if (j == 64) { run = at; runs++; }
+    }
+    assert(runs == 1); /* Exactly the 64 consecutive list values. */
+    for (int j = 0; j < 64; j++)
+        write32(raw + run + (size_t)j * 8u + 4u, 0x80000001u);
+    encodeRaw(&bytes, &size, raw, rawLen, 5);
+    assert(size < 1024u * 1024u);
+    assert(Runner_snapshotPrepare(&r, 93, bytes, size, &reason) == NULL);
+    assert(r.frameCount == 42 && arrlen(r.dsListPool[0].items) == 64);
+    for (int i = 0; i < 64; i++) {
+        assert(r.dsListPool[0].items[i].string == liveStrings[i]);
+        assert(strcmp(liveStrings[i], "short") == 0);
+    }
+    longText[65535] = 0; /* 64 * (65535 + NUL) is exactly 4 MiB. */
+    RunnerSnapshot *atLimit = Runner_snapshotPrepare(&r, 93, bytes, size, &reason);
+    assert(atLimit);
+    Runner_snapshotFree(atLimit);
+    free(raw); free(bytes);
+    destroyFixture(&r);
+    free(longText);
+}
+
 int main(void) {
+    testStaticStringReferences();
+    testStaticStringExpansionBudget();
+    testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
     testRoundTrip();
     testRejectsBadInputAndLiveResources();

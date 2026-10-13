@@ -203,3 +203,35 @@ The updated OS was rebuilt and its matching bootloader patched into the
 previously timing-verified os25 bitstream before SDK export. Generic CMake CLI
 and Pocket app builds pass; runtime patch reverse-application was checked.
 Hardware save/load, sleep/wake, and audio/stutter improvements remain unverified.
+
+### String references and transfer failure reporting
+
+The next hardware log confirmed the matching package was installed. Capture
+still took 5,786 ms, including 3,787 ms in Zstandard; the host read zero words.
+The sleep-state file retained its older P8SS payload, explaining the wrong-format
+message on wake. A successful Undertale save has not yet been observed.
+
+The allocation comparison measured 198,469 us for the old 4 MiB probe and 52 us
+for the new capacity query. This verifies the removed per-texture probe cost;
+it does not establish that all video or music stalls are resolved.
+
+The desktop Snowdin raw graph was dominated by two text maps. Core revision 5
+uses content-checked indices for strings already in STRG, preserves unmatched
+strings inline, and restores independent owned copies. Both writer and reader
+bound cumulative expanded strings, including terminators. Revision 3 and 4
+readers remain available. Four-byte Zstandard matches avoid the wider hash path
+on RV32 while retaining the same decoder format.
+
+The runtime uses an equivalent table-based CRC32 and reports a timeout when the
+host read is incomplete. Source tests cover complete/partial/zero transfers,
+timer wrap, ownership, a single completion, and CRC parity. The OS and matching
+bootloader are rebuilt before exporting a fresh SDK. Pocket transfer success
+and sleep/wake restoration remain hardware gates.
+
+Verification of the revision 5 package: the full desktop Snowdin capture is
+257,090 bytes (507,841 raw core bytes, 175,318 compressed), and the game-menu
+capture is 257,135 bytes. Each restores in a fresh process and reproduces the
+future frame byte for byte. Real revision 3 and 4 captures reproduce the same
+reference frame. A full Snowdin capture/restore under ASan/UBSan also passes.
+The native build and ZIP checks pass, including exact ELF/runtime pairing and
+exclusion of progress saves. Test package: `butterscotch-string-ref-save-test.zip`.

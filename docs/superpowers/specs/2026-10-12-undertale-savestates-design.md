@@ -32,10 +32,13 @@ It carries the game-data identity, format version, section lengths and checksum.
 The complete envelope must fit the service's 1 MiB window minus its header.
 Declare the actual blob size for each save handover. Never truncate a snapshot.
 
-Core format revision 4 uses Zstandard level 1; revision 3 retains its zlib
-decoder. Both carry the same raw graph layout and checksums. Revision 4 validates
-one complete frame with a declared content size and bounded window before
-decoding. The runtime may logically fail an unfinished optional file read to
+Core format revision 5 uses Zstandard level 1 with four-byte matches and replaces
+strings equal to loaded STRG entries with validated indices. Unmatched strings
+remain inline. Restore creates independent owned copies; no live pointers enter
+the format. The game-data identity binds indices to their source table. Revision
+4 retains its inline-string Zstandard reader, and revision 3 retains its zlib
+reader. Zstandard readers validate one complete frame with a declared content
+size and bounded window before decoding. The runtime may logically fail an unfinished optional file read to
 answer a save; its storage remains quarantined until the host transfer drains.
 
 The runner section contains globals, all live instances, scalar instance fields,

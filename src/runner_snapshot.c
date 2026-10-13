@@ -18,7 +18,8 @@
 
 /* This is a same-build, WAD16-only wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 4u
+#define SNAP_VERSION 5u
+#define SNAP_ZSTD_LEGACY_VERSION 4u
 #define SNAP_LEGACY_VERSION 3u
 #define SNAP_OUTPUT_LIMIT (1024u * 1024u)
 #define SNAP_LIMIT (4u * 1024u * 1024u)
@@ -28,9 +29,19 @@
 #define SNAP_DORMANT_POOL_COUNT 11u
 #define SNAP_DORMANT_SLOT_LIMIT 4096u
 #define SNAP_INI_MAGIC 0x31494e49u /* INI1 */
+#define SNAP_STATIC_STRING_LIMIT 131072u
+#define SNAP_STRING_REF 0x80000000u
 
-typedef struct { uint8_t *p; size_t n, cap; bool ok; const char *failure; } Writer;
-typedef struct { const uint8_t *p; size_t n, pos; bool ok; } Reader;
+typedef struct {
+    uint8_t *p; size_t n, cap; bool ok; const char *failure;
+    const Strg *strg; uint32_t *stringIndex; uint32_t stringMask;
+    size_t stringBytes;
+} Writer;
+typedef struct {
+    const uint8_t *p; size_t n, pos; bool ok;
+    const Strg *strg; bool stringRefs;
+    size_t stringBytes;
+} Reader;
 static void put(Writer *w, const void *p, size_t n) {
     if (!w->ok) return;
     if (n > SNAP_LIMIT - w->n) {
@@ -521,9 +532,46 @@ static uint32_t slotIndex(const Graph *g, const void *slot) {
         if (g->slots[i] == slot) return (uint32_t)i;
     return SNAP_OWNER_NONE;
 }
+static bool buildStringIndex(Writer *w, const Strg *strg) {
+    if (strg->count > SNAP_STATIC_STRING_LIMIT ||
+        (strg->count && !strg->strings)) return false;
+    if (!strg->count) return true;
+    uint32_t capacity = 1;
+    while (capacity < strg->count * 2u) capacity *= 2u;
+    w->stringIndex = (uint32_t *)calloc(capacity, sizeof(uint32_t));
+    if (!w->stringIndex) return false;
+    w->strg = strg;
+    w->stringMask = capacity - 1u;
+    for (uint32_t i = 0; i < strg->count; i++) {
+        const char *s = strg->strings[i];
+        if (!s) continue;
+        uint32_t bucket = checksum((const uint8_t *)s, strlen(s)) & w->stringMask;
+        while (w->stringIndex[bucket]) {
+            const char *other = strg->strings[w->stringIndex[bucket] - 1u];
+            if (strcmp(s, other) == 0) break;
+            bucket = (bucket + 1u) & w->stringMask;
+        }
+        if (!w->stringIndex[bucket]) w->stringIndex[bucket] = i + 1u;
+    }
+    return true;
+}
 static void putString(Writer *w, const char *s) {
+    if (!w->ok) return;
     size_t n = s ? strlen(s) : 0;
-    if (n > SNAP_LIMIT) { w->ok = false; w->failure = "Runner snapshot string exceeds the size limit"; return; }
+    if (n >= SNAP_LIMIT - w->stringBytes) {
+        w->ok = false; w->failure = "Runner snapshot strings exceed the size limit"; return;
+    }
+    w->stringBytes += n + 1;
+    if (s && w->stringIndex) {
+        uint32_t bucket = checksum((const uint8_t *)s, n) & w->stringMask;
+        while (w->stringIndex[bucket]) {
+            uint32_t index = w->stringIndex[bucket] - 1u;
+            if (strcmp(s, w->strg->strings[index]) == 0) {
+                put32(w, SNAP_STRING_REF | index); return;
+            }
+            bucket = (bucket + 1u) & w->stringMask;
+        }
+    }
     put32(w, (uint32_t)n); put(w, s, n);
 }
 static void putIni(Writer *w, const IniFile *ini, uint32_t *entryBudget) {
@@ -600,6 +648,11 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     phase[1] = nowNanos();
 #endif
     Writer w = {.ok = true};
+    if (!buildStringIndex(&w, &r->dataWin->strg)) {
+        if (reason) *reason = "Runner snapshot string dictionary unavailable";
+        free(w.stringIndex);
+        arrfree(g.slots); arrfree(g.arrays); return false;
+    }
     put32(&w, SNAP_MAGIC); put32(&w, SNAP_VERSION); put64(&w, gameId);
     put32(&w, 0); put32(&w, 0); /* length and checksum filled below */
     RunnerPlain plain = makePlain(r); put(&w, &plain, sizeof(plain));
@@ -687,6 +740,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (r->currentIni) putIni(&w, r->currentIni, &iniEntryBudget);
     if (r->cachedIniPath) putString(&w, r->cachedIniPath);
     if (r->cachedIni) putIni(&w, r->cachedIni, &iniEntryBudget);
+    free(w.stringIndex);
     arrfree(g.slots); arrfree(g.arrays);
     if (!w.ok || w.n > SNAP_LIMIT) {
         if (reason) *reason = w.failure ? w.failure : "Runner snapshot encoding failed";
@@ -702,15 +756,27 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 #endif
     size_t compressedCap = ZSTD_compressBound(rawLen);
     uint8_t *compressed = (uint8_t *)malloc(compressedCap);
-    if (!compressed) {
+    ZSTD_CCtx *compressor = ZSTD_createCCtx();
+    size_t compressedLen = 0;
+    bool compressedOk = compressed && compressor;
+    if (compressedOk) {
+        compressedLen = ZSTD_CCtx_setParameter(compressor, ZSTD_c_compressionLevel, 1);
+        compressedOk = !ZSTD_isError(compressedLen);
+    }
+    if (compressedOk) {
+        compressedLen = ZSTD_CCtx_setParameter(compressor, ZSTD_c_minMatch, 4);
+        compressedOk = !ZSTD_isError(compressedLen);
+    }
+    if (compressedOk) {
+        compressedLen = ZSTD_compress2(compressor, compressed, compressedCap, w.p + 24, rawLen);
+        compressedOk = !ZSTD_isError(compressedLen);
+    }
+    ZSTD_freeCCtx(compressor);
+    if (!compressedOk) {
         if (reason) *reason = "Runner snapshot compression failed";
         free(compressed); free(w.p); return false;
     }
-    compressedCap = ZSTD_compress(compressed, compressedCap, w.p + 24, rawLen, 1);
-    if (ZSTD_isError(compressedCap)) {
-        if (reason) *reason = "Runner snapshot compression failed";
-        free(compressed); free(w.p); return false;
-    }
+    compressedCap = compressedLen;
 #ifdef PLATFORM_BUSY_TICK
     phase[4] = nowNanos();
 #endif
@@ -745,7 +811,24 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 
 static char *getString(Reader *rd) {
     uint32_t len = get32(rd);
-    if (!rd->ok || len > SNAP_LIMIT || len > rd->n - rd->pos) { rd->ok = false; return NULL; }
+    if (rd->stringRefs && (len & SNAP_STRING_REF)) {
+        uint32_t index = len & ~SNAP_STRING_REF;
+        if (!rd->ok || !rd->strg || index >= rd->strg->count ||
+            !rd->strg->strings || !rd->strg->strings[index]) {
+            rd->ok = false; return NULL;
+        }
+        const char *source = rd->strg->strings[index];
+        size_t n = strlen(source);
+        if (n >= SNAP_LIMIT - rd->stringBytes) { rd->ok = false; return NULL; }
+        rd->stringBytes += n + 1;
+        char *copy = (char *)malloc(n + 1);
+        if (!copy) { rd->ok = false; return NULL; }
+        memcpy(copy, source, n + 1);
+        return copy;
+    }
+    if (!rd->ok || len >= SNAP_LIMIT - rd->stringBytes ||
+        len > rd->n - rd->pos) { rd->ok = false; return NULL; }
+    rd->stringBytes += (size_t)len + 1;
     char *out = (char *)malloc((size_t)len + 1);
     if (!out) { rd->ok = false; return NULL; }
     get(rd, out, len); out[len] = 0;
@@ -919,7 +1002,9 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint64_t id = get64(&hdr);
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
-    if (!hdr.ok || magic != SNAP_MAGIC || (version != SNAP_VERSION && version != SNAP_LEGACY_VERSION) || id != gameId ||
+    if (!hdr.ok || magic != SNAP_MAGIC ||
+        (version != SNAP_VERSION && version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
+        id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
         rawLen < sizeof(RunnerPlain) || rawLen > SNAP_LIMIT - 24) {
         if (reason) *reason = "Runner snapshot header or checksum mismatch"; return NULL;
@@ -954,6 +1039,12 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         free(raw); return NULL;
     }
     Reader rd = {raw, rawLen, 0, true};
+    rd.strg = &r->dataWin->strg;
+    rd.stringRefs = version == SNAP_VERSION;
+    if (rd.stringRefs && rd.strg->count > SNAP_STATIC_STRING_LIMIT) {
+        if (reason) *reason = "Runner snapshot string dictionary unavailable";
+        free(raw); return NULL;
+    }
     RunnerSnapshot *s = (RunnerSnapshot *)calloc(1, sizeof(*s));
     if (!s) { if (reason) *reason = "Out of memory"; free(raw); return NULL; }
     Room *shadowRooms = NULL;
