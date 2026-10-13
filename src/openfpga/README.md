@@ -143,7 +143,8 @@ It also splits core capture into phases, reports the Pocket's read-word count,
 and separates seek/read time for texture-pack reads that take at least 100 ms.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
-Core format revision 4 uses lossless Zstandard compression; revision 3 states
+Core format revision 5 uses lossless Zstandard compression and references strings
+already present in the matching game data; states from revisions 3 and 4
 remain readable. Native builds avoid the renderer's large allocation probe
 when the OS can prove the reserve fits, otherwise retaining the original probe.
 The first reserve check logs the allocation and query timings for comparison.
