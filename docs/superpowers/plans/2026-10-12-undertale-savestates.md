@@ -165,3 +165,14 @@ read, and their staging allocation remains alive for late completion. A second
 regression injects a request after refill entry and verifies no new file read,
 preserved unread bytes, and normal resumed refill. Hardware confirmation of
 watchdog timing and save delivery remains required.
+
+The watchdog device retest confirmed timer control `0 -> 1` and reduced the
+music-read stall to about two seconds. Capture still took 6,525 ms and transfer
+10,970 ms; delivery is not fixed. The user also hears music gaps during initial
+200–700 ms texture loads, which settle after walking for a few seconds. The
+100 ms output target cannot cover an uninterrupted read longer than that, and
+the runtime skips app idle hooks during syscall reads. The next diagnostic
+measures graph/encoding/CRC/compression/packing separately, samples host read
+words after transfer, notes requests first seen during a music read, and splits
+slow texture seeks from reads. Further behavioral patches should follow those
+measurements rather than assume a Pocket deadline or compression bottleneck.
