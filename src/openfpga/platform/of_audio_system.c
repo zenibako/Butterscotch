@@ -1320,14 +1320,17 @@ bool ofAudioSnapshot(AudioSystem *audio, uint8_t **data, size_t *size, const cha
     OfSnapshotWriter w = {.ok = true};
     *data = NULL; *size = 0;
     uint32_t queued = 0;
+    int freePairs = 0;
+    const char *failure = "encoding/allocation";
+    int failureVoice = -1;
     if (ut->queueCapacity > 0) {
-        int freePairs = of_audio_free();
-        if (freePairs < 0 || freePairs > ut->queueCapacity) goto bad;
+        freePairs = of_audio_free();
+        if (freePairs < 0 || freePairs > ut->queueCapacity) { failure = "queue capacity"; goto bad; }
         queued = (uint32_t)(ut->queueCapacity - freePairs);
         /* Pocket reserves one pair once the stream voice is activated. */
         if (ut->snapshotWritten && queued >= (uint32_t)ut->snapshotReservedPairs)
             queued -= (uint32_t)ut->snapshotReservedPairs;
-        if (queued && (!ut->snapshotPcm || queued > ut->snapshotWritten)) goto bad;
+        if (queued && (!ut->snapshotPcm || queued > ut->snapshotWritten)) { failure = "queue shadow"; goto bad; }
     }
     ofSnapU32(&w, OF_AUDIO_SNAPSHOT_MAGIC);
     ofSnapU32(&w, ut->trackCount);
@@ -1351,7 +1354,9 @@ bool ofAudioSnapshot(AudioSystem *audio, uint8_t **data, size_t *size, const cha
         OfVoice v = ut->voices[i];
         if (!v.active) memset(&v, 0, sizeof(v));
         if (v.active && (v.track < 0 || (uint32_t)v.track >= ut->trackCount ||
-            v.bufferPos > v.bufferLen || v.streamSlot >= OF_MAX_STREAMED)) goto bad;
+            v.bufferPos > v.bufferLen || v.streamSlot >= OF_MAX_STREAMED)) {
+            failure = "voice cursor"; failureVoice = (int)i; goto bad;
+        }
         uint32_t flags = (uint32_t)v.active | (uint32_t)v.paused << 1 | (uint32_t)v.loop << 2 |
             (uint32_t)v.finished << 3 | (uint32_t)v.music << 4 |
             (uint32_t)v.startedThisFrame << 5 | (uint32_t)v.havePendingCode << 6;
@@ -1362,7 +1367,9 @@ bool ofAudioSnapshot(AudioSystem *audio, uint8_t **data, size_t *size, const cha
         ofSnapU32(&w, (uint32_t)v.adpcm.predictor); ofSnapU32(&w, (uint32_t)v.adpcm.stepIndex);
         ofSnapFloat(&w, v.pitch);
         if (v.active && v.streamSlot >= 0) {
-            if (v.bufferLen > OF_READAHEAD || (v.bufferLen > v.bufferPos && !v.data)) goto bad;
+            if (v.bufferLen > OF_READAHEAD || (v.bufferLen > v.bufferPos && !v.data)) {
+                failure = "stream buffer"; failureVoice = (int)i; goto bad;
+            }
             ofSnapWrite(&w, v.data ? v.data + v.bufferPos : NULL, v.bufferLen - v.bufferPos);
         }
     }
@@ -1375,6 +1382,15 @@ bool ofAudioSnapshot(AudioSystem *audio, uint8_t **data, size_t *size, const cha
     if (!w.ok) goto bad;
     *data = w.data; *size = w.size; return true;
 bad:
+    if (failureVoice >= 0) {
+        const OfVoice *v = &ut->voices[failureVoice];
+        logInfo("State audio rejected: %s, voice %d track %d slot %d cursor %u/%u file %u data %d\n",
+            failure, failureVoice, v->track, v->streamSlot, v->bufferPos, v->bufferLen,
+            v->fileBytePos, v->data != NULL);
+    }
+    logInfo("State audio capture: %s, capacity %d free %d queued %u reserved %d written %llu shadow %d encoded %zu/%zu\n",
+        failure, ut->queueCapacity, freePairs, queued, ut->snapshotReservedPairs,
+        (unsigned long long)ut->snapshotWritten, ut->snapshotPcm != NULL, w.size, w.capacity);
     free(w.data); *reason = "Audio cannot be captured safely"; return false;
 }
 

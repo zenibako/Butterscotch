@@ -5,10 +5,16 @@
 
 void logWarn(const char *fmt, ...) { (void)fmt; }
 void logError(const char *fmt, ...) { (void)fmt; abort(); }
-void logInfo(const char *fmt, ...) { (void)fmt; }
+void logInfo(const char *fmt, ...);
 uint64_t nowNanos(void) { return 0; }
 bool utPerfDetail = false;
 void utPerfAddLoad(UtLoadKind kind, uint64_t value) { (void)kind; (void)value; }
+#include <stdarg.h>
+static char lastInfo[512];
+void logInfo(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(lastInfo, sizeof(lastInfo), fmt, ap); va_end(ap);
+}
 static int freePairs;
 static int16_t submitted[32];
 static int submittedCount;
@@ -119,6 +125,22 @@ int main(void) {
     assert(((UtAudioSnapshot *)p)->pcmPairs == 5);
     utAudioApplySnapshot(&ut.base, p); utAudioFreeSnapshot(p);
     assert(submittedCount == 5 && submitted[0] == 600 && submitted[9] == 1500);
+    /* Two more capture/restore cycles preserve the unread PCM and decoder,
+     * including Pocket's reserved pair. The host's read pointer stays put. */
+    for (unsigned cycle = 0; cycle < 2; cycle++) {
+        free(bytes); bytes = NULL;
+        assert(utAudioSnapshot(&ut.base, &bytes, &size, &reason));
+        p = utAudioPrepareSnapshot(&ut.base, bytes, size, &reason); assert(p);
+        assert(((UtAudioSnapshot *)p)->pcmPairs == 5);
+        utAudioApplySnapshot(&ut.base, p); utAudioFreeSnapshot(p);
+        assert(submittedCount == 5 && submitted[0] == 600 && submitted[9] == 1500);
+    }
+    /* Reject an impossible queue with enough evidence to distinguish hardware
+     * accounting from voice validity and allocation failure. */
+    free(bytes); bytes = NULL;
+    ut.snapshotWritten = 3; freePairs = 0;
+    assert(!utAudioSnapshot(&ut.base, &bytes, &size, &reason));
+    assert(strstr(lastInfo, "queue shadow") && strstr(lastInfo, "written 3"));
     free(ut.snapshotPcm);
     free(bytes); free(ut.cachedSounds[0]); free(ut.cachedSounds); free(ut.cachedLastUse);
     fclose(ut.file);
