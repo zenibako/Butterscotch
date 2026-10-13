@@ -161,6 +161,9 @@ if(ENABLE_PHYSICS)
 endif()
 
 file(GLOB SOURCES src/*.c)
+# Pocket snapshots and Zstandard are built by the port and its dedicated tests.
+# Generic frontends do not use the codec, including the legacy compiler targets.
+list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/runner_snapshot.c")
 if(ENABLE_PHYSICS)
     file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS src/physics/*.c)
 else()
@@ -353,9 +356,6 @@ target_sources(butterscotch PRIVATE
     vendor/miniz/miniz_tinfl.c
 )
 target_include_directories(butterscotch SYSTEM PUBLIC vendor/miniz)
-add_library(butterscotch_zstd STATIC vendor/zstd/zstd.c)
-target_include_directories(butterscotch_zstd SYSTEM PUBLIC vendor/zstd)
-target_link_libraries(butterscotch PRIVATE butterscotch_zstd)
 target_compile_definitions(butterscotch PRIVATE MINIZ_NO_ARCHIVE_APIS MINIZ_NO_STDIO)
 if(NOT MSVC)
     set_source_files_properties(
