@@ -90,7 +90,7 @@ bnext: costliest draws, ms/fr calls/fr (0 calls dropped from the list)
 --- end of report ---
 [165.02] SWR: Loaded TXTR item 1476 of page 7 (42x42, pack) took 79 ms, cache 2089 KB
 sprite 40x40 draw, us: outside the view 19.87, inside it 73.48
-[undertale] benchmark finished -- halted.
+[butterscotch] benchmark finished -- halted.
 
 === Deltarune ch. 1 benchmark, speed, -Wl,--section-ordering-file=tools/hot-sprites.ld ===
 OS 0.7.0, core variant 0, CPU 100 MHz
@@ -184,4 +184,4 @@ bnext: costliest draws, ms/fr calls/fr (0 calls dropped from the list)
 --- end of report ---
 [163.79] SWR: Loaded TXTR item 1476 of page 7 (42x42, pack) took 79 ms, cache 2089 KB
 sprite 40x40 draw, us: outside the view 19.56, inside it 78.34
-[undertale] benchmark finished -- halted.
+[butterscotch] benchmark finished -- halted.

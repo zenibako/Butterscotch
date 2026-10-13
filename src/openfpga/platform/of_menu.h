@@ -1,5 +1,5 @@
-#ifndef UT_MENU_H
-#define UT_MENU_H
+#ifndef OF_MENU_H
+#define OF_MENU_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -10,7 +10,7 @@
  * their own that a row opens; see of_platform.c for the rows themselves.
  * This module draws the menu and moves through it. */
 
-typedef struct UtMenuPage UtMenuPage;
+typedef struct OfMenuPage OfMenuPage;
 
 typedef struct {
     const char *label;
@@ -22,36 +22,36 @@ typedef struct {
     bool (*choose)(int direction);
     /* The page of rows A opens from this one, or NULL; `value` and `choose`
      * are not used on a row that has one. B on that page comes back here. */
-    const UtMenuPage *opens;
-} UtMenuRow;
+    const OfMenuPage *opens;
+} OfMenuRow;
 
-struct UtMenuPage {
+struct OfMenuPage {
     const char *title;
-    const UtMenuRow *rows;
+    const OfMenuRow *rows;
     int count;
 };
 
 typedef struct {
-    UtMenuPage page; /* the first page */
+    OfMenuPage page; /* the first page */
     /* A line under the rows, written fresh each frame (the frame times). */
     void (*status)(char *out, size_t size);
     /* Shows a finished frame of `width` x `height` pixels. */
     void (*present)(const uint16_t *fb);
     /* Called about every 16 ms while the menu is up, to keep the sound fed. */
     void (*idle)(void);
-} UtMenu;
+} OfMenu;
 
 /* Shows the menu over `frame` (the picture last shown, `width` x `height`)
  * until it is closed, then shows `frame` again and returns. Input is read
  * here; the game does not step meanwhile. Returns false without showing
  * anything if there is no memory for it. */
-bool utMenuRun(const UtMenu *menu, const uint16_t *frame, int width, int height);
+bool ofMenuRun(const OfMenu *menu, const uint16_t *frame, int width, int height);
 
 #ifdef OF_PC
-/* Desktop test aid: the next utMenuRun takes these buttons from `moves`
+/* Desktop test aid: the next ofMenuRun takes these buttons from `moves`
  * instead of the pad, one per frame (U D L R, A B, S for Select, E for Start), draws the menu after the
  * last one, and returns. */
-void utMenuScript(const char *moves);
+void ofMenuScript(const char *moves);
 #endif
 
 #endif

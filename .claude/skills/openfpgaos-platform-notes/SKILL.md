@@ -50,8 +50,8 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
   16-bit mode**, in either `OF_DISPLAY_TERMINAL` or `OF_DISPLAY_OVERLAY`.
   It works at boot, before the first frame. Anything the user must read
   after that (log overlay, benchmark report, crash screen) has to be
-  drawn into the framebuffer by the app; see `utPerfDrawLogScreen` and
-  `utPlatformShowLogAndHalt`.
+  drawn into the framebuffer by the app; see `ofPerfDrawLogScreen` and
+  `ofPlatformShowLogAndHalt`.
 - `of_video_surface()` returns the back buffer and changes after
   `of_video_flip()`. Rendering straight into it works and removes a
   full-frame copy; fetch the pointer again every frame, including for

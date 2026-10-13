@@ -18,11 +18,11 @@
 #include "of_perf.h"
 #include "profiler.h"
 #include "runner.h"
-#include "ut_bench.h"
-#include "ut_font.h"
-#include "ut_menu.h"
-#include "ut_strings.h"
-#include "ut_native.h"
+#include "of_bench.h"
+#include "of_font.h"
+#include "of_menu.h"
+#include "of_strings.h"
+#include "of_native.h"
 #include "sw_call_notes.h"
 
 #include <stdio.h>
@@ -30,10 +30,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#define UT_SCREEN_W OF_SCREEN_W
-#define UT_SCREEN_H OF_SCREEN_H
-#define UT_HIRES_W 640
-#define UT_HIRES_H 480
+#define OF_HIRES_W 640
+#define OF_HIRES_H 480
 
 static Runner *g_runner = NULL;
 static uint16_t *g_nextFb = NULL;
@@ -49,13 +47,13 @@ static bool g_hiresAvailable = true;
  * the shortcut speed takes there should go, so that the two differ only
  * where they still have to. The desktop build starts in accuracy instead,
  * because frame comparisons are made against what the game asks for;
- * UT_SMOOTH=1 gives it speed. */
+ * BS_SMOOTH=1 gives it speed. */
 #ifdef OF_PC
 static bool g_smoothLowres = false;
 #else
 static bool g_smoothLowres = true;
 #endif
-#define UT_MODE_SHOWN_NANOS 2000000000ull
+#define OF_MODE_SHOWN_NANOS 2000000000ull
 static uint64_t g_modeShownUntil = 0;
 extern bool swrSmoothMinify; /* butterscotch/src/sw/sw_drawing.c */
 extern bool swrSkipFrame;
@@ -84,7 +82,7 @@ static const struct {
     { OF_BTN_Y,      'C' },
     { OF_BTN_START,  VK_ENTER },
 };
-#define UT_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
+#define OF_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
 
 /* Debug buttons ("debug mode"): the buttons that are for looking into the
  * port and not for playing. Off at start-up unless the game was started with
@@ -113,7 +111,7 @@ static const struct {
     { OF_BTN_A,     'O',         "step one frame (while paused)", NULL },
     { OF_BTN_B,     VK_F10,      "clear global.interact",         "interact = 0" },
 };
-#define UT_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
+#define OF_DEBUG_CHORD_COUNT (sizeof(g_debugChords) / sizeof(g_debugChords[0]))
 static bool g_debugRequested = false;
 static bool g_debugMode = false;
 /* A key a menu row asked for, pressed on the frame the menu closes. */
@@ -123,16 +121,16 @@ static bool g_menuClosed = false;
 
 /* A few words in the top right corner for two seconds: what a button that
  * changes nothing else on screen just did. */
-#define UT_NOTICE_NANOS 2000000000ull
+#define OF_NOTICE_NANOS 2000000000ull
 static char g_notice[32];
 static uint64_t g_noticeUntil = 0;
 
 static void showNotice(const char *text) {
     snprintf(g_notice, sizeof(g_notice), "%s", text);
-    g_noticeUntil = nowNanos() + UT_NOTICE_NANOS;
+    g_noticeUntil = nowNanos() + OF_NOTICE_NANOS;
 }
 
-void utPlatformSetDebugMode(bool enabled) {
+void ofPlatformSetDebugMode(bool enabled) {
     g_debugRequested = enabled;
 }
 
@@ -141,15 +139,15 @@ static void setDebugMode(bool enabled) {
     logInfo("Debug buttons %s\n", enabled ? "on: R log; Select + Right/Left room, Start pause, A step, B unstick, X script times, Y save log" : "off");
 }
 
-/* Script times (the menu, or Select + X with the debug buttons on; UT_PROFILE on desktop): Butterscotch's
+/* Script times (the menu, or Select + X with the debug buttons on; BS_PROFILE on desktop): Butterscotch's
  * GML profiler, reported to the log every so many frames. Timing every script
  * call costs time itself, so it is off until asked for. */
-#define UT_PROFILE_FRAMES 60
+#define OF_PROFILE_FRAMES 60
 static int g_profileFrames = 0;
 static bool g_profileRequested = false;
 
-void utPlatformSetScriptProfile(int frames) {
-    g_profileFrames = frames > 0 ? frames : UT_PROFILE_FRAMES;
+void ofPlatformSetScriptProfile(int frames) {
+    g_profileFrames = frames > 0 ? frames : OF_PROFILE_FRAMES;
     g_profileRequested = true;
 }
 
@@ -159,7 +157,7 @@ static bool scriptProfileOn(void) {
 
 static void setScriptProfile(bool enabled) {
     if (g_runner == NULL) return;
-    if (g_profileFrames <= 0) g_profileFrames = UT_PROFILE_FRAMES;
+    if (g_profileFrames <= 0) g_profileFrames = OF_PROFILE_FRAMES;
     Profiler_setEnabled(&g_runner->vmContext->profiler, enabled);
 }
 
@@ -171,24 +169,24 @@ static void scriptProfileFrame(void) {
         return;
     }
     if (++frames < g_profileFrames) return;
-    utPerfScriptReport(g_runner->vmContext->profiler, frames);
+    ofPerfScriptReport(g_runner->vmContext->profiler, frames);
     Profiler_reset(g_runner->vmContext->profiler);
     frames = 0;
 }
 
-void utPlatformSetInputScript(const char *script) {
+void ofPlatformSetInputScript(const char *script) {
     g_inputScript = script;
 }
 
-bool utPlatformSpeedMode(void) {
+bool ofPlatformSpeedMode(void) {
     return g_smoothLowres;
 }
 
-void utPlatformSetSmoothLowres(bool enabled) {
+void ofPlatformSetSmoothLowres(bool enabled) {
     g_smoothLowres = enabled;
 }
 
-void utPlatformSetHiresAllowed(bool allowed) {
+void ofPlatformSetHiresAllowed(bool allowed) {
     g_hiresAvailable = allowed;
 }
 
@@ -212,9 +210,9 @@ static int32_t visibleWidth(Runner *runner);
  * smoothness instead. The debt is capped at one frame so a long stall (a room
  * load) is not chased with a burst of fast frames, and no two frames in a row
  * are skipped. */
-#define UT_SPEED_FAINT_ALPHA 8
-#define UT_SKIP_DEBT_NANOS 16000000ull
-#define UT_SKIP_DEBT_CAP_NANOS 33000000ull
+#define OF_SPEED_FAINT_ALPHA 8
+#define OF_SKIP_DEBT_NANOS 16000000ull
+#define OF_SKIP_DEBT_CAP_NANOS 33000000ull
 static uint64_t g_debtNanos = 0;
 static bool g_skipThisFrame = false;
 static int g_faintOverride = -1;
@@ -226,19 +224,19 @@ static int g_dumpTarget = -2;
 
 /* Desktop test aids: a fixed threshold whatever L says, and skipping all but
  * every nth frame whatever the clock says. */
-void utPlatformSetMirrorFaint(int alpha) {
+void ofPlatformSetMirrorFaint(int alpha) {
     g_faintOverride = alpha;
 }
 
-void utPlatformSetForcedSkip(int every) {
+void ofPlatformSetForcedSkip(int every) {
     g_forceSkip = every;
 }
 
-int utPlatformForcedSkip(void) {
+int ofPlatformForcedSkip(void) {
     return g_forceSkip;
 }
 
-void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree) {
+void ofPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skippedDrawUntimed, unsigned *audioFree) {
     enum { CALLS = 4000 };
     uint64_t start = nowNanos();
     for (int i = 0; i < CALLS; i++) (void) nowNanos();
@@ -266,7 +264,7 @@ void utPlatformCallCosts(unsigned *clock, unsigned *skippedDraw, unsigned *skipp
     *audioFree = (unsigned) ((nowNanos() - start) / CALLS);
 }
 
-void utPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path) {
+void ofPlatformSpriteCosts(int *width, int *height, unsigned nanos[7], unsigned *outside, int *path) {
     int32_t w = 0, h = 0;
     uint32_t stages[SWR_PROBE_STAGES] = { 0 }, out = 0;
     *path = 0;
@@ -281,7 +279,7 @@ static void decideFrameSkip(void) {
     static int frame = 0;
     frame++;
     int32_t shown = visibleWidth(g_runner);
-    bool skip = g_smoothLowres && !g_uncapped && !lastSkipped && g_debtNanos >= UT_SKIP_DEBT_NANOS;
+    bool skip = g_smoothLowres && !g_uncapped && !lastSkipped && g_debtNanos >= OF_SKIP_DEBT_NANOS;
     if (g_forceSkip > 0) skip = frame % g_forceSkip != 0;
     /* Not across a change of picture size (the display mode follows the frame
      * that is drawn), not while paused or about to be (that frame is the one
@@ -296,7 +294,7 @@ static void decideFrameSkip(void) {
     swrSkipFrame = skip;
 }
 
-void utPlatformSetUncapped(bool uncapped) {
+void ofPlatformSetUncapped(bool uncapped) {
     g_uncapped = uncapped;
 }
 
@@ -319,9 +317,9 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
-    utFontSetRunner(runner);
-    utPatchStrings(runner->dataWin);
-    utNativeInstall(runner);
+    ofFontSetRunner(runner);
+    ofPatchStrings(runner->dataWin);
+    ofNativeInstall(runner);
     runner->setCursor = NULL;
     runner->currentCursor = GML_CR_DEFAULT;
 }
@@ -329,13 +327,13 @@ void platformInitFunctions(Runner *runner) {
 /* Width of what the current room shows, in game pixels: the view if the room
  * uses one, the whole room otherwise. */
 static int32_t visibleWidth(Runner *runner) {
-    if (runner == NULL || runner->currentRoom == NULL) return UT_SCREEN_W;
+    if (runner == NULL || runner->currentRoom == NULL) return OF_SCREEN_W;
 
     if (runner->viewsEnabled) {
         for (int i = 0; i < MAX_VIEWS; i++) {
             if (!runner->views[i].enabled) continue;
             GMLCamera *camera = Runner_getCameraForView(runner, i);
-            return camera != NULL ? camera->viewWidth : UT_HIRES_W;
+            return camera != NULL ? camera->viewWidth : OF_HIRES_W;
         }
     }
     return (int32_t) runner->currentRoom->width;
@@ -353,12 +351,12 @@ bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
         logInfo("Video: room shows %d px across\n", (int) shown);
         lastShown = shown;
     }
-    bool hires = g_hiresAvailable && !g_smoothLowres && shown > UT_SCREEN_W;
+    bool hires = g_hiresAvailable && !g_smoothLowres && shown > OF_SCREEN_W;
     swrSmoothMinify = g_smoothLowres;
-    swrMirrorFaintAlpha = g_faintOverride >= 0 ? g_faintOverride : g_smoothLowres ? UT_SPEED_FAINT_ALPHA : 0;
+    swrMirrorFaintAlpha = g_faintOverride >= 0 ? g_faintOverride : g_smoothLowres ? OF_SPEED_FAINT_ALPHA : 0;
     swrFavorSpeed = g_smoothLowres;
-    *outW = hires ? UT_HIRES_W : UT_SCREEN_W;
-    *outH = hires ? UT_HIRES_H : UT_SCREEN_H;
+    *outW = hires ? OF_HIRES_W : OF_SCREEN_W;
+    *outH = hires ? OF_HIRES_H : OF_SCREEN_H;
     return true;
 }
 
@@ -368,13 +366,13 @@ static void matchVideoMode(int width, int height) {
 
     of_video_mode_t want = { (uint16_t) width, (uint16_t) height, 0, OF_VIDEO_MODE_RGB555, 0 };
     if (of_video_set_mode(&want) < 0) {
-        if (width > UT_SCREEN_W) {
-            logWarn("Video: %dx%d is not available, staying at %dx%d.\n", width, height, UT_SCREEN_W, UT_SCREEN_H);
+        if (width > OF_SCREEN_W) {
+            logWarn("Video: %dx%d is not available, staying at %dx%d.\n", width, height, OF_SCREEN_W, OF_SCREEN_H);
             g_hiresAvailable = false;
             return;
         }
         /* An OS without mode setting still has the boot 320x240 mode. */
-        g_modeStride = UT_SCREEN_W * (int) sizeof(uint16_t);
+        g_modeStride = OF_SCREEN_W * (int) sizeof(uint16_t);
     } else {
         of_video_mode_t got;
         of_video_get_mode(&got);
@@ -443,8 +441,8 @@ void platformSetNextFramebuffer(uint16_t *framebuffer, int width, int height, in
 }
 
 #ifdef OF_PC
-/* Desktop-only verification aid: UT_DUMP_FRAME=<n> writes frame n of the
- * RGB555 output to UT_DUMP_PATH (default frame.ppm) and exits. */
+/* Desktop-only verification aid: BS_DUMP_FRAME=<n> writes frame n of the
+ * RGB555 output to BS_DUMP_PATH (default frame.ppm) and exits. */
 static void writePictureTo(const char *path, const uint16_t *fb, int width, int height) {
     FILE *f = fopen(path, "wb");
     if (f == NULL) exit(1);
@@ -467,18 +465,18 @@ static void writeFrameTo(const char *path, bool thenExit) {
 }
 
 static void writeFrameDump(void) {
-    const char *path = getenv("UT_DUMP_PATH");
+    const char *path = getenv("BS_DUMP_PATH");
     writeFrameTo(path != NULL ? path : "frame.ppm", true);
 }
 
-/* UT_DUMP_EVERY=<n> also writes every nth frame on the way there, to
- * <UT_DUMP_DIR>/f<frame>.ppm, to follow a long scripted run. */
+/* BS_DUMP_EVERY=<n> also writes every nth frame on the way there, to
+ * <BS_DUMP_DIR>/f<frame>.ppm, to follow a long scripted run. */
 static void dumpFrameIfRequested(bool drawn) {
     static int every = 0;
     if (g_dumpTarget == -2) {
-        const char *env = getenv("UT_DUMP_FRAME");
+        const char *env = getenv("BS_DUMP_FRAME");
         g_dumpTarget = env != NULL ? atoi(env) : -1;
-        env = getenv("UT_DUMP_EVERY");
+        env = getenv("BS_DUMP_EVERY");
         every = env != NULL ? atoi(env) : 0;
     }
     /* A skipped frame counts but has no picture. */
@@ -489,7 +487,7 @@ static void dumpFrameIfRequested(bool drawn) {
     int frame = g_dumpFrame;
     int target = g_dumpTarget;
     if (every > 0 && frame > 0 && frame % every == 0) {
-        const char *dir = getenv("UT_DUMP_DIR");
+        const char *dir = getenv("BS_DUMP_DIR");
         char path[512];
         snprintf(path, sizeof(path), "%s/f%06d.ppm", dir != NULL ? dir : ".", frame);
         writeFrameTo(path, false);
@@ -502,31 +500,31 @@ static void dumpFrameIfRequested(bool drawn) {
 
 void platformSwapBuffers(void) {
     if (g_nextFb == NULL) return;
-    utPerfDetailAlways(g_debugMode);
+    ofPerfDetailAlways(g_debugMode);
     if (g_skipThisFrame) {
         /* Nothing was drawn: the frame is counted and the last picture stays up. */
         scriptProfileFrame();
-        utPerfFrame(NULL, 0, 0);
-        utBenchFrame();
+        ofPerfFrame(NULL, 0, 0);
+        ofBenchFrame();
 #ifdef OF_PC
         dumpFrameIfRequested(false);
 #endif
-        utPerfPhase(UT_PHASE_OTHER);
+        ofPerfPhase(OF_PHASE_OTHER);
         return;
     }
 #ifdef OF_PC
-    /* UT_OVERLAY=1 turns both overlays on, to check them in frame dumps. */
+    /* BS_OVERLAY=1 turns both overlays on, to check them in frame dumps. */
     static bool overlaysChecked = false;
     if (!overlaysChecked) {
         overlaysChecked = true;
-        if (getenv("UT_OVERLAY") != NULL) {
-            utPerfToggle();
-            utPerfToggleLog();
+        if (getenv("BS_OVERLAY") != NULL) {
+            ofPerfToggle();
+            ofPerfToggleLog();
         }
     }
 #endif
     scriptProfileFrame();
-    utPerfFrame(g_nextFb, g_nextW, g_nextH);
+    ofPerfFrame(g_nextFb, g_nextW, g_nextH);
     /* L's setting, by the name the instruction screen gives the toggle:
      * for a moment after L is pressed, and in debug mode for as long as a
      * 640x480 room (the only kind it changes) is showing. */
@@ -541,13 +539,13 @@ void platformSwapBuffers(void) {
          * for as long as the pause. */
         char text[32];
         snprintf(text, sizeof(text), "Paused, frame %d", g_runner->frameCount);
-        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, text);
+        ofPerfDrawMode(g_nextFb, g_nextW, g_nextH, text);
     } else if (nowNanos() < g_noticeUntil) {
-        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_notice);
+        ofPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_notice);
     } else if (nowNanos() < g_modeShownUntil || g_debugMode) {
-        utPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_smoothLowres ? "Speed" : "Accuracy");
+        ofPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_smoothLowres ? "Speed" : "Accuracy");
     }
-    utBenchFrame();
+    ofBenchFrame();
 #ifdef OF_PC
     dumpFrameIfRequested(true);
 #endif
@@ -572,18 +570,18 @@ void platformSwapBuffers(void) {
     }
     uint64_t flipStart = nowNanos();
 #ifdef OF_PC
-    /* UT_NOFLIP=1 never presents: the desktop window waits for vsync on every flip, which caps a long scripted
+    /* BS_NOFLIP=1 never presents: the desktop window waits for vsync on every flip, which caps a long scripted
      * run at the display's refresh rate. */
     static int noFlip = -1;
-    if (noFlip < 0) noFlip = getenv("UT_NOFLIP") != NULL;
+    if (noFlip < 0) noFlip = getenv("BS_NOFLIP") != NULL;
     if (!noFlip)
 #endif
     of_video_flip();
-    utBenchAddFlipTime(nowNanos() - flipStart);
+    ofBenchAddFlipTime(nowNanos() - flipStart);
 #ifndef OF_PC
-    utLogSetConsole(false);
+    ofLogSetConsole(false);
 #endif
-    utPerfPhase(UT_PHASE_OTHER);
+    ofPerfPhase(OF_PHASE_OTHER);
 }
 
 /* Shows the recent log full-screen and never returns. Used for the benchmark
@@ -591,20 +589,20 @@ void platformSwapBuffers(void) {
  * app has switched to its own 16-bit video modes, so the text is drawn into
  * the framebuffer instead. Returns false if no frame has been drawn yet, in
  * which case the OS terminal is still on screen and the caller can use it. */
-bool utPlatformShowLogAndHalt(void) {
+bool ofPlatformShowLogAndHalt(void) {
     if (g_nextFb == NULL || !g_showingFramebuffer) return false;
 
-    matchVideoMode(UT_SCREEN_W, UT_SCREEN_H);
-    if (g_modeW != UT_SCREEN_W || g_modeH != UT_SCREEN_H) return false;
-    if (g_modeStride != UT_SCREEN_W * (int) sizeof(uint16_t)) return false;
-    g_nextW = UT_SCREEN_W;
-    g_nextH = UT_SCREEN_H;
+    matchVideoMode(OF_SCREEN_W, OF_SCREEN_H);
+    if (g_modeW != OF_SCREEN_W || g_modeH != OF_SCREEN_H) return false;
+    if (g_modeStride != OF_SCREEN_W * (int) sizeof(uint16_t)) return false;
+    g_nextW = OF_SCREEN_W;
+    g_nextH = OF_SCREEN_H;
 
     for (;;) {
         g_nextFb = (uint16_t *) (void *) of_video_surface();
-        utPerfDrawLogScreen(g_nextFb, g_nextW, g_nextH);
+        ofPerfDrawLogScreen(g_nextFb, g_nextW, g_nextH);
 #ifdef OF_PC
-        if (getenv("UT_DUMP_PATH") != NULL) writeFrameDump();
+        if (getenv("BS_DUMP_PATH") != NULL) writeFrameDump();
         exit(0);
 #endif
         of_video_flip();
@@ -622,10 +620,10 @@ void *platformGetProcAddress(const char *name) {
  * globals and go to a room, to reach a scene without playing up to it. The
  * game's own state is otherwise whatever it was, so this only suits rooms
  * that set themselves up. */
-static const UtJump *g_jumps = NULL;
+static const OfJump *g_jumps = NULL;
 static int g_jumpCount = 0;
 
-void utPlatformSetJumps(const UtJump *jumps, int count) {
+void ofPlatformSetJumps(const OfJump *jumps, int count) {
     g_jumps = jumps;
     g_jumpCount = count;
 }
@@ -657,7 +655,7 @@ static void setGlobals(const char *spec) {
     }
 }
 
-/* Scripted input for repeatable runs (the benchmark, and UT_SCRIPT on
+/* Scripted input for repeatable runs (the benchmark, and BS_SCRIPT on
  * desktop):
  *   "300:Z,340:D,341:Z,400:R*90"
  * presses a key on the given frame and releases it two frames later, or
@@ -675,13 +673,13 @@ static void runInputScript(void) {
         }
     }
 #ifdef OF_PC
-    /* UT_GOTO="<frame>:<room index>" jumps to a room, to reach a scene without playing up to it. The game's own
+    /* BS_GOTO="<frame>:<room index>" jumps to a room, to reach a scene without playing up to it. The game's own
      * state is whatever it was, so this only suits rooms that set themselves up. */
-    const char *jump = getenv("UT_GOTO");
+    const char *jump = getenv("BS_GOTO");
     if (jump != NULL && g_runner != NULL && frame == atoi(jump) && strchr(jump, ':') != NULL)
         g_runner->pendingRoom = atoi(strchr(jump, ':') + 1);
-    /* UT_SET="<frame>:name=1,other[2]=3" sets numeric globals (or elements of existing global arrays). */
-    const char *set = getenv("UT_SET");
+    /* BS_SET="<frame>:name=1,other[2]=3" sets numeric globals (or elements of existing global arrays). */
+    const char *set = getenv("BS_SET");
     if (set != NULL && g_runner != NULL && frame == atoi(set) && strchr(set, ':') != NULL)
         setGlobals(strchr(set, ':') + 1);
 #endif
@@ -712,7 +710,7 @@ static void runInputScript(void) {
 /* ===[ The menu ]===
  *
  * Select (pressed and let go on its own) opens it over the paused game; see
- * ut_menu.c for how it looks and moves. It holds the debug and performance
+ * of_menu.c for how it looks and moves. It holds the debug and performance
  * settings that used to be button chords, so none of them has to be
  * remembered. (The Pocket's own core menu cannot hold them: the hardware
  * gives a core no menu variables of its own. interact.json entries can only
@@ -721,7 +719,7 @@ static void runInputScript(void) {
 
 static void toggleSpeed(void) {
     g_smoothLowres = !g_smoothLowres;
-    g_modeShownUntil = nowNanos() + UT_MODE_SHOWN_NANOS;
+    g_modeShownUntil = nowNanos() + OF_MODE_SHOWN_NANOS;
     logInfo("Video: %s\n", g_smoothLowres ? "speed (640x480 rooms at 320x240, faint layers left out, frame skipping)" : "accuracy");
 }
 
@@ -729,7 +727,7 @@ static void toggleScriptTimes(void) {
     /* The report goes to the log, so bring that up with it. */
     bool enable = !scriptProfileOn();
     setScriptProfile(enable);
-    if (enable) utPerfShowLog();
+    if (enable) ofPerfShowLog();
     logInfo("Debug: script times %s\n", enable ? "on, every 2 s" : "off");
 }
 
@@ -753,22 +751,22 @@ static bool menuVideo(int direction) {
 }
 
 static const char *menuFrameTimesValue(void) {
-    return onOff(utPerfOverlayOn());
+    return onOff(ofPerfOverlayOn());
 }
 
 static bool menuFrameTimes(int direction) {
     (void) direction;
-    utPerfToggle();
+    ofPerfToggle();
     return false;
 }
 
 static const char *menuLogValue(void) {
-    return onOff(utPerfLogOn());
+    return onOff(ofPerfLogOn());
 }
 
 static bool menuLog(int direction) {
     (void) direction;
-    utPerfToggleLog();
+    ofPerfToggleLog();
     return false;
 }
 
@@ -818,31 +816,31 @@ static bool menuUnstick(int direction) {
 
 static bool menuSaveLog(int direction) {
     (void) direction;
-    bool saved = utLogDump();
+    bool saved = ofLogDump();
     showNotice(saved ? "Log saved" : "Log not saved");
     logInfo("Debug: log %s\n", saved ? "written to the spare save slot; quit from the Analogue menu to keep it" : "could not be written");
     return true;
 }
 
-static const char *const g_audioModeNames[UT_AUDIO_MODE_COUNT] = { "Normal", "Disabled", "Music only", "Sound only" };
+static const char *const g_audioModeNames[OF_AUDIO_MODE_COUNT] = { "Normal", "Disabled", "Music only", "Sound only" };
 
-static void setAudioMode(UtAudioMode mode) {
-    utAudioSetMode(mode);
+static void setAudioMode(OfAudioMode mode) {
+    ofAudioSetMode(mode);
     logInfo("Debug: audio mode %s%s\n", g_audioModeNames[mode],
-            mode == UT_AUDIO_DISABLED ? "" : "; what was playing unheard is rough until it next starts");
+            mode == OF_AUDIO_DISABLED ? "" : "; what was playing unheard is rough until it next starts");
 }
 
 static const char *menuAudioValue(void) {
-    return g_audioModeNames[utAudioMode()];
+    return g_audioModeNames[ofAudioMode()];
 }
 
 static bool menuAudio(int direction) {
-    int step = direction < 0 ? UT_AUDIO_MODE_COUNT - 1 : 1;
-    setAudioMode((UtAudioMode) (((int) utAudioMode() + step) % UT_AUDIO_MODE_COUNT));
+    int step = direction < 0 ? OF_AUDIO_MODE_COUNT - 1 : 1;
+    setAudioMode((OfAudioMode) (((int) ofAudioMode() + step) % OF_AUDIO_MODE_COUNT));
     return false;
 }
 
-static const UtMenuRow g_debugRows[] = {
+static const OfMenuRow g_debugRows[] = {
     { "Audio mode",                menuAudioValue,       menuAudio,        NULL },
     { "Show frame times",          menuFrameTimesValue,  menuFrameTimes,   NULL },
     { "Show log overlay",          menuLogValue,         menuLog,          NULL },
@@ -854,9 +852,9 @@ static const UtMenuRow g_debugRows[] = {
     { "Save log",                  NULL,                 menuSaveLog,      NULL },
 };
 
-static const UtMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
+static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
 
-static const UtMenuRow g_menuRows[] = {
+static const OfMenuRow g_menuRows[] = {
     { "Resume",                    NULL,                 menuResume,       NULL },
     { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
     { "Debug",                     NULL,                 NULL,             &g_debugPage },
@@ -865,7 +863,7 @@ static const UtMenuRow g_menuRows[] = {
 /* The frame-time overlay's numbers, in words. */
 static void menuStatus(char *out, size_t size) {
     unsigned average, worstWork, worstPeriod, skipped;
-    utPerfShown(&average, &worstWork, &worstPeriod, &skipped);
+    ofPerfShown(&average, &worstWork, &worstPeriod, &skipped);
     (void) worstPeriod;
     snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
 }
@@ -882,11 +880,11 @@ static void menuPresent(const uint16_t *fb) {
     for (int y = 0; y < g_nextH; y++) memcpy(dst + (size_t) y * (size_t) g_modeStride, fb + (size_t) y * (size_t) g_nextW, rowBytes);
 #ifdef OF_PC
     if (g_menuDump) {
-        const char *path = getenv("UT_DUMP_PATH");
+        const char *path = getenv("BS_DUMP_PATH");
         writePictureTo(path != NULL ? path : "frame.ppm", fb, g_nextW, g_nextH);
     }
     static int noFlip = -1;
-    if (noFlip < 0) noFlip = getenv("UT_NOFLIP") != NULL;
+    if (noFlip < 0) noFlip = getenv("BS_NOFLIP") != NULL;
     if (noFlip) return;
 #endif
     of_video_flip();
@@ -895,27 +893,27 @@ static void menuPresent(const uint16_t *fb) {
 static void runMenu(void) {
     /* Over the picture last shown, at the size it was shown. */
     if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
-    static const UtMenu menu = {
+    static const OfMenu menu = {
         { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuStatus, menuPresent, platformBusyTick,
     };
     AudioSystem *audio = g_runner->audioSystem;
     bool wasPaused = g_runner->paused;
     if (!wasPaused) audio->vtable->pauseAll(audio);
     logInfo("Menu\n");
-    if (!utMenuRun(&menu, g_nextFb, g_nextW, g_nextH)) logWarn("Menu: no memory for it\n");
+    if (!ofMenuRun(&menu, g_nextFb, g_nextW, g_nextH)) logWarn("Menu: no memory for it\n");
     /* The menu drew into the display's buffers, which can include the one
      * the last frame was drawn in; the game's picture is now in the buffer it
      * showed last. A paused game shows that one again (the log screen too). */
     if (g_menuShownIn != NULL && g_modeStride == g_nextW * (int) sizeof(uint16_t)) g_nextFb = (uint16_t *) (void *) g_menuShownIn;
     if (!wasPaused) audio->vtable->resumeAll(audio);
     /* The time the menu was up is not a slow frame to report or catch up on. */
-    utPerfRestartClock();
+    ofPerfRestartClock();
     g_menuClosed = true;
 }
 
 /* Returns true when the app should quit; a Pocket core never does. */
 bool platformHandleEvents(void) {
-    utPerfPhase(UT_PHASE_STEP);
+    ofPerfPhase(OF_PHASE_STEP);
     of_input_poll();
 
     static bool chordUsed = false;
@@ -928,15 +926,15 @@ bool platformHandleEvents(void) {
     /* Select on its own, let go: the menu. */
     bool openMenu = of_btn_released(OF_BTN_SELECT) && !chordUsed;
 #ifdef OF_PC
-    /* UT_MENU="<frame>[:<buttons>]" opens the menu on that frame and presses the buttons in it, one a frame
-     * (U D L R, A B); with UT_DUMP_PATH the menu as the buttons leave it is written there and the run ends. */
+    /* BS_MENU="<frame>[:<buttons>]" opens the menu on that frame and presses the buttons in it, one a frame
+     * (U D L R, A B); with BS_DUMP_PATH the menu as the buttons leave it is written there and the run ends. */
     static int menuFrame = 0;
-    const char *menuAt = getenv("UT_MENU");
+    const char *menuAt = getenv("BS_MENU");
     if (menuAt != NULL && ++menuFrame == atoi(menuAt)) {
         openMenu = true;
         const char *colon = strchr(menuAt, ':');
-        utMenuScript(colon != NULL ? colon + 1 : "");
-        g_menuDump = getenv("UT_DUMP_PATH") != NULL;
+        ofMenuScript(colon != NULL ? colon + 1 : "");
+        g_menuDump = getenv("BS_DUMP_PATH") != NULL;
     }
 #endif
     /* Frame stepping is the one hotkey the runner itself gates on this. */
@@ -946,7 +944,7 @@ bool platformHandleEvents(void) {
         keyToRelease = 0;
     }
     bool chording = g_debugMode && of_btn(OF_BTN_SELECT);
-    if (g_debugMode && of_btn_pressed(OF_BTN_R1)) utPerfToggleLog();
+    if (g_debugMode && of_btn_pressed(OF_BTN_R1)) ofPerfToggleLog();
     if (of_btn_pressed(OF_BTN_L1)) toggleSpeed();
     runInputScript();
     decideFrameSkip();
@@ -979,20 +977,20 @@ bool platformHandleEvents(void) {
     }
     if (chording && of_btn_pressed(OF_BTN_DOWN)) {
         /* Off, or back to everything from whichever mode the menu left. */
-        bool mute = utAudioMode() == UT_AUDIO_NORMAL;
-        setAudioMode(mute ? UT_AUDIO_DISABLED : UT_AUDIO_NORMAL);
+        bool mute = ofAudioMode() == OF_AUDIO_NORMAL;
+        setAudioMode(mute ? OF_AUDIO_DISABLED : OF_AUDIO_NORMAL);
         chordUsed = true;
         showNotice(mute ? "Sound off" : "Sound on");
     }
     if (chording && of_btn_pressed(OF_BTN_Y)) {
-        bool saved = utLogDump();
+        bool saved = ofLogDump();
         chordUsed = true;
         showNotice(saved ? "Log saved" : "Log not saved");
         logInfo("Debug: log %s\n", saved ? "written to the spare save slot; quit from the Analogue menu to keep it" : "could not be written");
     }
     if (chording) {
         /* One hotkey per frame; it is released on the next. */
-        for (size_t i = 0; i < UT_DEBUG_CHORD_COUNT && keyToRelease == 0; i++) {
+        for (size_t i = 0; i < OF_DEBUG_CHORD_COUNT && keyToRelease == 0; i++) {
             if (!of_btn_pressed(g_debugChords[i].button)) continue;
             RunnerKeyboard_onKeyDown(g_runner->keyboard, g_debugChords[i].key);
             keyToRelease = g_debugChords[i].key;
@@ -1003,7 +1001,7 @@ bool platformHandleEvents(void) {
         }
     }
 
-    for (size_t i = 0; i < UT_KEYMAP_COUNT; i++) {
+    for (size_t i = 0; i < OF_KEYMAP_COUNT; i++) {
         if (!chording && of_btn_pressed(g_keymap[i].button))
             RunnerKeyboard_onKeyDown(g_runner->keyboard, g_keymap[i].key);
         if (of_btn_released(g_keymap[i].button))
@@ -1020,7 +1018,7 @@ void platformSleepUntil(uint64_t time) {
         g_debtNanos = 0;
     } else if (start > time) {
         g_debtNanos += start - time;
-        if (g_debtNanos > UT_SKIP_DEBT_CAP_NANOS) g_debtNanos = UT_SKIP_DEBT_CAP_NANOS;
+        if (g_debtNanos > OF_SKIP_DEBT_CAP_NANOS) g_debtNanos = OF_SKIP_DEBT_CAP_NANOS;
     } else {
         uint64_t paid = time - start < g_debtNanos ? time - start : g_debtNanos;
         time -= paid;
@@ -1031,5 +1029,5 @@ void platformSleepUntil(uint64_t time) {
         usleep((useconds_t) ((remaining - 1000000) / 1000));
     while (nowNanos() < time) {
     }
-    utPerfAddSleep(nowNanos() - start);
+    ofPerfAddSleep(nowNanos() - start);
 }

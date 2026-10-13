@@ -1,8 +1,8 @@
 /*
  * Save-slot file system for Butterscotch.
  *
- * Undertale keeps its progress in a handful of small files next to the game
- * (file0, file9, undertale.ini, system_information_96x). openfpgaOS has no
+ * A game keeps its progress in a handful of small files next to it (Undertale:
+ * file0, file9, undertale.ini, system_information_96x). openfpgaOS has no
  * writable directory; it has ten fixed 256 KB save slots, exposed as files
  * named in the instance JSON, which the Pocket writes back to the SD card
  * when the core is closed.
@@ -18,8 +18,13 @@
 #include "file_system.h"
 #include "log.h"
 #include "of_hooks.h"
-#include "ut_bench.h"
-#include "ut_save_format.h"
+#include "of_bench.h"
+#include "of_save_format.h"
+
+/* The Makefile names it after the game being built. */
+#ifndef OF_SAVE_SLOT_FILE
+#error "OF_SAVE_SLOT_FILE is not set; build with the Makefile"
+#endif
 #include "utils.h"
 
 #include <stdio.h>
@@ -27,22 +32,22 @@
 #include <string.h>
 
 typedef struct {
-    char name[UT_SAVE_NAME_LEN];
+    char name[OF_SAVE_NAME_LEN];
     uint8_t *data;
     uint32_t size;
-} UtSaveFile;
+} OfSaveFile;
 
 typedef struct {
     FileSystem base;
-    UtSaveFile files[UT_SAVE_MAX_FILES];
+    OfSaveFile files[OF_SAVE_MAX_FILES];
     uint32_t fileCount;
-} UtSaveFs;
+} OfSaveFs;
 
 /* When set, nothing is read from or written to the slot: the benchmark must
  * start from the same fresh state on every run and leave no trace. */
 static bool g_volatile = false;
 
-void utSaveFsSetVolatile(bool enabled) {
+void ofSaveFsSetVolatile(bool enabled) {
     g_volatile = enabled;
 }
 
@@ -57,7 +62,7 @@ static const char *baseName(const char *path) {
     return base;
 }
 
-static UtSaveFile *findFile(UtSaveFs *fs, const char *path) {
+static OfSaveFile *findFile(OfSaveFs *fs, const char *path) {
     const char *name = baseName(path);
     for (uint32_t i = 0; i < fs->fileCount; i++) {
         if (strcmp(fs->files[i].name, name) == 0) return &fs->files[i];
@@ -65,17 +70,17 @@ static UtSaveFile *findFile(UtSaveFs *fs, const char *path) {
     return NULL;
 }
 
-static void loadArchive(UtSaveFs *fs) {
+static void loadArchive(OfSaveFs *fs) {
     if (g_volatile) return;
-    FILE *slot = fopen(UT_SAVE_SLOT_FILE, "rb");
+    FILE *slot = fopen(OF_SAVE_SLOT_FILE, "rb");
     if (slot == NULL) {
         logInfo("Saves: no save data yet.\n");
         return;
     }
 
-    UtSaveHeader header;
-    bool valid = fread(&header, sizeof(header), 1, slot) == 1 && header.magic == UT_SAVE_MAGIC &&
-                 header.fileCount <= UT_SAVE_MAX_FILES && header.totalBytes <= UT_SAVE_MAX_BYTES;
+    OfSaveHeader header;
+    bool valid = fread(&header, sizeof(header), 1, slot) == 1 && header.magic == OF_SAVE_MAGIC &&
+                 header.fileCount <= OF_SAVE_MAX_FILES && header.totalBytes <= OF_SAVE_MAX_BYTES;
     if (!valid) {
         /* A slot that has never been written reads as blank. */
         logInfo("Saves: no save data yet.\n");
@@ -93,16 +98,16 @@ static void loadArchive(UtSaveFs *fs) {
     }
     fclose(slot);
 
-    const UtSaveEntry *entries = (const UtSaveEntry *) (archive + sizeof(UtSaveHeader));
+    const OfSaveEntry *entries = (const OfSaveEntry *) (archive + sizeof(OfSaveHeader));
     for (uint32_t i = 0; i < header.fileCount; i++) {
-        const UtSaveEntry *entry = &entries[i];
+        const OfSaveEntry *entry = &entries[i];
         if ((uint64_t) entry->offset + entry->size > header.totalBytes) {
             logWarn("Saves: save data is damaged; ignoring the rest of it.\n");
             break;
         }
-        UtSaveFile *file = &fs->files[fs->fileCount];
-        memcpy(file->name, entry->name, UT_SAVE_NAME_LEN);
-        file->name[UT_SAVE_NAME_LEN - 1] = '\0';
+        OfSaveFile *file = &fs->files[fs->fileCount];
+        memcpy(file->name, entry->name, OF_SAVE_NAME_LEN);
+        file->name[OF_SAVE_NAME_LEN - 1] = '\0';
         file->size = entry->size;
         file->data = safeMalloc(entry->size + 1);
         memcpy(file->data, archive + entry->offset, entry->size);
@@ -112,32 +117,32 @@ static void loadArchive(UtSaveFs *fs) {
     logInfo("Saves: loaded %u files.\n", (unsigned) fs->fileCount);
 }
 
-static bool storeArchive(UtSaveFs *fs) {
+static bool storeArchive(OfSaveFs *fs) {
     if (g_volatile) return true;
-    uint32_t total = (uint32_t) (sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry));
+    uint32_t total = (uint32_t) (sizeof(OfSaveHeader) + fs->fileCount * sizeof(OfSaveEntry));
     for (uint32_t i = 0; i < fs->fileCount; i++) total += fs->files[i].size;
-    if (total > UT_SAVE_MAX_BYTES) {
+    if (total > OF_SAVE_MAX_BYTES) {
         logWarn("Saves: %u bytes will not fit in the save slot.\n", (unsigned) total);
         return false;
     }
 
     uint8_t *archive = safeCalloc(1, total);
-    UtSaveHeader *header = (UtSaveHeader *) archive;
-    header->magic = UT_SAVE_MAGIC;
+    OfSaveHeader *header = (OfSaveHeader *) archive;
+    header->magic = OF_SAVE_MAGIC;
     header->fileCount = fs->fileCount;
     header->totalBytes = total;
 
-    UtSaveEntry *entries = (UtSaveEntry *) (archive + sizeof(UtSaveHeader));
-    uint32_t offset = (uint32_t) (sizeof(UtSaveHeader) + fs->fileCount * sizeof(UtSaveEntry));
+    OfSaveEntry *entries = (OfSaveEntry *) (archive + sizeof(OfSaveHeader));
+    uint32_t offset = (uint32_t) (sizeof(OfSaveHeader) + fs->fileCount * sizeof(OfSaveEntry));
     for (uint32_t i = 0; i < fs->fileCount; i++) {
-        memcpy(entries[i].name, fs->files[i].name, UT_SAVE_NAME_LEN);
+        memcpy(entries[i].name, fs->files[i].name, OF_SAVE_NAME_LEN);
         entries[i].size = fs->files[i].size;
         entries[i].offset = offset;
         memcpy(archive + offset, fs->files[i].data, fs->files[i].size);
         offset += fs->files[i].size;
     }
 
-    FILE *slot = fopen(UT_SAVE_SLOT_FILE, "wb");
+    FILE *slot = fopen(OF_SAVE_SLOT_FILE, "wb");
     bool ok = slot != NULL && fwrite(archive, 1, total, slot) == total;
     if (slot != NULL && fclose(slot) != 0) ok = false;
     free(archive);
@@ -145,11 +150,11 @@ static bool storeArchive(UtSaveFs *fs) {
     return ok;
 }
 
-static bool putFile(UtSaveFs *fs, const char *path, const uint8_t *data, uint32_t size) {
-    UtSaveFile *file = findFile(fs, path);
+static bool putFile(OfSaveFs *fs, const char *path, const uint8_t *data, uint32_t size) {
+    OfSaveFile *file = findFile(fs, path);
     if (file == NULL) {
         const char *name = baseName(path);
-        if (fs->fileCount >= UT_SAVE_MAX_FILES || strlen(name) >= UT_SAVE_NAME_LEN) {
+        if (fs->fileCount >= OF_SAVE_MAX_FILES || strlen(name) >= OF_SAVE_NAME_LEN) {
             logWarn("Saves: cannot store '%s'.\n", path);
             return false;
         }
@@ -177,7 +182,7 @@ static char *fsResolvePath(FileSystem *base, const char *relativePath) {
  * the game writes goes to the archive, which is looked up first. On the device they are stored in the audio
  * pack, since a core has no spare data slot; the desktop build reads them from the folder it runs in. */
 static bool readBundled(const char *relativePath, uint8_t **outData, uint32_t *outSize) {
-    if (utAudioReadPackFile(relativePath, outData, outSize)) return true;
+    if (ofAudioReadPackFile(relativePath, outData, outSize)) return true;
 #ifdef OF_PC
     FILE *f = fopen(relativePath, "rb");
     if (f == NULL) return false;
@@ -211,15 +216,15 @@ static bool bundledExists(const char *relativePath) {
         return true;
     }
 #endif
-    return utAudioHasPackFile(relativePath);
+    return ofAudioHasPackFile(relativePath);
 }
 
 static bool fsFileExists(FileSystem *base, const char *relativePath) {
-    return findFile((UtSaveFs *) base, relativePath) != NULL || bundledExists(relativePath);
+    return findFile((OfSaveFs *) base, relativePath) != NULL || bundledExists(relativePath);
 }
 
 static char *fsReadFileText(FileSystem *base, const char *relativePath) {
-    UtSaveFile *file = findFile((UtSaveFs *) base, relativePath);
+    OfSaveFile *file = findFile((OfSaveFs *) base, relativePath);
     if (file == NULL) {
         uint8_t *data = NULL;
         uint32_t size = 0;
@@ -232,22 +237,22 @@ static char *fsReadFileText(FileSystem *base, const char *relativePath) {
 }
 
 static bool fsWriteFileText(FileSystem *base, const char *relativePath, const char *contents) {
-    return putFile((UtSaveFs *) base, relativePath, (const uint8_t *) contents, (uint32_t) strlen(contents));
+    return putFile((OfSaveFs *) base, relativePath, (const uint8_t *) contents, (uint32_t) strlen(contents));
 }
 
 static bool fsDeleteFile(FileSystem *base, const char *relativePath) {
-    UtSaveFs *fs = (UtSaveFs *) base;
-    UtSaveFile *file = findFile(fs, relativePath);
+    OfSaveFs *fs = (OfSaveFs *) base;
+    OfSaveFile *file = findFile(fs, relativePath);
     if (file == NULL) return false;
 
     free(file->data);
     *file = fs->files[--fs->fileCount];
-    memset(&fs->files[fs->fileCount], 0, sizeof(UtSaveFile));
+    memset(&fs->files[fs->fileCount], 0, sizeof(OfSaveFile));
     return storeArchive(fs);
 }
 
 static bool fsReadFileBinary(FileSystem *base, const char *relativePath, uint8_t **outData, int32_t *outSize) {
-    UtSaveFile *file = findFile((UtSaveFs *) base, relativePath);
+    OfSaveFile *file = findFile((OfSaveFs *) base, relativePath);
     if (file == NULL) {
         uint32_t size = 0;
         if (!readBundled(relativePath, outData, &size)) return false;
@@ -262,20 +267,20 @@ static bool fsReadFileBinary(FileSystem *base, const char *relativePath, uint8_t
 
 static bool fsWriteFileBinary(FileSystem *base, const char *relativePath, const uint8_t *data, int32_t size) {
     if (size < 0) return false;
-    return putFile((UtSaveFs *) base, relativePath, data, (uint32_t) size);
+    return putFile((OfSaveFs *) base, relativePath, data, (uint32_t) size);
 }
 
 static bool fsRenameFile(FileSystem *base, const char *oldRelativePath, const char *newRelativePath) {
-    UtSaveFs *fs = (UtSaveFs *) base;
-    UtSaveFile *file = findFile(fs, oldRelativePath);
+    OfSaveFs *fs = (OfSaveFs *) base;
+    OfSaveFile *file = findFile(fs, oldRelativePath);
     const char *newName = baseName(newRelativePath);
-    if (file == NULL || strlen(newName) >= UT_SAVE_NAME_LEN) return false;
+    if (file == NULL || strlen(newName) >= OF_SAVE_NAME_LEN) return false;
 
-    UtSaveFile *existing = findFile(fs, newRelativePath);
+    OfSaveFile *existing = findFile(fs, newRelativePath);
     if (existing != NULL && existing != file) {
         free(existing->data);
         *existing = fs->files[--fs->fileCount];
-        memset(&fs->files[fs->fileCount], 0, sizeof(UtSaveFile));
+        memset(&fs->files[fs->fileCount], 0, sizeof(OfSaveFile));
         file = findFile(fs, oldRelativePath);
     }
     strcpy(file->name, newName);
@@ -325,14 +330,14 @@ static FileSystemVtable g_vtable = {
 };
 
 FileSystem *platformCreateFileSystem(void) {
-    UtSaveFs *fs = safeCalloc(1, sizeof(UtSaveFs));
+    OfSaveFs *fs = safeCalloc(1, sizeof(OfSaveFs));
     fs->base.vtable = &g_vtable;
     loadArchive(fs);
     return &fs->base;
 }
 
 void platformDestroyFileSystem(FileSystem *base) {
-    UtSaveFs *fs = (UtSaveFs *) base;
+    OfSaveFs *fs = (OfSaveFs *) base;
     for (uint32_t i = 0; i < fs->fileCount; i++) free(fs->files[i].data);
     free(fs);
 }

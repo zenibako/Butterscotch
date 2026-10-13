@@ -13,7 +13,7 @@
  * On the Pocket the slot file lives at Saves/butterscotch/common/ on the SD card.
  */
 
-#include "../platform/ut_save_format.h"
+#include "../platform/of_save_format.h"
 
 #include <dirent.h>
 #include <stdbool.h>
@@ -45,7 +45,7 @@ static uint8_t *readWhole(const char *path, uint32_t *outSize) {
  * the folder (.DS_Store, Steam leftovers) is skipped. */
 static bool isSaveName(const char *name) {
     if (name[0] == '.') return false;
-    if (strlen(name) >= UT_SAVE_NAME_LEN) return false;
+    if (strlen(name) >= OF_SAVE_NAME_LEN) return false;
     return strncmp(name, "file", 4) == 0 || strcmp(name, "undertale.ini") == 0 ||
            strncmp(name, "system_information_", 19) == 0 || strcmp(name, "config.ini") == 0;
 }
@@ -58,7 +58,7 @@ static int pack(const char *folder, const char *outPath) {
     DIR *dir = opendir(folder);
     if (dir == NULL) die("cannot open folder", folder);
 
-    char names[UT_SAVE_MAX_FILES][UT_SAVE_NAME_LEN];
+    char names[OF_SAVE_MAX_FILES][OF_SAVE_NAME_LEN];
     uint32_t count = 0;
     struct dirent *item;
     while ((item = readdir(dir)) != NULL) {
@@ -66,25 +66,25 @@ static int pack(const char *folder, const char *outPath) {
             if (item->d_name[0] != '.') printf("  skipped   %s\n", item->d_name);
             continue;
         }
-        if (count == UT_SAVE_MAX_FILES) die("too many save files in", folder);
+        if (count == OF_SAVE_MAX_FILES) die("too many save files in", folder);
         strcpy(names[count++], item->d_name);
     }
     closedir(dir);
     if (count == 0) die("no Undertale save files in", folder);
-    qsort(names, count, UT_SAVE_NAME_LEN, compareNames);
+    qsort(names, count, OF_SAVE_NAME_LEN, compareNames);
 
     /* Written at the full slot size; the game only reads totalBytes of it. */
-    uint8_t *archive = calloc(1, UT_SAVE_SLOT_BYTES);
-    UtSaveHeader *header = (UtSaveHeader *) archive;
-    UtSaveEntry *entries = (UtSaveEntry *) (archive + sizeof(UtSaveHeader));
-    uint32_t offset = (uint32_t) (sizeof(UtSaveHeader) + count * sizeof(UtSaveEntry));
+    uint8_t *archive = calloc(1, OF_SAVE_SLOT_BYTES);
+    OfSaveHeader *header = (OfSaveHeader *) archive;
+    OfSaveEntry *entries = (OfSaveEntry *) (archive + sizeof(OfSaveHeader));
+    uint32_t offset = (uint32_t) (sizeof(OfSaveHeader) + count * sizeof(OfSaveEntry));
 
     for (uint32_t i = 0; i < count; i++) {
         char path[1024];
         snprintf(path, sizeof(path), "%s/%s", folder, names[i]);
         uint32_t size;
         uint8_t *data = readWhole(path, &size);
-        if (offset + size > UT_SAVE_MAX_BYTES) die("save data too large to fit the slot, at", names[i]);
+        if (offset + size > OF_SAVE_MAX_BYTES) die("save data too large to fit the slot, at", names[i]);
         strcpy(entries[i].name, names[i]);
         entries[i].size = size;
         entries[i].offset = offset;
@@ -93,40 +93,40 @@ static int pack(const char *folder, const char *outPath) {
         offset += size;
         printf("  packed    %-28s %6u bytes\n", names[i], (unsigned) size);
     }
-    header->magic = UT_SAVE_MAGIC;
+    header->magic = OF_SAVE_MAGIC;
     header->fileCount = count;
     header->totalBytes = offset;
 
     FILE *out = fopen(outPath, "wb");
-    if (out == NULL || fwrite(archive, 1, UT_SAVE_SLOT_BYTES, out) != UT_SAVE_SLOT_BYTES || fclose(out) != 0)
+    if (out == NULL || fwrite(archive, 1, OF_SAVE_SLOT_BYTES, out) != OF_SAVE_SLOT_BYTES || fclose(out) != 0)
         die("cannot write", outPath);
     printf("%s: %u files, %u bytes used\n", outPath, (unsigned) count, (unsigned) offset);
     return 0;
 }
 
 /* Reads and checks a slot file; returns the archive and its header. */
-static uint8_t *openArchive(const char *path, UtSaveHeader *header) {
+static uint8_t *openArchive(const char *path, OfSaveHeader *header) {
     uint32_t size;
     uint8_t *archive = readWhole(path, &size);
-    if (size < sizeof(UtSaveHeader)) die("no save data in", path);
+    if (size < sizeof(OfSaveHeader)) die("no save data in", path);
     memcpy(header, archive, sizeof(*header));
-    if (header->magic != UT_SAVE_MAGIC) die("no save data in", path);
-    uint64_t tableEnd = sizeof(UtSaveHeader) + (uint64_t) header->fileCount * sizeof(UtSaveEntry);
-    if (header->fileCount > UT_SAVE_MAX_FILES || header->totalBytes > size || tableEnd > header->totalBytes)
+    if (header->magic != OF_SAVE_MAGIC) die("no save data in", path);
+    uint64_t tableEnd = sizeof(OfSaveHeader) + (uint64_t) header->fileCount * sizeof(OfSaveEntry);
+    if (header->fileCount > OF_SAVE_MAX_FILES || header->totalBytes > size || tableEnd > header->totalBytes)
         die("damaged save data in", path);
     return archive;
 }
 
 static int unpack(const char *path, const char *folder) {
-    UtSaveHeader header;
+    OfSaveHeader header;
     uint8_t *archive = openArchive(path, &header);
-    const UtSaveEntry *entries = (const UtSaveEntry *) (archive + sizeof(UtSaveHeader));
+    const OfSaveEntry *entries = (const OfSaveEntry *) (archive + sizeof(OfSaveHeader));
 
     if (folder != NULL) mkdir(folder, 0755);
     for (uint32_t i = 0; i < header.fileCount; i++) {
-        char name[UT_SAVE_NAME_LEN];
-        memcpy(name, entries[i].name, UT_SAVE_NAME_LEN);
-        name[UT_SAVE_NAME_LEN - 1] = '\0';
+        char name[OF_SAVE_NAME_LEN];
+        memcpy(name, entries[i].name, OF_SAVE_NAME_LEN);
+        name[OF_SAVE_NAME_LEN - 1] = '\0';
         if ((uint64_t) entries[i].offset + entries[i].size > header.totalBytes) die("damaged save data in", path);
         if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL || name[0] == '.' || name[0] == '\0')
             die("unexpected file name in", path);
