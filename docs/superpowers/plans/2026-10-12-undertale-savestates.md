@@ -363,3 +363,16 @@ The regenerated patch applies cleanly to the pinned OS revision. Package
 `os.bin` and `undertale.elf`, with no Saves or bitstream replacement. The user
 must manually test load and export the log: warning removal and latency remain
 unverified on hardware.
+
+### Pocket verification of filename-query fix
+
+The user reports no red Loading failed message and fast loading with the
+load-handoff update. The exported log's latest run receives a 238,293-byte
+state during the intro (room 1), restores room 47 and returns load ok in
+2,977 ms after the request; this excludes OS and game startup. Room payload
+preparation takes 6 ms. Archive timings are lookup 0, open 0, buffering 0,
+write 1 and close 0 ms; complete archive application is 12 ms, compared with
+6,213 ms in the previous run. All section application takes 24 ms. This
+verifies successful post-startup restore and removal of the reported red
+warning on this device run. The log is a startup restore, not a separate
+measurement of manual loading or the full sleep/wake interval.
