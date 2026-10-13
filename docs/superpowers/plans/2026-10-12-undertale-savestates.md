@@ -396,3 +396,50 @@ The snapshot suite, restore-completion/ownership tests and lint pass. App API
 headers match the hardware-tested dependency. No new bitstream is assembled or
 installed; packaging the quiet bootloader requires updating the boot MIF in a
 matching fitted bitstream. Pocket validation remains pending for this base.
+
+### October 13: repeated sleep/wake investigation
+
+The rebased 90 MHz control captured a fresh 239,171-byte sleep state before
+wake; the user confirmed the exact resumed position, and the log received that
+payload successfully in 2,998 ms after startup. The matched 100 MHz build then
+captured a fresh 239,354-byte sleep state at 15:54:42 America/New_York with a
+valid OFSS CRC. After two more sleep/wake attempts, the entire sleep file and
+its timestamp remained identical, and the user returned to the initial sleep
+position. This establishes a repeated-cycle failure in that device run, not a
+universal inability to capture at 100 MHz. Negative CPU setup timing remains;
+its worst path is Decode_UOP to SrcPlugin_SRC1, not proof of the sleep cause.
+
+The previous desktop checks did not model two complete Pocket cycles. Added
+three successive boot-LOAD/next-SAVE handshakes to the actual bridge/controller
+RTL harness, recreating the FPGA model each time rather than only toggling POR.
+The expanded harness passes 104 checks. It models requests, readiness, declared
+sizes, counters and rearming; CPU serialization and proprietary host SD file
+selection/persistence remain outside the RTL fixture. Container Verilator
+required compatible warning flags, not RTL changes. Desktop ASan/UBSan checks
+also cold-restore, transition room 46 to 47, recapture, cold-restore that state
+and recapture again successfully. These tests do not reproduce the device bug.
+
+Native diagnostics now record live CPU frequency, enabled state and request/size
+registers. Before announcing save readiness (or refusal), the app writes the
+capture/refusal log to its existing spare log slot. Successful loads also dump
+the log after acknowledgement. Diagnostic write failure is ignored and must not
+change request success or completion ownership. The completion test fails before
+this audit exists and passes afterward, including successful SAVE despite failed
+audit and retries during rejected receive/old-state cleanup. Persistence on sleep
+and diagnostic overhead still require hardware measurement. No sleep fix is
+claimed; compare first and second captures in the next two-cycle run.
+
+Verification: two cold-process application restore/capture cycles preserve the
+future frame byte for byte, including a room transition; ASan/UBSan report no
+errors. The complete snapshot suite, completion/commit tests, lint and native
+ELF build pass. The envelope checksum is logged as a state identity for capture
+and receive. Runtime and FPGA bitstream are unchanged for this ELF-only test.
+The actual Pocket host is not simulated, and no claim is made that this fixes
+the repeated-cycle failure. Native log-slot persistence and audit time are the
+next device measurements.
+
+Review identified a transport hazard in a proposed post-ACK LOAD dump: a new
+blob could arrive while NV-slot I/O holds CRAM0 and overflow the unbackpressured
+bridge FIFO. Removed that write before packaging. Automatic audits now occur
+only before SAVE readiness/refusal, with handles closed before acknowledgement.
+LOAD trace remains in the in-memory log for the user's ordinary Save log action.
