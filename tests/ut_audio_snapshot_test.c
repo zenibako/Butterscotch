@@ -9,6 +9,7 @@ void logInfo(const char *fmt, ...);
 uint64_t nowNanos(void) { return 0; }
 bool utPerfDetail = false;
 void utPerfAddLoad(UtLoadKind kind, uint64_t value) { (void)kind; (void)value; }
+void utPerfPhase(UtPhase phase) { (void)phase; }
 #include <stdarg.h>
 static char lastInfo[512];
 void logInfo(const char *fmt, ...) {

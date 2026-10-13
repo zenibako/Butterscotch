@@ -23,6 +23,15 @@ void logWarn(const char *fmt, ...) { (void)fmt; }
 void logError(const char *fmt, ...) { (void)fmt; abort(); }
 void logInfo(const char *fmt, ...) { (void)fmt; }
 
+/* Archive-only tests never read bundled assets. Linux retains these vtable
+ * dependencies even when their callers are unused by this fixture. */
+bool utAudioHasPackFile(const char *path) {
+    (void)path; assert(false); return false;
+}
+bool utAudioReadPackFile(const char *path, uint8_t **data, uint32_t *size) {
+    (void)path; (void)data; (void)size; assert(false); return false;
+}
+
 int main(void) {
     UtSaveFs fs = {0};
     const char *reason = NULL;
