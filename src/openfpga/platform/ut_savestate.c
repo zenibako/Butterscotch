@@ -17,8 +17,8 @@
 #endif
 
 static uint64_t g_gameId;
-/* Native capture can stall before a refusal can be presented. Publish the
- * current stage first; desktop captures retain their original frame output. */
+/* Native snapshot work can stall before a refusal can be presented. Publish
+ * the current stage first; desktop captures retain their original output. */
 static void captureProgress(const char *stage) {
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
     utPlatformSnapshotNotice(stage);
@@ -31,6 +31,7 @@ static bool g_service;
 /* The HW-mixer runtime otherwise leaves the machine timer off. Its file
  * watchdog needs the 1 kHz tick; the app callback itself has no work. */
 static void fileWatchdogTick(void) {}
+static void finishLoadedState(void) { of_savestate_finish(1); }
 #endif
 
 void utSavestateStartup(void) {
@@ -181,7 +182,9 @@ bool utSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
     utAudioSnapshotLock(false); return ok;
 }
 
-bool utSavestateRestore(Runner *r, const uint8_t *data, size_t size, const char **reason) {
+static bool restoreState(Runner *r, const uint8_t *data, size_t size,
+                         const char **reason, void (*committed)(void)) {
+    uint64_t phases[6] = {nowNanos(), 0, 0, 0, 0, 0};
     UtSnapshotSection parts[4];
     if (!utSnapshotUnpack(g_gameId, data, size, parts)) {
         *reason = data && size >= 4 && memcmp(data, "UTS1", 4) != 0
@@ -196,10 +199,20 @@ bool utSavestateRestore(Runner *r, const uint8_t *data, size_t size, const char 
         *reason = "Invalid platform state"; return false;
     }
     utAudioSnapshotLock(true);
+    captureProgress("Loading: game state");
     RunnerSnapshot *core = Runner_snapshotPrepare(r, g_gameId, parts[0].data, parts[0].size, reason);
+    phases[1] = nowNanos();
     void *audio = NULL, *files = NULL;
-    if (core) audio = utAudioPrepareSnapshot(r->audioSystem, parts[1].data, parts[1].size, reason);
-    if (audio) files = utSaveFsPrepareSnapshot(r->fileSystem, parts[2].data, parts[2].size, reason);
+    if (core) {
+        captureProgress("Loading: audio");
+        audio = utAudioPrepareSnapshot(r->audioSystem, parts[1].data, parts[1].size, reason);
+    }
+    phases[2] = nowNanos();
+    if (audio) {
+        captureProgress("Loading: progress files");
+        files = utSaveFsPrepareSnapshot(r->fileSystem, parts[2].data, parts[2].size, reason);
+    }
+    phases[3] = nowNanos();
     bool ok = core && audio && files;
     if (ok && !utSaveFsApplySnapshot(r->fileSystem, files)) {
         *reason = "Could not restore progress files"; ok = false;
@@ -209,8 +222,26 @@ bool utSavestateRestore(Runner *r, const uint8_t *data, size_t size, const char 
         utAudioApplySnapshot(r->audioSystem, audio);
         utPlatformSnapshotResumed(r, values);
     }
+    phases[4] = nowNanos();
+    /* Validation and all four sections have committed. Notify the host before
+     * freeing the displaced graph. No operation after this point can refuse
+     * the load; a new request during cleanup must retain its own completion. */
+    if (ok && committed) committed();
     Runner_snapshotFree(core); utAudioFreeSnapshot(audio); utSaveFsFreeSnapshot(files);
-    utAudioSnapshotLock(false); return ok;
+    utAudioSnapshotLock(false);
+    phases[5] = nowNanos();
+    logInfo("State restore phases: game %llu audio %llu files %llu apply %llu cleanup %llu ms; %s%s%s\n",
+        (unsigned long long)((phases[1] - phases[0]) / 1000000),
+        (unsigned long long)((phases[2] - phases[1]) / 1000000),
+        (unsigned long long)((phases[3] - phases[2]) / 1000000),
+        (unsigned long long)((phases[4] - phases[3]) / 1000000),
+        (unsigned long long)((phases[5] - phases[4]) / 1000000),
+        ok ? "ok" : "refused", !ok && *reason ? ": " : "", !ok && *reason ? *reason : "");
+    return ok;
+}
+
+bool utSavestateRestore(Runner *r, const uint8_t *data, size_t size, const char **reason) {
+    return restoreState(r, data, size, reason, NULL);
 }
 
 #ifdef OF_PC
@@ -244,7 +275,12 @@ bool platformSnapshotBoundary(Runner *r) {
     if (!g_service) return false;
     int request = of_savestate_poll();
     if (request == OF_SAVESTATE_NONE) return false;
+    uint64_t requestStarted = nowNanos();
+    logInfo("State request: %s, room %d, status %x\n",
+        request == OF_SAVESTATE_SAVE ? "save" : "load", r->currentRoomIndex,
+        *(volatile const uint32_t *)(uintptr_t)0x4e000004u);
     const char *reason = NULL; uint8_t *data = NULL; size_t size = 0; bool ok = false;
+    bool completionOwned = true;
     if (request == OF_SAVESTATE_SAVE) {
         if (utSavestateCapture(r, &data, &size, &reason)) {
             captureProgress("Saving: Pocket transfer");
@@ -252,6 +288,7 @@ bool platformSnapshotBoundary(Runner *r) {
             logInfo("State declare: result %d, %zu bytes\n", declared, size);
             uint64_t started = nowNanos();
             int result = of_savestate_save(data, (uint32_t)size);
+            completionOwned = false; /* The service completed the save. */
             logInfo("State transfer: result %d, %llu ms\n", result,
                 (unsigned long long)((nowNanos() - started) / 1000000));
             logInfo("State host read: %u words, expected %u; status %x\n",
@@ -267,11 +304,24 @@ bool platformSnapshotBoundary(Runner *r) {
     } else if (request == OF_SAVESTATE_LOAD) {
         data = malloc(UT_SNAPSHOT_LIMIT);
         int n = data ? of_savestate_load(data, UT_SNAPSHOT_LIMIT) : -1;
-        if (n > 0) ok = utSavestateRestore(r, data, (size_t)n, &reason);
+        /* Receive errors are completed by the service. Allocation failure
+         * never called it, so that refusal still belongs to this handler. */
+        completionOwned = !data || n > 0;
+        logInfo("State load receive: result %d, %llu ms\n", n,
+            (unsigned long long)((nowNanos() - requestStarted) / 1000000));
+        if (n > 0) {
+            size = (size_t)n;
+            ok = restoreState(r, data, size, &reason, finishLoadedState);
+            if (ok) completionOwned = false;
+        }
         else reason = "The Pocket's state was rejected";
     }
     if (!ok) utPlatformSnapshotNotice(reason ? reason : "State could not be restored");
-    if (request == OF_SAVESTATE_LOAD || !ok) of_savestate_finish(ok);
+    if (!ok && completionOwned) of_savestate_finish(0);
+    logInfo("State result: %s %s, %zu bytes, %llu ms%s%s\n",
+        request == OF_SAVESTATE_SAVE ? "save" : "load", ok ? "ok" : "refused", size,
+        (unsigned long long)((nowNanos() - requestStarted) / 1000000),
+        !ok && reason ? ": " : "", !ok && reason ? reason : "");
     free(data); return true;
 #elif defined(OF_PC)
     static bool saved = false, loaded = false;
@@ -295,6 +345,7 @@ bool platformSnapshotBoundary(Runner *r) {
 void utSavestateMenuPoll(void) {
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
     if (g_service && of_savestate_poll() != OF_SAVESTATE_NONE) {
+        logInfo("State request refused: Butterscotch Select menu is open\n");
         utPlatformSnapshotNotice("Close this menu to save or load");
         of_savestate_finish(0);
     }

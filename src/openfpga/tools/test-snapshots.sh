@@ -7,14 +7,14 @@ trap 'rm -rf "$out"' EXIT
 cc=${CC:-clang}
 flags=(-std=c11 -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DENABLE_WAD16
     -ffunction-sections -fsanitize=address,undefined -fno-sanitize=alignment,function
-    -I"$repo/src" -I"$port/platform" -I"$repo/vendor/stb/ds")
+    -I"$repo/src" -I"$repo/src/video" -I"$port/platform" -I"$repo/vendor/stb/ds")
 if [ "$(uname -s)" = Darwin ]; then
     flags+=(-Wl,-dead_strip)
     export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib}"
 else flags+=(-Wl,--gc-sections); fi
 export ASAN_OPTIONS=detect_leaks=0
 "$cc" "${flags[@]}" -I"$repo/vendor/miniz" -I"$repo/vendor/zstd" \
-    "$repo/tests/runner_snapshot_test.c" "$repo/src/runner_snapshot.c" \
+    "$repo/tests/runner_snapshot_test.c" "$repo/src/runner_snapshot.c" "$repo/src/runner.c" \
     "$repo/src/instance.c" "$repo/src/gml_array.c" "$repo/src/int_rvalue_hashmap.c" \
     "$repo/src/spatial_grid.c" "$repo/src/random.c" "$repo/src/ini.c" \
     "$repo/src/stb_ds.c" "$repo/src/gettime.c" "$repo/src/data_win.c" \

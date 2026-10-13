@@ -235,3 +235,32 @@ future frame byte for byte. Real revision 3 and 4 captures reproduce the same
 reference frame. A full Snowdin capture/restore under ASan/UBSan also passes.
 The native build and ZIP checks pass, including exact ELF/runtime pairing and
 exclusion of progress saves. Test package: `butterscotch-string-ref-save-test.zip`.
+
+### October 13: successful save, load refusal and stale wake state
+
+The Pocket saved a 239,250-byte Undertale envelope with a valid outer CRC. The
+log measured 2,618 ms for capture and 1,590 ms for transfer, with 59,849 host-read
+words against 59,821 expected. The manual save gate passes. Manual load still
+showed "Loading failed" and a battle-frame refusal for saved room resources.
+Sleep from the overworld did not replace the older P8SS sleep-state file.
+
+The load eligibility check incorrectly rejected saved room resources in the live
+state being replaced. Preparation now accepts those resources without touching
+them; application releases them using the runner's shared cleanup helper.
+Capture remains restricted. A regression models an overworld snapshot loaded
+from a battle holding room instances, tiles and runtime layers, checks refusal
+without mutation, and checks cleanup and restoration after commit.
+
+Successful native loads now acknowledge after all four sections commit, before
+freeing the old graph. Request completion ownership prevents a second finish
+after OS receive rejection or save completion from rejecting a newer request.
+Source tests exercise commit ordering, failure paths and retries during cleanup.
+Request/result and restore-stage logs expose future sleep refusal and load
+latency. No numeric Pocket load or sleep deadline is assumed. Clean manual load
+and sleep/wake remain device verification gates.
+
+Verification: the snapshot suite and lint pass; saved-room and completion tests
+run under ASan/UBSan. A desktop capture and fresh-process restore reproduce the
+prior future-frame reference byte for byte. The native build and ZIP checks
+pass, with the unchanged matching runtime pair and no progress saves bundled.
+Package: `butterscotch-restore-room-test.zip`.
