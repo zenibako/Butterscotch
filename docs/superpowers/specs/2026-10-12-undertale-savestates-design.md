@@ -53,6 +53,10 @@ untouched; application frees them without gameplay events. Capture still refuses
 saved room resources and unsupported persistent saved state. The native load
 acknowledgement follows the complete state commit and precedes displaced-state
 cleanup; receive failures completed by the OS are not acknowledged again.
+The save-state build retains its owned per-chunk ROOM bytes at startup. Lazy
+room definitions are reconstructed from that immutable buffer using absolute
+WAD offsets, without file fallback. Room unloading still frees parsed payloads;
+the cache is freed with the root game data. This changes no snapshot wire data.
 Runner data is bounded before compression; the compressed envelope remains
 subject to the service limit. The loaded game metadata and code are hashed at
 startup and combined with a build-time fingerprint of the complete game file.

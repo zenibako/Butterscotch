@@ -52,6 +52,9 @@ typedef struct {
     bool lazyLoadTextures;
     // If true, AUDO objects will be loaded on demand via DataWin_loadAudoIfNeeded.
     bool lazyLoadAudio;
+    // Keep the already-read ROOM chunk bytes for later lazy payload reads.
+    // Effective only with LOAD_PER_CHUNK and lazyLoadRooms.
+    bool cacheRawRoomChunk;
 
     // When lazyLoadRooms is true, this list indicates which rooms should be loaded during load time instead of demand. They will also not be freed.
     StringBooleanEntry* eagerlyLoadedRooms;
@@ -904,6 +907,10 @@ struct DataWin {
     uint8_t* strgBuffer;        // owned copy of STRG chunk raw data
     // Absolute file offset of strgBuffer[0], we need this because data.win stores absolute offsets (from the beginning of the data.win file) instead of relative offsets
     size_t strgBufferBase;
+
+    uint8_t* roomChunkBuffer;   // owned raw ROOM chunk, retained only when requested
+    size_t roomChunkBase;       // absolute file offset of roomChunkBuffer[0]
+    size_t roomChunkSize;
 
     uint8_t* bytecodeBuffer;     // owned copy of CODE bytecode blob
     // Absolute file offset of bytecodeBuffer[0], we need this because data.win stores absolute offsets (from the beginning of the data.win file) instead of relative offsets

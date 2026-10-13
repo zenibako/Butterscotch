@@ -156,6 +156,9 @@ audio restoration and input/clock reset.
 `State prepare phases` separates decode, rooms, values, indexes and temporary
 buffer cleanup. Individual `State room payload` lines time asset reads for
 missing room definitions; `State prepare notice` times the loading notice.
+Save-state builds retain the raw ROOM chunk already read at startup, so lazy
+room reloads use memory during restoration. Room parsing and unloading remain
+lazy. The cache uses additional heap space and is released with the game data.
 
 The runtime fault tests use the patched OS checkout:
 

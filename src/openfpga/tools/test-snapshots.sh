@@ -24,6 +24,10 @@ export ASAN_OPTIONS=detect_leaks=0
     "$repo/vendor/miniz/miniz_tinfl.c" "$repo/vendor/zstd/zstd.c" -lm -o "$out/runner"
 "$out/runner"
 echo "runner snapshot: passed"
+"$cc" "${flags[@]}" "$repo/tests/data_win_room_cache_test.c" \
+    "$repo/src/data_win.c" "$repo/src/binary_reader.c" \
+    "$repo/src/log.c" "$repo/src/stb_ds.c" -lm -o "$out/room-cache"
+"$out/room-cache" "$repo/tests/try-catch-finally-test/data.win"
 "$cc" "${flags[@]}" "$repo/tests/ut_snapshot_envelope_test.c" \
     "$port/platform/ut_snapshot_envelope.c" -o "$out/envelope"
 "$out/envelope"

@@ -487,7 +487,20 @@ static void testRejectedPrepareKeepsLazyRoomUnloaded(void) {
     Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
     assert(rooms[1].payloadLoaded && rooms[1].backgrounds && rooms[1].views);
     DataWin_freeRoomPayload(&rooms[1]);
-    free(validBytes); free(bytes); fclose(dw.lazyLoadFile);
+    dw.roomChunkBuffer = malloc(sizeof(emptyTables));
+    assert(dw.roomChunkBuffer);
+    memcpy(dw.roomChunkBuffer, emptyTables, sizeof(emptyTables));
+    dw.roomChunkBase = 0;
+    dw.roomChunkSize = sizeof(emptyTables);
+    fclose(dw.lazyLoadFile);
+    dw.lazyLoadFile = NULL;
+    prepared = Runner_snapshotPrepare(&r, 51, validBytes, validSize, &reason);
+    assert(prepared && !rooms[1].payloadLoaded);
+    Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
+    assert(rooms[1].payloadLoaded && rooms[1].backgrounds && rooms[1].views);
+    DataWin_freeRoomPayload(&rooms[1]);
+    free(dw.roomChunkBuffer);
+    free(validBytes); free(bytes);
     destroyFixture(&r);
 }
 
