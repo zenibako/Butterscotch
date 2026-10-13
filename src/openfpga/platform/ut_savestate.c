@@ -213,16 +213,19 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
         files = utSaveFsPrepareSnapshot(r->fileSystem, parts[2].data, parts[2].size, reason);
     }
     phases[3] = nowNanos();
+    uint64_t applyPhases[5] = {phases[3], 0, 0, 0, 0};
     bool ok = core && audio && files;
     if (ok && !utSaveFsApplySnapshot(r->fileSystem, files)) {
         *reason = "Could not restore progress files"; ok = false;
     }
-    if (ok) {
-        Runner_snapshotApply(r, core);
-        utAudioApplySnapshot(r->audioSystem, audio);
-        utPlatformSnapshotResumed(r, values);
-    }
-    phases[4] = nowNanos();
+    applyPhases[1] = nowNanos();
+    if (ok) Runner_snapshotApply(r, core);
+    applyPhases[2] = nowNanos();
+    if (ok) utAudioApplySnapshot(r->audioSystem, audio);
+    applyPhases[3] = nowNanos();
+    if (ok) utPlatformSnapshotResumed(r, values);
+    applyPhases[4] = nowNanos();
+    phases[4] = applyPhases[4];
     /* Validation and all four sections have committed. Notify the host before
      * freeing the displaced graph. No operation after this point can refuse
      * the load; a new request during cleanup must retain its own completion. */
@@ -230,6 +233,11 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
     Runner_snapshotFree(core); utAudioFreeSnapshot(audio); utSaveFsFreeSnapshot(files);
     utAudioSnapshotLock(false);
     phases[5] = nowNanos();
+    logInfo("State apply phases: archive %llu runner %llu audio %llu input/clock %llu ms\n",
+        (unsigned long long)((applyPhases[1] - applyPhases[0]) / 1000000),
+        (unsigned long long)((applyPhases[2] - applyPhases[1]) / 1000000),
+        (unsigned long long)((applyPhases[3] - applyPhases[2]) / 1000000),
+        (unsigned long long)((applyPhases[4] - applyPhases[3]) / 1000000));
     logInfo("State restore phases: game %llu audio %llu files %llu apply %llu cleanup %llu ms; %s%s%s\n",
         (unsigned long long)((phases[1] - phases[0]) / 1000000),
         (unsigned long long)((phases[2] - phases[1]) / 1000000),

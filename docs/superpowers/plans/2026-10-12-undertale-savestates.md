@@ -264,3 +264,21 @@ run under ASan/UBSan. A desktop capture and fresh-process restore reproduce the
 prior future-frame reference byte for byte. The native build and ZIP checks
 pass, with the unchanged matching runtime pair and no progress saves bundled.
 Package: `butterscotch-restore-room-test.zip`.
+
+### October 13: functional hardware restore confirmed
+
+The user confirmed manual save/load and sleep/wake restore the expected game
+position. The newest log reports successful manual and wake loads; wake now
+receives a 238,293-byte Undertale payload. Basic hardware restoration passes.
+The Pocket still displays a red "Loading failed" during manual load.
+
+Manual load took 9,103 ms: receive 131 ms, game preparation 2,551 ms, audio
+27 ms, files 7 ms, application 6,204 ms, and old-graph cleanup 180 ms. Wake
+restore after startup took 3,021 ms, with application only 25 ms. The combined
+application interval covers progress-archive write, runner apply, audio apply
+and platform input/clock reset. Source inspection does not isolate the delay;
+progress-file persistence uses CRAM and datatable updates, not an SD write.
+
+Add separate timings for those four application calls before changing their
+behavior. The red warning is consistent with delayed completion, but a numeric
+host deadline is not established. Clearing the warning remains a hardware gate.
