@@ -376,3 +376,23 @@ write 1 and close 0 ms; complete archive application is 12 ms, compared with
 verifies successful post-startup restore and removal of the reported red
 warning on this device run. The log is a startup restore, not a separate
 measurement of manual loading or the full sleep/wake interval.
+
+### Rebase runtime dependency onto 865d627
+
+At the user's request, reapply the existing openfpgaOS patch onto revision
+865d6277b0be77daaf1f3b998d18fe2445b0f649 and regenerate its diff against that
+base. The patch applies without conflicts. Upstream changes wake presentation
+to Resuming... in both the BRAM bootloader and OS; the existing capture,
+restore, file-handoff and lookup changes remain in the patch. Update the
+README's reproducible dependency pin. Preserve the previous hardware-tested
+checkout and runtime. This dependency update requires fresh bootloader/OS
+verification; previous Pocket results were obtained on the earlier base.
+
+Verification on the new base: patch replay reproduces every dependency source
+change byte for byte. The firmware container builds the bootloader and OS;
+OS CRC, Resuming... string and generated bootloader MIF pass checks. Runtime
+async-abort, CRC/host-timeout and three-target filename-lookup regressions pass.
+The snapshot suite, restore-completion/ownership tests and lint pass. App API
+headers match the hardware-tested dependency. No new bitstream is assembled or
+installed; packaging the quiet bootloader requires updating the boot MIF in a
+matching fitted bitstream. Pocket validation remains pending for this base.
