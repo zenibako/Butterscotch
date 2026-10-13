@@ -32,6 +32,12 @@ It carries the game-data identity, format version, section lengths and checksum.
 The complete envelope must fit the service's 1 MiB window minus its header.
 Declare the actual blob size for each save handover. Never truncate a snapshot.
 
+Core format revision 4 uses Zstandard level 1; revision 3 retains its zlib
+decoder. Both carry the same raw graph layout and checksums. Revision 4 validates
+one complete frame with a declared content size and bounded window before
+decoding. The runtime may logically fail an unfinished optional file read to
+answer a save; its storage remains quarantined until the host transfer drains.
+
 The runner section contains globals, all live instances, scalar instance fields,
 alarms, variables and reachable values; room identity and mutable visual state;
 RNG, game-time offset, frame/instance counters; supported DS pools; renderer

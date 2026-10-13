@@ -176,3 +176,30 @@ measures graph/encoding/CRC/compression/packing separately, samples host read
 words after transfer, notes requests first seen during a music read, and splits
 slow texture seeks from reads. Further behavioral patches should follow those
 measurements rather than assume a Pocket deadline or compression bottleneck.
+
+The detailed device run measured graph 164 ms, encoding 1,089 ms, raw checksum
+278 ms, deflate 4,545 ms, and output packing/checksum 179 ms. Total capture was
+6,580 ms; the host-read counter remained zero. A request was seen during an
+accepted music read, so the timing gap also includes its blocked completion.
+
+The next package changes that measured compression bottleneck to pinned
+Zstandard 1.5.7 level 1 in core revision 4, retaining revision 3 decoding.
+The full Snowdin desktop capture is about 10 ms and fits the envelope; both
+overworld and game-menu restores reproduce future frames exactly. Corrupt,
+truncated, trailing, unknown-size, and oversized-window frames are refused.
+The OS now logically aborts an unfinished async read for a pending save and
+quarantines its storage until physical completion; fault tests cover late IRQs,
+blocked reuse, normal completion, and LOAD exclusion.
+
+Initial texture stalls also include an allocation/free probe of the 4 MiB heap
+reserve after each new item. Large musl allocations use a zero-filled mmap.
+The native package uses a conservative read-only capacity query when the fresh
+mmap gap and tracker space prove the reserve plus allocator headroom fits;
+otherwise it retains the original allocation/eviction policy. The first check
+logs old-probe and query timings for an on-device comparison. Tests confirm
+bounds, nonmutation, append-only API checks, and fallback behavior.
+
+The updated OS was rebuilt and its matching bootloader patched into the
+previously timing-verified os25 bitstream before SDK export. Generic CMake CLI
+and Pocket app builds pass; runtime patch reverse-application was checked.
+Hardware save/load, sleep/wake, and audio/stutter improvements remain unverified.

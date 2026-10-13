@@ -13,7 +13,7 @@ if [ "$(uname -s)" = Darwin ]; then
     export DYLD_FALLBACK_LIBRARY_PATH="${DYLD_FALLBACK_LIBRARY_PATH:-/opt/homebrew/lib}"
 else flags+=(-Wl,--gc-sections); fi
 export ASAN_OPTIONS=detect_leaks=0
-"$cc" "${flags[@]}" -I"$repo/vendor/miniz" \
+"$cc" "${flags[@]}" -I"$repo/vendor/miniz" -I"$repo/vendor/zstd" \
     "$repo/tests/runner_snapshot_test.c" "$repo/src/runner_snapshot.c" \
     "$repo/src/instance.c" "$repo/src/gml_array.c" "$repo/src/int_rvalue_hashmap.c" \
     "$repo/src/spatial_grid.c" "$repo/src/random.c" "$repo/src/ini.c" \
@@ -21,7 +21,7 @@ export ASAN_OPTIONS=detect_leaks=0
     "$repo/src/binary_reader.c" "$repo/src/log.c" \
     "$repo/src/physics/disabled/physics_disabled.c" \
     "$repo/vendor/miniz/miniz.c" "$repo/vendor/miniz/miniz_tdef.c" \
-    "$repo/vendor/miniz/miniz_tinfl.c" -lm -o "$out/runner"
+    "$repo/vendor/miniz/miniz_tinfl.c" "$repo/vendor/zstd/zstd.c" -lm -o "$out/runner"
 "$out/runner"
 echo "runner snapshot: passed"
 "$cc" "${flags[@]}" "$repo/tests/ut_snapshot_envelope_test.c" \

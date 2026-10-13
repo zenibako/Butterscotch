@@ -31,6 +31,38 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+#include "of_heap.h"
+
+int platformHeapCanReserve(size_t bytes)
+{
+    /* Large musl mallocs need metadata/alignment in addition to the payload.
+     * Refuse overflow rather than querying a smaller reserve. */
+    if (!bytes || bytes > UINT32_MAX - 65536u) return 0;
+    uint32_t request = (uint32_t)bytes + 65536u;
+    static bool measured;
+    if (!measured) {
+        measured = true;
+        uint64_t start = nowNanos();
+        void *probe = malloc(bytes);
+        int allocated = probe != NULL;
+        if (probe) free(probe);
+        uint64_t probeUs = (nowNanos() - start) / 1000u;
+        start = nowNanos();
+        int confirmed = of_heap_can_reserve(request) > 0;
+        uint64_t queryUs = (nowNanos() - start) / 1000u;
+        /* Separate short lines fit the on-device log. No ongoing timing. */
+        logInfo("heap %uK malloc/free %uus ok=%d\n",
+                (unsigned)(bytes / 1024u), (unsigned)probeUs, allocated);
+        logInfo("heap query +64K %uus ok=%d\n", (unsigned)queryUs, confirmed);
+        /* This first check retains the original allocation policy even if
+         * the query disagrees. A failed probe still reaches the fallback. */
+        return allocated;
+    }
+    return of_heap_can_reserve(request) > 0;
+}
+#endif
+
 #define OF_HIRES_W 640
 #define OF_HIRES_H 480
 

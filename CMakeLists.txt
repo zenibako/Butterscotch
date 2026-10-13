@@ -353,6 +353,9 @@ target_sources(butterscotch PRIVATE
     vendor/miniz/miniz_tinfl.c
 )
 target_include_directories(butterscotch SYSTEM PUBLIC vendor/miniz)
+add_library(butterscotch_zstd STATIC vendor/zstd/zstd.c)
+target_include_directories(butterscotch_zstd SYSTEM PUBLIC vendor/zstd)
+target_link_libraries(butterscotch PRIVATE butterscotch_zstd)
 target_compile_definitions(butterscotch PRIVATE MINIZ_NO_ARCHIVE_APIS MINIZ_NO_STDIO)
 if(NOT MSVC)
     set_source_files_properties(
