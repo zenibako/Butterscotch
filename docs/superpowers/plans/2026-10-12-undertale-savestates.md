@@ -497,3 +497,15 @@ The existing registered read latency and queued-write ownership are preserved.
 The patch applies cleanly to `865d627` and the resulting source/test match the
 verified clone byte for byte. This reproduces a frequency-independent RTL bug;
 Pocket behavior and a new fit's timing still require verification.
+
+
+The rebuilt 100 MHz seed-8 test completed synthesis, fitting, assembly and
+STA successfully. Setup timing remains unmet: worst setup slack -0.859 ns
+(previous 100 MHz test -0.788 ns). This package is an experimental hardware
+check of the reproduced sleep bug, not a timing-qualified release. The mixer
+readback storage still infers a 32x22 MLAB with registered readback. Packaging
+contains only os25.rbf_r, the matching rebased os.bin and the diagnostic ELF;
+archive contents are byte-checked and contain no progress saves. Artifact:
+`out/butterscotch-os25-100-audio-reset-test.zip`, with hashes and verification
+limits in `out/os25-100-audio-reset-proof.json`. Repeated Pocket sleep/wake
+verification remains pending.
