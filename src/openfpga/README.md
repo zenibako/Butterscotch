@@ -136,6 +136,8 @@ During a save, the screen reports the capture stage and Pocket transfer.
 If saving freezes, report the last visible stage. `Save transfer returned`
 means the OS call returned; it does not confirm that the Pocket wrote a file.
 The log records capture sizes, elapsed time, and the transfer return code.
+Optional streamed-music refills are deferred while the Pocket menu or a state
+request is active, preserving buffered audio until normal reads can resume.
 
 Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
 `BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with

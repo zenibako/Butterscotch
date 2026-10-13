@@ -5,6 +5,8 @@
 #include <stdint.h>
 void utSavestateStartup(void);
 void utSavestateInit(Runner *runner);
+/* Optional streaming reads must not compete with the Pocket state command. */
+bool utSavestateDeferFileReads(void);
 const char *utSavestateReason(Runner *runner);
 bool utSavestateCapture(Runner *runner, uint8_t **data, size_t *size, const char **reason);
 bool utSavestateRestore(Runner *runner, const uint8_t *data, size_t size, const char **reason);

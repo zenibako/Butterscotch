@@ -25,6 +25,7 @@
 #include "of_music_pack.h"
 #include "of_snapshot_parts.h"
 #include "of_snapshot_bytes.h"
+#include "of_state_requests.h"
 #include <math.h>
 
 #include <ctype.h>
@@ -362,6 +363,9 @@ bool ofAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize)
 /* Tops up a voice's read-ahead from the pack. Main loop only: this blocks. */
 static void refillVoice(OfAudioSystem *ut, OfVoice *voice) {
     if (voice->streamSlot < 0) return;
+    /* The host may stop serving files while its menu/state command is busy.
+     * Keep the buffered stream intact and reach the snapshot boundary first. */
+    if (ofSavestateDeferFileReads()) return;
     uint32_t piece = OF_READ_PIECE;
     if (ut->directStage != NULL && voice->bufferLen - voice->bufferPos >= OF_READ_PIECE / 2) piece = OF_READ_STEADY;
     if (voice->bufferLen - voice->bufferPos > OF_READAHEAD - piece) return;
