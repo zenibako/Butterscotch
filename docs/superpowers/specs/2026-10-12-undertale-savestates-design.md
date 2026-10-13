@@ -47,6 +47,12 @@ RNG, game-time offset, frame/instance counters; supported DS pools; renderer
 settings; current and cached INI contexts, including paths and pending dirty
 edits. Capturing an open INI does not close it or flush it to the progress file.
 Derived object buckets, collision grids and draw caches are rebuilt.
+Preparing a valid snapshot may replace a current battle that holds saved room
+instances, tile maps and runtime layers. Preparation leaves those resources
+untouched; application frees them without gameplay events. Capture still refuses
+saved room resources and unsupported persistent saved state. The native load
+acknowledgement follows the complete state commit and precedes displaced-state
+cleanup; receive failures completed by the OS are not acknowledged again.
 Runner data is bounded before compression; the compressed envelope remains
 subject to the service limit. The loaded game metadata and code are hashed at
 startup and combined with a build-time fingerprint of the complete game file.

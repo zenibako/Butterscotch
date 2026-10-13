@@ -1005,6 +1005,7 @@ void Runner_moveInstanceToDepthLayer(Runner* runner, Instance* inst, int32_t dep
 void Runner_removeInstanceLayerElement(Runner* runner, int32_t instanceId);
 uint32_t Runner_getNextLayerId(Runner* runner);
 void Runner_freeRuntimeLayer(RuntimeLayer* runtimeLayer);
+void Runner_freeSavedRoomStateResources(SavedRoomState* state);
 // Sets the active state of the instance
 static inline void Runner_setActiveState(Runner* runner, Instance* instance, bool active) {
 #ifdef ENABLE_VM_TRACING

@@ -332,6 +332,63 @@ static void testAllLoadedRoomsAndDefinitions(void) {
     destroyFixture(&r);
 }
 
+static void testRestoreDiscardsLiveSavedRoomResources(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[3]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    memset(&rooms[1], 0, sizeof(rooms[1]));
+    memset(&rooms[2], 0, sizeof(rooms[2]));
+    dw.room.count = 3;
+    rooms[1].width = 320; rooms[1].height = 240;
+    rooms[1].payloadLoaded = true; rooms[1].persistent = true;
+    rooms[2].width = 320; rooms[2].height = 240;
+    rooms[2].payloadLoaded = true;
+    r.savedRoomStates = calloc(3, sizeof(SavedRoomState));
+    assert(r.savedRoomStates);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 94, &bytes, &size, &reason));
+
+    r.currentRoom = &rooms[2]; r.currentRoomIndex = 2;
+    Instance *battle = Instance_create(100005, 0, 2, 3);
+    arrput(r.instances, battle);
+    hmput(r.instancesById, battle->instanceId, battle);
+
+    SavedRoomState *state = &r.savedRoomStates[1];
+    state->initialized = true;
+    Instance *saved = Instance_create(100004, 0, 7, 8);
+    arrput(state->instances, saved);
+    hmput(r.instancesById, saved->instanceId, saved);
+    TileLayerState tileLayer = {0};
+    int tileDepth = 100;
+    hmput(state->tileLayerMap, tileDepth, tileLayer);
+    RuntimeLayer layer = {0}; layer.dynamicName = strdup("saved layer");
+    arrput(state->runtimeLayers, layer);
+    assert(Runner_snapshotCheck(&r) != NULL);
+    uint8_t *refused = NULL; size_t refusedSize = 0;
+    assert(!Runner_snapshotCapture(&r, 95, &refused, &refusedSize, &reason));
+    assert(Runner_snapshotPrepare(&r, 94, bytes, size - 1, &reason) == NULL);
+    assert(state->instances[0] == saved && hmlen(state->tileLayerMap) == 1);
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 94, bytes, size, &reason);
+    assert(prepared);
+    assert(state->instances[0] == saved && state->runtimeLayers[0].dynamicName);
+    r.frameCount = 99;
+    Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
+    assert(r.frameCount == 42 && r.currentRoom == &rooms[0] && !arrlen(r.instances));
+    assert(!state->initialized && !state->instances && !state->tileLayerMap &&
+           !state->runtimeLayers);
+    int savedId = 100004;
+    assert(hmgeti(r.instancesById, savedId) < 0);
+    int battleId = 100005;
+    assert(hmgeti(r.instancesById, battleId) < 0);
+    state->initialized = true;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    uint8_t *invalid = NULL; size_t invalidSize = 0;
+    assert(!Runner_snapshotCapture(&r, 96, &invalid, &invalidSize, &reason));
+    state->initialized = false;
+    free(bytes); free(r.savedRoomStates);
+    destroyFixture(&r);
+}
+
 static void testDormantPoolHoleRefuses(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -858,6 +915,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
 }
 
 int main(void) {
+    testRestoreDiscardsLiveSavedRoomResources();
     testStaticStringReferences();
     testStaticStringExpansionBudget();
     testDecoderStaticStringExpansionBudget();

@@ -53,6 +53,18 @@ static void freeRuntimeLayersArray(RuntimeLayer** runtimeLayerArray) {
     *runtimeLayerArray = nullptr;
 }
 
+void Runner_freeSavedRoomStateResources(SavedRoomState* state) {
+    if (!state) return;
+    for (ptrdiff_t i = 0; i < arrlen(state->instances); i++)
+        Instance_free(state->instances[i]);
+    arrfree(state->instances);
+    state->instances = nullptr;
+    hmfree(state->tileLayerMap);
+    state->tileLayerMap = nullptr;
+    freeRuntimeLayersArray(&state->runtimeLayers);
+    state->initialized = false;
+}
+
 void Runner_updateCameraViewSimple(GMLCamera* camera) {
 
     float x = camera->viewX + camera->viewWidth/2;
@@ -2120,11 +2132,8 @@ static void cleanupState(Runner* runner) {
             int32_t savedCount = (int32_t) arrlen(state->instances);
             repeat(savedCount, j) {
                 hmdel(runner->instancesById, state->instances[j]->instanceId);
-                Instance_free(state->instances[j]);
             }
-            arrfree(state->instances);
-            hmfree(state->tileLayerMap);
-            freeRuntimeLayersArray(&state->runtimeLayers);
+            Runner_freeSavedRoomStateResources(state);
         }
         free(runner->savedRoomStates);
     }

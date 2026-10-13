@@ -395,9 +395,12 @@ static bool eligible(Runner *r, const char **reason, bool forCapture) {
     }
     for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
         SavedRoomState *st = r->savedRoomStates ? &r->savedRoomStates[i] : NULL;
-        if (st && (arrlen(st->instances) || arrlen(st->runtimeLayers) ||
-                   hmlen(st->tileLayerMap))) REFUSE("Saved room resources are unsupported");
         Room *room = &r->dataWin->room.rooms[i];
+        if (forCapture && st && (arrlen(st->instances) || arrlen(st->runtimeLayers) ||
+                                 hmlen(st->tileLayerMap)))
+            REFUSE("Saved room resources are unsupported");
+        if (forCapture && st && st->initialized && room->persistent)
+            REFUSE("Persistent saved room state is unsupported");
         if (forCapture && !SpatialGrid_dimensionsValid(room->width, room->height))
             REFUSE("Room dimensions exceed the collision grid limit");
         if (forCapture && room->payloadLoaded && room->tileCount && !room->tiles)
@@ -1368,6 +1371,8 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     r->instancesByObject = s->byObject; r->instancesByExactObject = s->byExact;
     r->spatialGrid = s->grid; r->tileLayerMap = s->tileLayers;
     r->currentRoom = s->room;
+    if (r->savedRoomStates) for (uint32_t i = 0; i < s->roomCount; i++)
+        Runner_freeSavedRoomStateResources(&r->savedRoomStates[i]);
     for (uint32_t i = 0; i < s->roomCount; i++) {
         Room *room = &r->dataWin->room.rooms[i];
         SnapshotRoom *state = &s->roomStates[i];
