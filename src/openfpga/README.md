@@ -151,6 +151,13 @@ The first reserve check logs the allocation and query timings for comparison.
 State-request logs include refusal reasons and separate load receive,
 preparation, application and cleanup times. Successful loads notify the Pocket
 after committing restored state, before freeing the state they replace.
+Native builds automatically write the log to the existing spare log slot before
+publishing a captured or refused save. This records sleep
+capture attempts before power-down; a failed diagnostic write does not change
+save completion. `State service` records the live CPU clock, registration and
+request registers, and `State save audit` reports the diagnostic write time.
+Capture and receive logs include the envelope checksum as an ID to match blobs
+across repeated sleep/wake cycles.
 `State apply phases` separates progress-archive writes, runner replacement,
 audio restoration and input/clock reset.
 `State prepare phases` separates decode, rooms, values, indexes and temporary

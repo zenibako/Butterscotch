@@ -14,6 +14,8 @@
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
 #include "of_savestate.h"
 #include "of_timer.h"
+#include "of_caps.h"
+#include "of_perf.h"
 #endif
 
 static uint64_t g_gameId;
@@ -28,6 +30,20 @@ static void captureProgress(const char *stage) {
 }
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
 static bool g_service;
+/* UTS1 v2 stores its envelope checksum at byte 36. Logging it does not
+ * replace validation; it identifies which captured blob a later wake used. */
+static uint32_t stateEnvelopeId(const uint8_t *data, size_t size) {
+    if (!data || size < 40) return 0;
+    return (uint32_t)data[36] | (uint32_t)data[37] << 8 |
+        (uint32_t)data[38] << 16 | (uint32_t)data[39] << 24;
+}
+static void stateServiceTrace(const char *stage) {
+    const struct of_capabilities *caps = of_get_caps();
+    logInfo("State service %s: enabled %u clock %u status %x size %u\n", stage,
+        g_service ? 1u : 0u, caps ? caps->cpu_freq_hz : 0u,
+        *(volatile const uint32_t *)(uintptr_t)0x4e000004u,
+        *(volatile const uint32_t *)(uintptr_t)0x4e000008u);
+}
 /* The HW-mixer runtime otherwise leaves the machine timer off. Its file
  * watchdog needs the 1 kHz tick; the app callback itself has no work. */
 static void fileWatchdogTick(void) {}
@@ -44,6 +60,7 @@ void utSavestateStartup(void) {
         uint32_t before = *timerControl;
         of_timer_set_callback(fileWatchdogTick, 1000);
         logInfo("State file watchdog: control %x -> %x, 1 kHz\n", before, *timerControl);
+        stateServiceTrace("startup");
     }
 #endif
 }
@@ -293,7 +310,20 @@ bool platformSnapshotBoundary(Runner *r) {
     const char *reason = NULL; uint8_t *data = NULL; size_t size = 0; bool ok = false;
     bool completionOwned = true;
     if (request == OF_SAVESTATE_SAVE) {
-        if (utSavestateCapture(r, &data, &size, &reason)) {
+        stateServiceTrace("before capture");
+        bool captured = utSavestateCapture(r, &data, &size, &reason);
+        logInfo("State save prepared: %s, %zu bytes, id %08x%s%s\n", captured ? "ok" : "refused",
+            size, stateEnvelopeId(data, size), !captured && reason ? ": " : "",
+            !captured && reason ? reason : "");
+        /* Sleep can power down as soon as the host has pulled the blob.
+         * Record capture/refusal before signalling readiness, while this
+         * app still owns the request. A diagnostic write failure must not
+         * change request completion or prevent an otherwise valid save. */
+        uint64_t auditStarted = nowNanos();
+        bool audited = utLogDump();
+        logInfo("State save audit: %s, %llu ms\n", audited ? "written" : "failed",
+            (unsigned long long)((nowNanos() - auditStarted) / 1000000));
+        if (captured) {
             captureProgress("Saving: Pocket transfer");
             int declared = of_savestate_enable((uint32_t)size);
             logInfo("State declare: result %d, %zu bytes\n", declared, size);
@@ -318,8 +348,9 @@ bool platformSnapshotBoundary(Runner *r) {
         /* Receive errors are completed by the service. Allocation failure
          * never called it, so that refusal still belongs to this handler. */
         completionOwned = !data || n > 0;
-        logInfo("State load receive: result %d, %llu ms\n", n,
-            (unsigned long long)((nowNanos() - requestStarted) / 1000000));
+        logInfo("State load receive: result %d, %llu ms, id %08x\n", n,
+            (unsigned long long)((nowNanos() - requestStarted) / 1000000),
+            stateEnvelopeId(data, n > 0 ? (size_t)n : 0));
         if (n > 0) {
             size = (size_t)n;
             ok = restoreState(r, data, size, &reason, finishLoadedState);
@@ -333,6 +364,9 @@ bool platformSnapshotBoundary(Runner *r) {
         request == OF_SAVESTATE_SAVE ? "save" : "load", ok ? "ok" : "refused", size,
         (unsigned long long)((nowNanos() - requestStarted) / 1000000),
         !ok && reason ? ": " : "", !ok && reason ? reason : "");
+    if (request == OF_SAVESTATE_LOAD && ok) {
+        stateServiceTrace("after load");
+    }
     free(data); return true;
 #elif defined(OF_PC)
     static bool saved = false, loaded = false;

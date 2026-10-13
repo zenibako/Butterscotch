@@ -22,7 +22,7 @@ pre=r'''
 #define UT_SNAPSHOT_LIMIT 1024u
 static bool g_service=true;
 typedef struct{int currentRoomIndex;}Runner;
-static int scenario,pending,finishes;
+static int scenario,pending,finishes,dumps;
 static uint32_t status;
 static uint8_t arena[1024];
 static void *allocation(size_t n){(void)n;return scenario==4?NULL:arena;}
@@ -31,6 +31,9 @@ static void *allocation(size_t n){(void)n;return scenario==4?NULL:arena;}
 static uint64_t nowNanos(void){return 0;}
 static void logInfo(const char*s,...){(void)s;}
 static void captureProgress(const char*s){(void)s;}
+static void stateServiceTrace(const char*s){(void)s;}
+static uint32_t stateEnvelopeId(const uint8_t*d,size_t n){(void)d;(void)n;return 0;}
+static bool utLogDump(void){dumps++;return false;}
 static void utPlatformSnapshotNotice(const char*s){(void)s;}
 static int of_savestate_poll(void){return pending;}
 static void of_savestate_finish(int ok){(void)ok;assert(pending);pending=0;finishes++;}
@@ -40,7 +43,8 @@ static bool utSavestateCapture(Runner*r,uint8_t**d,size_t*n,const char**reason){
  (void)r;if(scenario==5){*reason="capture refusal";return false;}*d=arena;*n=4;return true;
 }
 static int of_savestate_save(const void*d,uint32_t n){
- (void)d;(void)n;of_savestate_finish(1);pending=2;return -1;
+ (void)d;(void)n;assert(dumps==1);of_savestate_finish(1);
+ pending=scenario==7?0:2;return scenario==7?0:-1;
 }
 static int of_savestate_load(void*d,uint32_t n){
  (void)d;(void)n;if(scenario==0){of_savestate_finish(0);pending=2;return -1;}return 4;
@@ -51,11 +55,12 @@ static bool restoreState(Runner*r,const uint8_t*d,size_t n,const char**reason,vo
 }
 '''
 post=r'''
-int main(void){Runner r={46};for(scenario=0;scenario<7;scenario++){
- pending=scenario>=5?1:2;finishes=0;status=pending;
+int main(void){Runner r={46};for(scenario=0;scenario<8;scenario++){
+ pending=scenario>=5?1:2;finishes=0;dumps=0;status=pending;
  assert(platformSnapshotBoundary(&r));assert(finishes==1);
  assert(pending==((scenario==0)?2:(scenario==2)?1:(scenario==6)?2:0));
-}puts("PASS: receive rejection, prepare rejection, successful load, allocation failure, capture refusal, save timeout preserve retry ownership");}
+ assert(dumps==(scenario>=5?1:0)); /* no post-ACK LOAD audit/CRAM hold */
+}puts("PASS: retries preserve completion ownership; failed audit does not prevent successful save");}
 '''
 with tempfile.TemporaryDirectory() as d:
  p=Path(d);(p/'test.c').write_text(pre+function+post)
