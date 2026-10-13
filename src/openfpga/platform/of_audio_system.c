@@ -2,7 +2,7 @@
  * openfpgaOS audio backend for Butterscotch.
  *
  * Every sound the game plays is converted offline by mkmusic into music.bin
- * (mono IMA ADPCM, see ut_music_pack.h): the external .ogg files it streams
+ * (mono IMA ADPCM, see of_music_pack.h): the external .ogg files it streams
  * and the short effects embedded in data.win. This backend decodes and
  * resamples them to the 48 kHz output, mixes them in software and feeds the
  * result to of_audio_write().
@@ -22,7 +22,7 @@
 #include "stb_ds.h"
 #include "utils.h"
 
-#include "ut_music_pack.h"
+#include "of_music_pack.h"
 
 #include <ctype.h>
 #include <stddef.h>
@@ -30,34 +30,34 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UT_MUSIC_PATH "music.bin"
+#define OF_MUSIC_PATH "music.bin"
 
 /* Id ranges shared with Butterscotch's other backends. */
-#define UT_INSTANCE_ID_BASE 100000
-#define UT_STREAM_INDEX_BASE 300000
+#define OF_INSTANCE_ID_BASE 100000
+#define OF_STREAM_INDEX_BASE 300000
 
-#define UT_MAX_STREAMS 32
-#define UT_MAX_VOICES 16
+#define OF_MAX_STREAMS 32
+#define OF_MAX_VOICES 16
 /* Voices that can stream at once; each has a read-ahead buffer. */
-#define UT_MAX_STREAMED 4
+#define OF_MAX_STREAMED 4
 
 /* Tracks up to this many compressed bytes (6 s) are played from memory. */
-#define UT_MEMORY_SOUND_BYTES (96u * 1024u)
+#define OF_MEMORY_SOUND_BYTES (96u * 1024u)
 /* Memory kept for cached short sounds before the least recently played go. */
-#define UT_SOUND_CACHE_BYTES (3u * 1024u * 1024u)
+#define OF_SOUND_CACHE_BYTES (3u * 1024u * 1024u)
 
 /* Compressed bytes buffered per voice: 4 s at 32 kHz. Blocking file reads
  * elsewhere (room and texture loads) are bridged from this buffer. */
-#define UT_READAHEAD 65536
+#define OF_READAHEAD 65536
 /* The read-ahead is topped up in pieces this size as soon as one fits, so
  * no single read holds a frame up for long. Reads end on a 512-byte boundary
  * of the pack so that the next one starts on a whole sector. */
-#define UT_READ_PIECE 16384
-#define UT_READ_ALIGN 512
+#define OF_READ_PIECE 16384
+#define OF_READ_ALIGN 512
 /* With direct reads (see readDirect) a stream that is not running low is
  * topped up in pieces this small instead: about 6 ms each, measured, where
  * a 16 KB piece through fread costs about 28 ms and shows as a stutter. */
-#define UT_READ_STEADY 4096
+#define OF_READ_STEADY 4096
 /* A direct read that has not finished after this long is given up, and
  * direct reads are not used again. In practice this is the Pocket saving a
  * screenshot: a direct read issued while the host is busy with that never
@@ -65,22 +65,22 @@
  * the 2 s after which the OS itself drops a stalled read: until the OS has
  * dropped it, every ordinary read fails with "busy", and a build that gave up
  * after 1.5 s and carried on crashed within seconds of a screenshot. */
-#define UT_DIRECT_TIMEOUT_NANOS 3000000000ull
-#define UT_DIRECT_SETTLE_NANOS 3000000000ull
+#define OF_DIRECT_TIMEOUT_NANOS 3000000000ull
+#define OF_DIRECT_SETTLE_NANOS 3000000000ull
 
 /* Output queued ahead of the DAC. A sound is heard this long after it is
  * started, so it is a trade against dropouts when a frame runs long. */
-#define UT_QUEUE_TARGET_PAIRS (OF_AUDIO_RATE / 10)
-#define UT_QUEUE_ROOM_CHANGE_PAIRS (OF_AUDIO_RATE / 4)
-#define UT_MIX_CHUNK_PAIRS 256
-#define UT_GAIN_ONE 4096
+#define OF_QUEUE_TARGET_PAIRS (OF_AUDIO_RATE / 10)
+#define OF_QUEUE_ROOM_CHANGE_PAIRS (OF_AUDIO_RATE / 4)
+#define OF_MIX_CHUNK_PAIRS 256
+#define OF_GAIN_ONE 4096
 
 typedef struct {
     bool active;
     int32_t track;
     float gain;
     float pitch;
-} UtStream;
+} OfStream;
 
 typedef struct {
     bool active;
@@ -101,7 +101,7 @@ typedef struct {
     uint32_t fileBytePos; /* streamed: next byte of the track to read into the buffer */
 
     /* ADPCM decode. */
-    UtAdpcmState adpcm;
+    OfAdpcmState adpcm;
     uint32_t samplesDecoded;
     bool startedThisFrame; /* no read-ahead yet; see refillStreams */
     uint32_t pendingCode;
@@ -113,20 +113,20 @@ typedef struct {
     uint32_t step;
     float pitch;
 
-    /* Gain ramp, in UT_GAIN_ONE units scaled by 256 for sub-step precision. */
+    /* Gain ramp, in OF_GAIN_ONE units scaled by 256 for sub-step precision. */
     int32_t gainNow;
     int32_t gainTarget;
     int32_t gainStepPerPair;
-} UtVoice;
+} OfVoice;
 
 typedef struct {
     AudioSystem base;
     FILE *file;
-    UtMusicTrack *tracks;
+    OfMusicTrack *tracks;
     uint32_t trackCount;
-    UtStream streams[UT_MAX_STREAMS];
-    UtVoice voices[UT_MAX_VOICES];
-    uint8_t streamBuffers[UT_MAX_STREAMED][UT_READAHEAD];
+    OfStream streams[OF_MAX_STREAMS];
+    OfVoice voices[OF_MAX_VOICES];
+    uint8_t streamBuffers[OF_MAX_STREAMED][OF_READAHEAD];
     /* Short sounds held in memory, indexed by track; NULL when not loaded. */
     uint8_t **cachedSounds;
     uint32_t *cachedLastUse;
@@ -140,39 +140,39 @@ typedef struct {
     /* Direct reads of the pack; directStage is NULL when they are not in use. */
     uint8_t *directStage;
     uint32_t directSlot;
-} UtAudioSystem;
+} OfAudioSystem;
 
 /* The file idle hook has no user pointer, so the one instance is global. */
-static UtAudioSystem *g_audio = NULL;
-static UtAudioMode g_audioMode = UT_AUDIO_NORMAL; /* see Muting, below */
-static bool voiceSkipped(const UtAudioSystem *ut, const UtVoice *voice);
-static bool silent(const UtAudioSystem *ut);
+static OfAudioSystem *g_audio = NULL;
+static OfAudioMode g_audioMode = OF_AUDIO_NORMAL; /* see Muting, below */
+static bool voiceSkipped(const OfAudioSystem *ut, const OfVoice *voice);
+static bool silent(const OfAudioSystem *ut);
 
 /* ===[ Pack lookup ]=== */
 
 #ifndef OF_PC
-static void openDirect(UtAudioSystem *ut);
+static void openDirect(OfAudioSystem *ut);
 #endif
 
-static void openPack(UtAudioSystem *ut) {
-    FILE *file = fopen(UT_MUSIC_PATH, "rb");
+static void openPack(OfAudioSystem *ut) {
+    FILE *file = fopen(OF_MUSIC_PATH, "rb");
     if (file == NULL) {
-        logInfo("Audio: no %s, sound is disabled.\n", UT_MUSIC_PATH);
+        logInfo("Audio: no %s, sound is disabled.\n", OF_MUSIC_PATH);
         return;
     }
 
     char magic[4];
     uint32_t count = 0;
-    if (fread(magic, 1, 4, file) != 4 || memcmp(magic, UT_MUSIC_MAGIC, 4) != 0 ||
+    if (fread(magic, 1, 4, file) != 4 || memcmp(magic, OF_MUSIC_MAGIC, 4) != 0 ||
         fread(&count, sizeof(count), 1, file) != 1 || count == 0 || count > 4096) {
-        logWarn("Audio: %s is not an audio pack, sound is disabled.\n", UT_MUSIC_PATH);
+        logWarn("Audio: %s is not an audio pack, sound is disabled.\n", OF_MUSIC_PATH);
         fclose(file);
         return;
     }
 
-    UtMusicTrack *tracks = malloc(count * sizeof(UtMusicTrack));
-    if (tracks == NULL || fread(tracks, sizeof(UtMusicTrack), count, file) != count) {
-        logWarn("Audio: %s index is truncated, sound is disabled.\n", UT_MUSIC_PATH);
+    OfMusicTrack *tracks = malloc(count * sizeof(OfMusicTrack));
+    if (tracks == NULL || fread(tracks, sizeof(OfMusicTrack), count, file) != count) {
+        logWarn("Audio: %s index is truncated, sound is disabled.\n", OF_MUSIC_PATH);
         free(tracks);
         fclose(file);
         return;
@@ -192,7 +192,7 @@ static void openPack(UtAudioSystem *ut) {
 }
 
 /* Maps "music/mus_story.ogg" or "mus_story.ogg" to a track index, or -1. */
-static int32_t findTrack(const UtAudioSystem *ut, const char *filename) {
+static int32_t findTrack(const OfAudioSystem *ut, const char *filename) {
     if (filename == NULL || ut->trackCount == 0) return -1;
 
     const char *base = filename;
@@ -200,9 +200,9 @@ static int32_t findTrack(const UtAudioSystem *ut, const char *filename) {
         if (*p == '/' || *p == '\\') base = p + 1;
     }
 
-    char name[UT_MUSIC_NAME_LEN] = {0};
+    char name[OF_MUSIC_NAME_LEN] = {0};
     size_t len = 0;
-    while (base[len] != '\0' && base[len] != '.' && len < UT_MUSIC_NAME_LEN - 1) {
+    while (base[len] != '\0' && base[len] != '.' && len < OF_MUSIC_NAME_LEN - 1) {
         name[len] = (char) tolower((unsigned char) base[len]);
         len++;
     }
@@ -210,7 +210,7 @@ static int32_t findTrack(const UtAudioSystem *ut, const char *filename) {
     int32_t lo = 0, hi = (int32_t) ut->trackCount - 1;
     while (lo <= hi) {
         int32_t mid = (lo + hi) / 2;
-        int cmp = strncmp(name, ut->tracks[mid].name, UT_MUSIC_NAME_LEN);
+        int cmp = strncmp(name, ut->tracks[mid].name, OF_MUSIC_NAME_LEN);
         if (cmp == 0) return mid;
         if (cmp < 0) hi = mid - 1; else lo = mid + 1;
     }
@@ -219,11 +219,11 @@ static int32_t findTrack(const UtAudioSystem *ut, const char *filename) {
 
 /* ===[ Voice streaming and decode ]=== */
 
-static uint32_t trackBytes(const UtMusicTrack *track) {
+static uint32_t trackBytes(const OfMusicTrack *track) {
     return track->sampleCount / 2;
 }
 
-static void updateStep(const UtAudioSystem *ut, UtVoice *voice) {
+static void updateStep(const OfAudioSystem *ut, OfVoice *voice) {
     float rate = (float) ut->tracks[voice->track].sampleRate * voice->pitch;
     float step = rate * 65536.0f / (float) OF_AUDIO_RATE;
     if (step < 1.0f) step = 1.0f;
@@ -255,7 +255,7 @@ static void directCallback(int token, int result) {
 }
 
 /* Reads `want` bytes at `filePos` of the pack into ut->directStage. */
-static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
+static bool readDirect(OfAudioSystem *ut, uint32_t filePos, uint32_t want) {
     g_directDone = 0;
     g_directResult = 0;
     uint64_t start = nowNanos();
@@ -265,11 +265,11 @@ static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
     }
     /* The poll is the OS's fallback for a lost interrupt. */
     while (!g_directDone && of_file_async_poll() != 1) {
-        if (nowNanos() - start > UT_DIRECT_TIMEOUT_NANOS) {
+        if (nowNanos() - start > OF_DIRECT_TIMEOUT_NANOS) {
             /* Do not go back to ordinary reads while the OS still counts
              * this one as in flight. */
             uint64_t gaveUp = nowNanos();
-            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < UT_DIRECT_SETTLE_NANOS) of_file_async_poll();
+            while (of_file_async_busy() == 1 && nowNanos() - gaveUp < OF_DIRECT_SETTLE_NANOS) of_file_async_poll();
             logWarn("Audio: a direct read timed out; using fread from here on.\n");
             ut->directStage = NULL;
             return false;
@@ -278,17 +278,17 @@ static bool readDirect(UtAudioSystem *ut, uint32_t filePos, uint32_t want) {
     return g_directResult >= 0;
 }
 
-static void openDirect(UtAudioSystem *ut) {
+static void openDirect(OfAudioSystem *ut) {
     uint32_t slot = 0;
-    if (of_file_async_max_read() < UT_READ_PIECE || of_file_slot_find(UT_MUSIC_PATH, &slot) != 0) return;
-    ut->directStage = of_file_dma_stage_alloc(UT_READ_PIECE, 4096);
+    if (of_file_async_max_read() < OF_READ_PIECE || of_file_slot_find(OF_MUSIC_PATH, &slot) != 0) return;
+    ut->directStage = of_file_dma_stage_alloc(OF_READ_PIECE, 4096);
     ut->directSlot = slot;
-    if (ut->directStage != NULL) logInfo("Audio: music is read directly, %u KB at a time.\n", UT_READ_STEADY / 1024u);
+    if (ut->directStage != NULL) logInfo("Audio: music is read directly, %u KB at a time.\n", OF_READ_STEADY / 1024u);
 }
 #endif
 
 /* Reads `want` bytes at `filePos` of the pack into `dest`; returns the count read. */
-static size_t readPack(UtAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint32_t want) {
+static size_t readPack(OfAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint32_t want) {
 #ifndef OF_PC
     if (ut->directStage != NULL && readDirect(ut, filePos, want)) {
         memcpy(dest, ut->directStage, want);
@@ -298,48 +298,48 @@ static size_t readPack(UtAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint3
     if (fseek(ut->file, (long) filePos, SEEK_SET) != 0) return 0;
     /* Read into static memory and copy: on openfpgaOS a read straight
      * into the heap (where the voices live) is about ten times slower. */
-    static uint8_t scratch[UT_READ_PIECE] __attribute__((aligned(512)));
+    static uint8_t scratch[OF_READ_PIECE] __attribute__((aligned(512)));
     size_t got = fread(scratch, 1, want, ut->file);
     memcpy(dest, scratch, got);
     return got;
 }
 
-/* Reads a file stored in the pack (see UT_MUSIC_RAW_FILE) by its base name. The caller frees *outData, which
+/* Reads a file stored in the pack (see OF_MUSIC_RAW_FILE) by its base name. The caller frees *outData, which
  * is NUL terminated past its size so that text can be used directly. Main loop only: this blocks. */
-static const UtMusicTrack *findPackFile(const char *path) {
-    UtAudioSystem *ut = g_audio;
+static const OfMusicTrack *findPackFile(const char *path) {
+    OfAudioSystem *ut = g_audio;
     if (ut == NULL || ut->file == NULL || path == NULL) return NULL;
 
     const char *base = path;
     for (const char *p = path; *p != '\0'; p++) {
         if (*p == '/' || *p == '\\') base = p + 1;
     }
-    char name[UT_MUSIC_NAME_LEN] = {0};
+    char name[OF_MUSIC_NAME_LEN] = {0};
     size_t len = strlen(base);
-    if (len == 0 || len >= UT_MUSIC_NAME_LEN) return NULL;
+    if (len == 0 || len >= OF_MUSIC_NAME_LEN) return NULL;
     for (size_t i = 0; i < len; i++) name[i] = (char) tolower((unsigned char) base[i]);
 
     for (uint32_t i = 0; i < ut->trackCount; i++) {
-        if (ut->tracks[i].sampleRate == UT_MUSIC_RAW_FILE && strncmp(name, ut->tracks[i].name, UT_MUSIC_NAME_LEN) == 0)
+        if (ut->tracks[i].sampleRate == OF_MUSIC_RAW_FILE && strncmp(name, ut->tracks[i].name, OF_MUSIC_NAME_LEN) == 0)
             return &ut->tracks[i];
     }
     return NULL;
 }
 
-bool utAudioHasPackFile(const char *path) {
+bool ofAudioHasPackFile(const char *path) {
     return findPackFile(path) != NULL;
 }
 
-bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize) {
-    UtAudioSystem *ut = g_audio;
-    const UtMusicTrack *track = findPackFile(path);
+bool ofAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize) {
+    OfAudioSystem *ut = g_audio;
+    const OfMusicTrack *track = findPackFile(path);
     if (track == NULL) return false;
 
     uint32_t size = track->sampleCount;
     uint8_t *data = malloc((size_t) size + 1);
     if (data == NULL) return false;
     for (uint32_t done = 0; done < size;) {
-        uint32_t want = size - done < UT_READ_PIECE ? size - done : UT_READ_PIECE;
+        uint32_t want = size - done < OF_READ_PIECE ? size - done : OF_READ_PIECE;
         if (readPack(ut, track->offset + done, data + done, want) != want) {
             free(data);
             return false;
@@ -353,13 +353,13 @@ bool utAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize)
 }
 
 /* Tops up a voice's read-ahead from the pack. Main loop only: this blocks. */
-static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
+static void refillVoice(OfAudioSystem *ut, OfVoice *voice) {
     if (voice->streamSlot < 0) return;
-    uint32_t piece = UT_READ_PIECE;
-    if (ut->directStage != NULL && voice->bufferLen - voice->bufferPos >= UT_READ_PIECE / 2) piece = UT_READ_STEADY;
-    if (voice->bufferLen - voice->bufferPos > UT_READAHEAD - piece) return;
+    uint32_t piece = OF_READ_PIECE;
+    if (ut->directStage != NULL && voice->bufferLen - voice->bufferPos >= OF_READ_PIECE / 2) piece = OF_READ_STEADY;
+    if (voice->bufferLen - voice->bufferPos > OF_READAHEAD - piece) return;
 
-    const UtMusicTrack *track = &ut->tracks[voice->track];
+    const OfMusicTrack *track = &ut->tracks[voice->track];
     uint32_t total = trackBytes(track);
     if (total == 0) return;
 
@@ -371,18 +371,18 @@ static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
     /* One piece per call; see refillStreams for how calls are rationed. */
     int pieces = 1;
 
-    while (voice->bufferLen < UT_READAHEAD && pieces-- > 0) {
+    while (voice->bufferLen < OF_READAHEAD && pieces-- > 0) {
         if (voice->fileBytePos >= total) {
             if (!voice->loop) break;
             voice->fileBytePos = 0;
         }
-        uint32_t want = UT_READAHEAD - voice->bufferLen;
+        uint32_t want = OF_READAHEAD - voice->bufferLen;
         if (want > piece) want = piece;
         uint32_t filePos = track->offset + voice->fileBytePos;
         if (want >= total - voice->fileBytePos) {
             want = total - voice->fileBytePos;
         } else {
-            uint32_t past = (filePos + want) % UT_READ_ALIGN;
+            uint32_t past = (filePos + want) % OF_READ_ALIGN;
             if (past >= want) break; /* less than a sector of room left */
             want -= past;
         }
@@ -391,7 +391,7 @@ static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
          * below bufferLen, which is not advanced until after the read. */
         uint64_t readStart = nowNanos();
         size_t got = readPack(ut, filePos, voice->data + voice->bufferLen, want);
-        utPerfAddLoad(UT_LOAD_MUSIC, nowNanos() - readStart);
+        ofPerfAddLoad(OF_LOAD_MUSIC, nowNanos() - readStart);
         if (got == 0) break;
         voice->bufferLen += (uint32_t) got;
         voice->fileBytePos += (uint32_t) got;
@@ -400,8 +400,8 @@ static void refillVoice(UtAudioSystem *ut, UtVoice *voice) {
 
 /* Produces the next decoded sample, or false if none is available right now
  * (end of a non-looping track, or the read-ahead ran dry). */
-static bool nextSample(const UtAudioSystem *ut, UtVoice *voice, int32_t *out) {
-    const UtMusicTrack *track = &ut->tracks[voice->track];
+static bool nextSample(const OfAudioSystem *ut, OfVoice *voice, int32_t *out) {
+    const OfMusicTrack *track = &ut->tracks[voice->track];
 
     if (voice->samplesDecoded >= track->sampleCount) {
         if (!voice->loop || track->sampleCount == 0) {
@@ -428,20 +428,20 @@ static bool nextSample(const UtAudioSystem *ut, UtVoice *voice, int32_t *out) {
         voice->havePendingCode = true;
     }
 
-    *out = utAdpcmDecode(&voice->adpcm, code);
+    *out = ofAdpcmDecode(&voice->adpcm, code);
     voice->samplesDecoded++;
     return true;
 }
 
 /* What a 4-bit code adds to or takes from the predictor at each step size:
- * utAdpcmDecode's sum of step fractions, worked out once. Looked up it is one
+ * ofAdpcmDecode's sum of step fractions, worked out once. Looked up it is one
  * load where the decoder had three branches on bits of the sound itself,
  * which the CPU cannot predict. */
 static uint16_t g_adpcmDiff[89 * 8];
 
 static void adpcmDiffInit(void) {
     for (int index = 0; index < 89; index++) {
-        int32_t step = utAdpcmStepTable[index];
+        int32_t step = ofAdpcmStepTable[index];
         for (int code = 0; code < 8; code++) {
             int32_t diff = step >> 3;
             if (code & 4) diff += step;
@@ -457,7 +457,7 @@ static void adpcmDiffInit(void) {
  * samples come straight out of the buffer, which is nearly always; the end
  * of the buffer or of the track goes through nextSample, with the voice
  * brought up to date before and read back after. */
-static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int pairs) {
+static void mixVoice(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int pairs) {
     int32_t sample0 = voice->sample0, sample1 = voice->sample1;
     uint32_t frac = voice->frac;
     const uint32_t step = voice->step;
@@ -470,7 +470,7 @@ static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int 
     uint32_t bufferPos = voice->bufferPos, samplesDecoded = voice->samplesDecoded, pendingCode = voice->pendingCode;
     bool havePendingCode = voice->havePendingCode;
     int32_t predictor = voice->adpcm.predictor, stepIndex = voice->adpcm.stepIndex;
-#define UT_VOICE_STORE() do { \
+#define OF_VOICE_STORE() do { \
         voice->bufferPos = bufferPos; voice->samplesDecoded = samplesDecoded; voice->pendingCode = pendingCode; \
         voice->havePendingCode = havePendingCode; voice->adpcm.predictor = predictor; voice->adpcm.stepIndex = stepIndex; \
     } while (0)
@@ -494,13 +494,13 @@ static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int 
                 predictor += (diff ^ sign) - sign;
                 if (predictor > 32767) predictor = 32767;
                 if (predictor < -32768) predictor = -32768;
-                stepIndex += utAdpcmIndexTable[code];
+                stepIndex += ofAdpcmIndexTable[code];
                 if (stepIndex < 0) stepIndex = 0;
                 if (stepIndex > 88) stepIndex = 88;
                 samplesDecoded++;
                 next = predictor;
             } else {
-                UT_VOICE_STORE();
+                OF_VOICE_STORE();
                 bool got = nextSample(ut, voice, &next);
                 bufferPos = voice->bufferPos; samplesDecoded = voice->samplesDecoded; pendingCode = voice->pendingCode;
                 havePendingCode = voice->havePendingCode; predictor = voice->adpcm.predictor; stepIndex = voice->adpcm.stepIndex;
@@ -527,34 +527,34 @@ static void mixVoice(const UtAudioSystem *ut, UtVoice *voice, int32_t *mix, int 
             if (delta < -gainStep) delta = -gainStep;
             gainNow += delta;
         }
-        mix[i] += (sample * (gainNow >> 8)) / UT_GAIN_ONE;
+        mix[i] += (sample * (gainNow >> 8)) / OF_GAIN_ONE;
     }
 out:
-    UT_VOICE_STORE();
-#undef UT_VOICE_STORE
+    OF_VOICE_STORE();
+#undef OF_VOICE_STORE
     voice->sample0 = sample0;
     voice->sample1 = sample1;
     voice->frac = frac;
     voice->gainNow = gainNow;
 }
 
-static void mixAndWrite(UtAudioSystem *ut, int pairs) {
-    static int32_t mix[UT_MIX_CHUNK_PAIRS];
-    static int16_t out[UT_MIX_CHUNK_PAIRS * 2];
-    int32_t master = (int32_t) (ut->masterGain * (float) UT_GAIN_ONE);
-    const bool timed = utPerfDetail; /* a clock read costs more than mixing a few samples */
+static void mixAndWrite(OfAudioSystem *ut, int pairs) {
+    static int32_t mix[OF_MIX_CHUNK_PAIRS];
+    static int16_t out[OF_MIX_CHUNK_PAIRS * 2];
+    int32_t master = (int32_t) (ut->masterGain * (float) OF_GAIN_ONE);
+    const bool timed = ofPerfDetail; /* a clock read costs more than mixing a few samples */
     uint64_t mixStart = timed ? nowNanos() : 0;
     uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0;
     int allPairs = pairs;
 
     while (pairs > 0) {
-        int chunk = pairs < UT_MIX_CHUNK_PAIRS ? pairs : UT_MIX_CHUNK_PAIRS;
+        int chunk = pairs < OF_MIX_CHUNK_PAIRS ? pairs : OF_MIX_CHUNK_PAIRS;
         memset(mix, 0, (size_t) chunk * sizeof(int32_t));
 
         if (!ut->allPaused) {
             uint64_t voicesStart = timed ? nowNanos() : 0;
-            for (int v = 0; v < UT_MAX_VOICES; v++) {
-                UtVoice *voice = &ut->voices[v];
+            for (int v = 0; v < OF_MAX_VOICES; v++) {
+                OfVoice *voice = &ut->voices[v];
                 if (voice->active && !voice->paused && !voiceSkipped(ut, voice)) {
                     mixVoice(ut, voice, mix, chunk);
                     voicePairs += (uint64_t) chunk;
@@ -568,7 +568,7 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
             int32_t sample = mix[i];
             if (sample > 65535) sample = 65535;
             if (sample < -65535) sample = -65535;
-            if (master != UT_GAIN_ONE) sample = (sample * master) / UT_GAIN_ONE;
+            if (master != OF_GAIN_ONE) sample = (sample * master) / OF_GAIN_ONE;
             if (sample > 32767) sample = 32767;
             if (sample < -32768) sample = -32768;
             out[i * 2] = (int16_t) sample;
@@ -581,16 +581,16 @@ static void mixAndWrite(UtAudioSystem *ut, int pairs) {
         if (timed) writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
     }
-    if (timed) utPerfAddLoad(UT_LOAD_MIX, nowNanos() - mixStart);
-    utPerfAddLoad(UT_LOAD_MIX_VOICES, voicesNanos);
-    utPerfAddLoad(UT_LOAD_MIX_WRITE, writeNanos);
-    utPerfAddLoad(UT_LOAD_MIX_PAIRS, (uint64_t) allPairs);
-    utPerfAddLoad(UT_LOAD_MIX_VOICE_PAIRS, voicePairs);
+    if (timed) ofPerfAddLoad(OF_LOAD_MIX, nowNanos() - mixStart);
+    ofPerfAddLoad(OF_LOAD_MIX_VOICES, voicesNanos);
+    ofPerfAddLoad(OF_LOAD_MIX_WRITE, writeNanos);
+    ofPerfAddLoad(OF_LOAD_MIX_PAIRS, (uint64_t) allPairs);
+    ofPerfAddLoad(OF_LOAD_MIX_VOICE_PAIRS, voicePairs);
 }
 
 /* Keeps the output queue topped up to the target. Does no file I/O, so it is
  * safe to call from the file idle hook. */
-static void pumpOutputTo(UtAudioSystem *ut, int target) {
+static void pumpOutputTo(OfAudioSystem *ut, int target) {
     /* Some targets have a ring smaller than the target; never aim past 3/4 of it. */
     if (target > ut->queueCapacity * 3 / 4) target = ut->queueCapacity * 3 / 4;
 
@@ -599,8 +599,8 @@ static void pumpOutputTo(UtAudioSystem *ut, int target) {
     if (want > 0) mixAndWrite(ut, want);
 }
 
-static void pumpOutput(UtAudioSystem *ut) {
-    pumpOutputTo(ut, UT_QUEUE_TARGET_PAIRS);
+static void pumpOutput(OfAudioSystem *ut) {
+    pumpOutputTo(ut, OF_QUEUE_TARGET_PAIRS);
 }
 
 /* On the Pocket the OS does not call the file idle hook during an app's own
@@ -616,8 +616,8 @@ void platformBusyTick(void) {
  * queue from: tens of ms of setting the room up, then its first draw. The
  * log hook calls this when the change starts, to queue enough to cover it.
  * Sounds that start in the next quarter second are heard that much late. */
-void utAudioRoomChange(void) {
-    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutputTo(g_audio, UT_QUEUE_ROOM_CHANGE_PAIRS);
+void ofAudioRoomChange(void) {
+    if (g_audio != NULL && g_audio->file != NULL && g_audio->dump == NULL && !silent(g_audio)) pumpOutputTo(g_audio, OF_QUEUE_ROOM_CHANGE_PAIRS);
 }
 
 #ifndef OF_PC
@@ -628,15 +628,15 @@ static void idleHook(void) {
 
 /* ===[ Short-sound cache ]=== */
 
-static bool soundInUse(const UtAudioSystem *ut, int32_t track) {
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static bool soundInUse(const OfAudioSystem *ut, int32_t track) {
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (ut->voices[v].active && ut->voices[v].streamSlot < 0 && ut->voices[v].track == track) return true;
     }
     return false;
 }
 
-static void evictSounds(UtAudioSystem *ut, uint32_t needed) {
-    while (ut->cachedBytes + needed > UT_SOUND_CACHE_BYTES) {
+static void evictSounds(OfAudioSystem *ut, uint32_t needed) {
+    while (ut->cachedBytes + needed > OF_SOUND_CACHE_BYTES) {
         int32_t victim = -1;
         for (uint32_t t = 0; t < ut->trackCount; t++) {
             if (ut->cachedSounds[t] == NULL || soundInUse(ut, (int32_t) t)) continue;
@@ -650,7 +650,7 @@ static void evictSounds(UtAudioSystem *ut, uint32_t needed) {
 }
 
 /* Returns the whole compressed sound, loading it on first use. */
-static uint8_t *cachedSound(UtAudioSystem *ut, int32_t track) {
+static uint8_t *cachedSound(OfAudioSystem *ut, int32_t track) {
     ut->cachedLastUse[track] = ++ut->useCounter;
     if (ut->cachedSounds[track] != NULL) return ut->cachedSounds[track];
 
@@ -665,7 +665,7 @@ static uint8_t *cachedSound(UtAudioSystem *ut, int32_t track) {
         free(data);
         return NULL;
     }
-    utPerfAddLoad(UT_LOAD_SOUND, nowNanos() - start);
+    ofPerfAddLoad(OF_LOAD_SOUND, nowNanos() - start);
     ut->cachedSounds[track] = data;
     ut->cachedBytes += bytes;
     return data;
@@ -673,49 +673,49 @@ static uint8_t *cachedSound(UtAudioSystem *ut, int32_t track) {
 
 /* ===[ Voice lookup helpers ]=== */
 
-static bool voiceMatches(const UtVoice *voice, int32_t soundOrInstance) {
+static bool voiceMatches(const OfVoice *voice, int32_t soundOrInstance) {
     if (!voice->active) return false;
-    if (soundOrInstance >= UT_INSTANCE_ID_BASE && soundOrInstance < UT_STREAM_INDEX_BASE)
+    if (soundOrInstance >= OF_INSTANCE_ID_BASE && soundOrInstance < OF_STREAM_INDEX_BASE)
         return voice->instanceId == soundOrInstance;
     return voice->sourceIndex == soundOrInstance;
 }
 
-static UtStream *streamFor(UtAudioSystem *ut, int32_t index) {
-    int32_t slot = index - UT_STREAM_INDEX_BASE;
-    if (slot < 0 || slot >= UT_MAX_STREAMS || !ut->streams[slot].active) return NULL;
+static OfStream *streamFor(OfAudioSystem *ut, int32_t index) {
+    int32_t slot = index - OF_STREAM_INDEX_BASE;
+    if (slot < 0 || slot >= OF_MAX_STREAMS || !ut->streams[slot].active) return NULL;
     return &ut->streams[slot];
 }
 
 static int32_t gainToFixed(float gain) {
     if (gain < 0.0f) gain = 0.0f;
     if (gain > 4.0f) gain = 4.0f;
-    return (int32_t) (gain * (float) UT_GAIN_ONE) << 8;
+    return (int32_t) (gain * (float) OF_GAIN_ONE) << 8;
 }
 
 /* ===[ Vtable ]=== */
 
-static void utInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem) {
+static void ofInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem) {
     (void) fileSystem;
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
     arrput(audio->audioGroups, dataWin);
 
     adpcmDiffInit();
     of_audio_init();
     ut->queueCapacity = of_audio_free();
     ut->masterGain = 1.0f;
-    ut->nextInstanceId = UT_INSTANCE_ID_BASE;
+    ut->nextInstanceId = OF_INSTANCE_ID_BASE;
     openPack(ut);
 
 #ifdef OF_PC
-    const char *dumpPath = getenv("UT_AUDIO_DUMP");
+    const char *dumpPath = getenv("BS_AUDIO_DUMP");
     if (dumpPath != NULL) ut->dump = fopen(dumpPath, "wb");
 #else
     of_file_set_idle_hook(idleHook);
 #endif
 }
 
-static void utDestroy(AudioSystem *audio) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+static void ofDestroy(AudioSystem *audio) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
 #ifndef OF_PC
     of_file_set_idle_hook(NULL);
 #endif
@@ -731,12 +731,12 @@ static void utDestroy(AudioSystem *audio) {
     free(ut);
 }
 
-static void updateAudio(UtAudioSystem *ut, float deltaTime);
+static void updateAudio(OfAudioSystem *ut, float deltaTime);
 
-static void utUpdate(AudioSystem *audio, float deltaTime) {
-    utPerfPhase(UT_PHASE_AUDIO);
-    updateAudio((UtAudioSystem *) audio, deltaTime);
-    utPerfPhase(UT_PHASE_DRAW);
+static void ofUpdate(AudioSystem *audio, float deltaTime) {
+    ofPerfPhase(OF_PHASE_AUDIO);
+    updateAudio((OfAudioSystem *) audio, deltaTime);
+    ofPerfPhase(OF_PHASE_DRAW);
 }
 
 /* Reads music ahead, a little per frame. A piece is a second of sound and a
@@ -749,18 +749,18 @@ static void utUpdate(AudioSystem *audio, float deltaTime) {
  * after it starts, and otherwise only happens after a very long frame.
  * Nothing is mixed between these reads, so tracks started together (the
  * layered house music) stay in step. */
-static void refillStreams(UtAudioSystem *ut) {
-    UtVoice *neediest = NULL;
-    uint32_t least = UT_READAHEAD;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        UtVoice *voice = &ut->voices[v];
+static void refillStreams(OfAudioSystem *ut) {
+    OfVoice *neediest = NULL;
+    uint32_t least = OF_READAHEAD;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        OfVoice *voice = &ut->voices[v];
         if (!voice->active || voice->streamSlot < 0 || voiceSkipped(ut, voice)) continue;
         if (voice->startedThisFrame) {
             voice->startedThisFrame = false;
             continue;
         }
         uint32_t buffered = voice->bufferLen - voice->bufferPos;
-        if (buffered < UT_READ_PIECE / 2) {
+        if (buffered < OF_READ_PIECE / 2) {
             refillVoice(ut, voice);
             continue;
         }
@@ -790,9 +790,9 @@ static void refillStreams(UtAudioSystem *ut) {
  * other. So a skip moves that sum on and splits it again, putting the decoder
  * on the even sample at or below it (a byte boundary) and leaving any odd
  * sample in frac for the mixer to fetch, as it would have. */
-static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
+static void skipVoice(const OfAudioSystem *ut, OfVoice *voice, int pairs) {
     voice->startedThisFrame = false; /* its first read is due once it is heard */
-    const UtMusicTrack *track = &ut->tracks[voice->track];
+    const OfMusicTrack *track = &ut->tracks[voice->track];
     uint64_t count = track->sampleCount;
     uint64_t position = ((uint64_t) voice->samplesDecoded << 16) + voice->frac + (uint64_t) voice->step * (uint64_t) pairs;
     uint64_t sample = position >> 16;
@@ -827,50 +827,50 @@ static void skipVoice(const UtAudioSystem *ut, UtVoice *voice, int pairs) {
 
 /* Whether a kind of voice is skipped rather than mixed. A desktop dump mixes
  * whatever the mode, so its output is the same in all of them. */
-static bool kindSkipped(const UtAudioSystem *ut, bool music) {
+static bool kindSkipped(const OfAudioSystem *ut, bool music) {
     if (ut->dump != NULL) return false;
     switch (g_audioMode) {
-        case UT_AUDIO_DISABLED:   return true;
-        case UT_AUDIO_MUSIC_ONLY: return !music;
-        case UT_AUDIO_SOUND_ONLY: return music;
+        case OF_AUDIO_DISABLED:   return true;
+        case OF_AUDIO_MUSIC_ONLY: return !music;
+        case OF_AUDIO_SOUND_ONLY: return music;
         default:                  return false;
     }
 }
 
-static bool voiceSkipped(const UtAudioSystem *ut, const UtVoice *voice) {
+static bool voiceSkipped(const OfAudioSystem *ut, const OfVoice *voice) {
     return kindSkipped(ut, voice->music);
 }
 
 /* Nothing is heard at all, so nothing is queued. */
-static bool silent(const UtAudioSystem *ut) {
-    return g_audioMode == UT_AUDIO_DISABLED && ut->dump == NULL;
+static bool silent(const OfAudioSystem *ut) {
+    return g_audioMode == OF_AUDIO_DISABLED && ut->dump == NULL;
 }
 
-void utAudioSetMode(UtAudioMode mode) {
+void ofAudioSetMode(OfAudioMode mode) {
     g_audioMode = mode;
     if (g_audio == NULL || g_audio->file == NULL) return;
-    UtAudioSystem *ut = g_audio;
+    OfAudioSystem *ut = g_audio;
     /* Load the short sounds that were started while muted. */
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        UtVoice *voice = &ut->voices[v];
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        OfVoice *voice = &ut->voices[v];
         if (!voice->active || voice->streamSlot >= 0 || voice->data != NULL || voiceSkipped(ut, voice)) continue;
         voice->data = cachedSound(ut, voice->track);
         if (voice->data == NULL) voice->active = false;
     }
 }
 
-UtAudioMode utAudioMode(void) {
+OfAudioMode ofAudioMode(void) {
     return g_audioMode;
 }
 
-static void updateAudio(UtAudioSystem *ut, float deltaTime) {
+static void updateAudio(OfAudioSystem *ut, float deltaTime) {
     if (ut->file == NULL) return;
 
     if (kindSkipped(ut, false) || kindSkipped(ut, true)) {
         int pairs = (int) (deltaTime * (float) OF_AUDIO_RATE + 0.5f);
         if (pairs > 0 && !ut->allPaused) {
-            for (int v = 0; v < UT_MAX_VOICES; v++) {
-                UtVoice *voice = &ut->voices[v];
+            for (int v = 0; v < OF_MAX_VOICES; v++) {
+                OfVoice *voice = &ut->voices[v];
                 if (voice->active && !voice->paused && voiceSkipped(ut, voice)) skipVoice(ut, voice, pairs);
             }
         }
@@ -888,17 +888,17 @@ static void updateAudio(UtAudioSystem *ut, float deltaTime) {
     pumpOutput(ut);
 }
 
-static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t priority, bool loop) {
+static int32_t ofPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t priority, bool loop) {
     (void) priority;
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
     if (ut->file == NULL) return -1;
 
     int32_t track = -1;
     float gain = 1.0f, pitch = 1.0f;
     bool music = true; /* a stream */
 
-    if (soundIndex >= UT_STREAM_INDEX_BASE) {
-        UtStream *stream = streamFor(ut, soundIndex);
+    if (soundIndex >= OF_STREAM_INDEX_BASE) {
+        OfStream *stream = streamFor(ut, soundIndex);
         if (stream == NULL) return -1;
         track = stream->track;
         gain = stream->gain;
@@ -918,10 +918,10 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     }
     if (track < 0) return -1;
 
-    bool streamed = trackBytes(&ut->tracks[track]) > UT_MEMORY_SOUND_BYTES;
+    bool streamed = trackBytes(&ut->tracks[track]) > OF_MEMORY_SOUND_BYTES;
     uint8_t *soundData = NULL;
     if (!streamed && kindSkipped(ut, music)) {
-        /* Not read until the mute comes off; see utAudioSetMode. */
+        /* Not read until the mute comes off; see ofAudioSetMode. */
         if (trackBytes(&ut->tracks[track]) == 0) return -1;
     } else if (!streamed) {
         soundData = cachedSound(ut, track);
@@ -930,19 +930,19 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     /* Take a free voice. Failing that, take over the oldest one of the same
      * kind, so effects never cut off the music and the reverse. */
-    UtVoice *voice = NULL;
+    OfVoice *voice = NULL;
     int streamedCount = 0;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (!ut->voices[v].active) {
             if (voice == NULL) voice = &ut->voices[v];
         } else if (ut->voices[v].streamSlot >= 0) {
             streamedCount++;
         }
     }
-    if (voice == NULL || (streamed && streamedCount >= UT_MAX_STREAMED)) {
+    if (voice == NULL || (streamed && streamedCount >= OF_MAX_STREAMED)) {
         voice = NULL;
-        for (int v = 0; v < UT_MAX_VOICES; v++) {
-            UtVoice *candidate = &ut->voices[v];
+        for (int v = 0; v < OF_MAX_VOICES; v++) {
+            OfVoice *candidate = &ut->voices[v];
             if (!candidate->active || (candidate->streamSlot >= 0) != streamed) continue;
             if (voice == NULL || candidate->instanceId < voice->instanceId) voice = candidate;
         }
@@ -952,9 +952,9 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
 
     int32_t streamSlot = -1;
     if (streamed) {
-        for (int32_t slot = 0; slot < UT_MAX_STREAMED && streamSlot < 0; slot++) {
+        for (int32_t slot = 0; slot < OF_MAX_STREAMED && streamSlot < 0; slot++) {
             bool taken = false;
-            for (int v = 0; v < UT_MAX_VOICES; v++)
+            for (int v = 0; v < OF_MAX_VOICES; v++)
                 taken = taken || (ut->voices[v].active && ut->voices[v].streamSlot == slot);
             if (!taken) streamSlot = slot;
         }
@@ -981,11 +981,11 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     updateStep(ut, voice);
     voice->active = true;
     voice->startedThisFrame = true;
-    /* Effects fire constantly; only log the long tracks (UT_AUDIO_LOG=1 on
+    /* Effects fire constantly; only log the long tracks (BS_AUDIO_LOG=1 on
      * desktop logs everything). */
 #ifdef OF_PC
     static int logAll = -1;
-    if (logAll < 0) logAll = getenv("UT_AUDIO_LOG") != NULL;
+    if (logAll < 0) logAll = getenv("BS_AUDIO_LOG") != NULL;
     if (logAll && !streamed) logInfo("Audio: sfx %s gain %.2f pitch %.2f\n", ut->tracks[track].name, (double) gain, (double) pitch);
 #endif
     if (streamed)
@@ -994,55 +994,55 @@ static int32_t utPlaySound(AudioSystem *audio, int32_t soundIndex, int32_t prior
     return voice->instanceId;
 }
 
-static void utStopSound(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static void ofStopSound(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance)) ut->voices[v].active = false;
     }
 }
 
-static void utStopAll(AudioSystem *audio) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) ut->voices[v].active = false;
+static void ofStopAll(AudioSystem *audio) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) ut->voices[v].active = false;
 }
 
-static bool utIsPlaying(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static bool ofIsPlaying(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance)) return true;
     }
     return false;
 }
 
-static void setPaused(UtAudioSystem *ut, int32_t soundOrInstance, bool paused) {
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static void setPaused(OfAudioSystem *ut, int32_t soundOrInstance, bool paused) {
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance)) ut->voices[v].paused = paused;
     }
 }
 
-static void utPauseSound(AudioSystem *audio, int32_t soundOrInstance) {
-    setPaused((UtAudioSystem *) audio, soundOrInstance, true);
+static void ofPauseSound(AudioSystem *audio, int32_t soundOrInstance) {
+    setPaused((OfAudioSystem *) audio, soundOrInstance, true);
 }
 
-static void utResumeSound(AudioSystem *audio, int32_t soundOrInstance) {
-    setPaused((UtAudioSystem *) audio, soundOrInstance, false);
+static void ofResumeSound(AudioSystem *audio, int32_t soundOrInstance) {
+    setPaused((OfAudioSystem *) audio, soundOrInstance, false);
 }
 
-static void utPauseAll(AudioSystem *audio) {
-    ((UtAudioSystem *) audio)->allPaused = true;
+static void ofPauseAll(AudioSystem *audio) {
+    ((OfAudioSystem *) audio)->allPaused = true;
 }
 
-static void utResumeAll(AudioSystem *audio) {
-    ((UtAudioSystem *) audio)->allPaused = false;
+static void ofResumeAll(AudioSystem *audio) {
+    ((OfAudioSystem *) audio)->allPaused = false;
 }
 
-static void utSetSoundGain(AudioSystem *audio, int32_t soundOrInstance, float gain, uint32_t timeMs) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    UtStream *stream = streamFor(ut, soundOrInstance);
+static void ofSetSoundGain(AudioSystem *audio, int32_t soundOrInstance, float gain, uint32_t timeMs) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    OfStream *stream = streamFor(ut, soundOrInstance);
     if (stream != NULL) stream->gain = gain;
 
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        UtVoice *voice = &ut->voices[v];
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        OfVoice *voice = &ut->voices[v];
         if (!voiceMatches(voice, soundOrInstance)) continue;
 
         voice->gainTarget = gainToFixed(gain);
@@ -1058,43 +1058,43 @@ static void utSetSoundGain(AudioSystem *audio, int32_t soundOrInstance, float ga
     }
 }
 
-static float utGetSoundGain(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static float ofGetSoundGain(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance))
-            return (float) (ut->voices[v].gainNow >> 8) / (float) UT_GAIN_ONE;
+            return (float) (ut->voices[v].gainNow >> 8) / (float) OF_GAIN_ONE;
     }
-    UtStream *stream = streamFor(ut, soundOrInstance);
+    OfStream *stream = streamFor(ut, soundOrInstance);
     return stream != NULL ? stream->gain : 1.0f;
 }
 
-static void utSetSoundPitch(AudioSystem *audio, int32_t soundOrInstance, float pitch) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+static void ofSetSoundPitch(AudioSystem *audio, int32_t soundOrInstance, float pitch) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
     if (pitch <= 0.0f) pitch = 0.01f;
-    UtStream *stream = streamFor(ut, soundOrInstance);
+    OfStream *stream = streamFor(ut, soundOrInstance);
     if (stream != NULL) stream->pitch = pitch;
 
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        UtVoice *voice = &ut->voices[v];
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        OfVoice *voice = &ut->voices[v];
         if (!voiceMatches(voice, soundOrInstance)) continue;
         voice->pitch = pitch;
         updateStep(ut, voice);
     }
 }
 
-static float utGetSoundPitch(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
+static float ofGetSoundPitch(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance)) return ut->voices[v].pitch;
     }
-    UtStream *stream = streamFor(ut, soundOrInstance);
+    OfStream *stream = streamFor(ut, soundOrInstance);
     return stream != NULL ? stream->pitch : 1.0f;
 }
 
-static float utGetTrackPosition(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        const UtVoice *voice = &ut->voices[v];
+static float ofGetTrackPosition(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        const OfVoice *voice = &ut->voices[v];
         if (voiceMatches(voice, soundOrInstance))
             return (float) voice->samplesDecoded / (float) ut->tracks[voice->track].sampleRate;
     }
@@ -1104,13 +1104,13 @@ static float utGetTrackPosition(AudioSystem *audio, int32_t soundOrInstance) {
 /* Seeks by restarting the decoder at the target byte. ADPCM state is not
  * stored per position, so the first few milliseconds after a seek to
  * anywhere but the start are approximate. */
-static void utSetTrackPosition(AudioSystem *audio, int32_t soundOrInstance, float positionSeconds) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    for (int v = 0; v < UT_MAX_VOICES; v++) {
-        UtVoice *voice = &ut->voices[v];
+static void ofSetTrackPosition(AudioSystem *audio, int32_t soundOrInstance, float positionSeconds) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    for (int v = 0; v < OF_MAX_VOICES; v++) {
+        OfVoice *voice = &ut->voices[v];
         if (!voiceMatches(voice, soundOrInstance)) continue;
 
-        const UtMusicTrack *track = &ut->tracks[voice->track];
+        const OfMusicTrack *track = &ut->tracks[voice->track];
         if (positionSeconds < 0.0f) positionSeconds = 0.0f;
         uint32_t sample = (uint32_t) (positionSeconds * (float) track->sampleRate) & ~1u;
         if (sample >= track->sampleCount) sample = 0;
@@ -1128,18 +1128,18 @@ static void utSetTrackPosition(AudioSystem *audio, int32_t soundOrInstance, floa
     }
 }
 
-static float utGetSoundLength(AudioSystem *audio, int32_t soundOrInstance) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+static float ofGetSoundLength(AudioSystem *audio, int32_t soundOrInstance) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
     int32_t track = -1;
 
-    for (int v = 0; v < UT_MAX_VOICES && track < 0; v++) {
+    for (int v = 0; v < OF_MAX_VOICES && track < 0; v++) {
         if (voiceMatches(&ut->voices[v], soundOrInstance)) track = ut->voices[v].track;
     }
     if (track < 0) {
-        UtStream *stream = streamFor(ut, soundOrInstance);
+        OfStream *stream = streamFor(ut, soundOrInstance);
         if (stream != NULL) {
             track = stream->track;
-        } else if (soundOrInstance >= 0 && soundOrInstance < UT_INSTANCE_ID_BASE) {
+        } else if (soundOrInstance >= 0 && soundOrInstance < OF_INSTANCE_ID_BASE) {
             DataWin *dw = audio->audioGroups[0];
             if ((uint32_t) soundOrInstance < dw->sond.count) {
                 track = findTrack(ut, dw->sond.sounds[soundOrInstance].file);
@@ -1151,95 +1151,95 @@ static float utGetSoundLength(AudioSystem *audio, int32_t soundOrInstance) {
     return (float) ut->tracks[track].sampleCount / (float) ut->tracks[track].sampleRate;
 }
 
-static void utSetMasterGain(AudioSystem *audio, float gain) {
+static void ofSetMasterGain(AudioSystem *audio, float gain) {
     if (gain < 0.0f) gain = 0.0f;
     if (gain > 2.0f) gain = 2.0f;
-    ((UtAudioSystem *) audio)->masterGain = gain;
+    ((OfAudioSystem *) audio)->masterGain = gain;
 }
 
-static void utSetMasterGainForListener(AudioSystem *audio, float gain, int32_t listenerId) {
+static void ofSetMasterGainForListener(AudioSystem *audio, float gain, int32_t listenerId) {
     (void) listenerId;
-    utSetMasterGain(audio, gain);
+    ofSetMasterGain(audio, gain);
 }
 
-static void utSetChannelCount(AudioSystem *audio, int32_t count) {
+static void ofSetChannelCount(AudioSystem *audio, int32_t count) {
     (void) audio;
     (void) count;
 }
 
-static void utGroupLoad(AudioSystem *audio, int32_t groupIndex) {
+static void ofGroupLoad(AudioSystem *audio, int32_t groupIndex) {
     (void) audio;
     (void) groupIndex;
 }
 
-static bool utGroupIsLoaded(AudioSystem *audio, int32_t groupIndex) {
+static bool ofGroupIsLoaded(AudioSystem *audio, int32_t groupIndex) {
     (void) audio;
     (void) groupIndex;
     return true;
 }
 
-static int32_t utCreateStream(AudioSystem *audio, const char *filename) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
+static int32_t ofCreateStream(AudioSystem *audio, const char *filename) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
     int32_t track = findTrack(ut, filename);
     if (track < 0) {
         if (ut->trackCount > 0) logWarn("Audio: '%s' is not in the music pack.\n", filename);
         return -1;
     }
 
-    for (int32_t i = 0; i < UT_MAX_STREAMS; i++) {
+    for (int32_t i = 0; i < OF_MAX_STREAMS; i++) {
         if (ut->streams[i].active) continue;
         ut->streams[i].active = true;
         ut->streams[i].track = track;
         ut->streams[i].gain = 1.0f;
         ut->streams[i].pitch = 1.0f;
-        return UT_STREAM_INDEX_BASE + i;
+        return OF_STREAM_INDEX_BASE + i;
     }
     logWarn("Audio: no free stream slots for '%s'.\n", filename);
     return -1;
 }
 
-static bool utDestroyStream(AudioSystem *audio, int32_t streamIndex) {
-    UtAudioSystem *ut = (UtAudioSystem *) audio;
-    UtStream *stream = streamFor(ut, streamIndex);
+static bool ofDestroyStream(AudioSystem *audio, int32_t streamIndex) {
+    OfAudioSystem *ut = (OfAudioSystem *) audio;
+    OfStream *stream = streamFor(ut, streamIndex);
     if (stream == NULL) return false;
-    utStopSound(audio, streamIndex);
+    ofStopSound(audio, streamIndex);
     stream->active = false;
     return true;
 }
 
-static AudioSystemVtable utVtable = {
-    .init = utInit,
-    .destroy = utDestroy,
-    .update = utUpdate,
-    .playSound = utPlaySound,
-    .stopSound = utStopSound,
-    .stopAll = utStopAll,
-    .isPlaying = utIsPlaying,
-    .pauseSound = utPauseSound,
-    .resumeSound = utResumeSound,
-    .pauseAll = utPauseAll,
-    .resumeAll = utResumeAll,
-    .suspend = utPauseAll,
-    .resume = utResumeAll,
-    .setSoundGain = utSetSoundGain,
-    .getSoundGain = utGetSoundGain,
-    .setSoundPitch = utSetSoundPitch,
-    .getSoundPitch = utGetSoundPitch,
-    .getTrackPosition = utGetTrackPosition,
-    .setTrackPosition = utSetTrackPosition,
-    .getSoundLength = utGetSoundLength,
-    .setMasterGain = utSetMasterGain,
-    .setMasterGainForListener = utSetMasterGainForListener,
-    .setChannelCount = utSetChannelCount,
-    .groupLoad = utGroupLoad,
-    .groupIsLoaded = utGroupIsLoaded,
-    .createStream = utCreateStream,
-    .destroyStream = utDestroyStream,
+static AudioSystemVtable ofVtable = {
+    .init = ofInit,
+    .destroy = ofDestroy,
+    .update = ofUpdate,
+    .playSound = ofPlaySound,
+    .stopSound = ofStopSound,
+    .stopAll = ofStopAll,
+    .isPlaying = ofIsPlaying,
+    .pauseSound = ofPauseSound,
+    .resumeSound = ofResumeSound,
+    .pauseAll = ofPauseAll,
+    .resumeAll = ofResumeAll,
+    .suspend = ofPauseAll,
+    .resume = ofResumeAll,
+    .setSoundGain = ofSetSoundGain,
+    .getSoundGain = ofGetSoundGain,
+    .setSoundPitch = ofSetSoundPitch,
+    .getSoundPitch = ofGetSoundPitch,
+    .getTrackPosition = ofGetTrackPosition,
+    .setTrackPosition = ofSetTrackPosition,
+    .getSoundLength = ofGetSoundLength,
+    .setMasterGain = ofSetMasterGain,
+    .setMasterGainForListener = ofSetMasterGainForListener,
+    .setChannelCount = ofSetChannelCount,
+    .groupLoad = ofGroupLoad,
+    .groupIsLoaded = ofGroupIsLoaded,
+    .createStream = ofCreateStream,
+    .destroyStream = ofDestroyStream,
 };
 
 AudioSystem *platformCreateAudioSystem(void) {
-    UtAudioSystem *ut = safeCalloc(1, sizeof(UtAudioSystem));
-    ut->base.vtable = &utVtable;
+    OfAudioSystem *ut = safeCalloc(1, sizeof(OfAudioSystem));
+    ut->base.vtable = &ofVtable;
     g_audio = ut;
     return &ut->base;
 }

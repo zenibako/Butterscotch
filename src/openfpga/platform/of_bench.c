@@ -1,0 +1,345 @@
+#include "of_bench.h"
+
+#include "of.h"
+
+#include "gettime.h"
+#include "of_diag.h"
+#include "of_game.h"
+#include "of_perf.h"
+#include "sw_call_notes.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+
+static bool g_running = false;
+static int g_frame = 0;
+static int g_section = 0;
+static uint64_t g_startNanos = 0;
+static uint64_t g_sectionStart = 0;
+static unsigned g_sectionMs[OF_BENCH_MAX_SECTIONS];
+static uint64_t g_flipNanos = 0; /* time inside the display flip this section */
+static unsigned g_sectionFlipMs[OF_BENCH_MAX_SECTIONS];
+static OfPerfTotals g_sectionTotals[OF_BENCH_MAX_SECTIONS];
+/* The draw calls each section spent most on (see sw_call_notes.h). */
+#define OF_BENCH_NOTES 10
+static SWCallNote g_sectionNotes[OF_BENCH_MAX_SECTIONS][OF_BENCH_NOTES];
+static int g_sectionNoteCount[OF_BENCH_MAX_SECTIONS];
+static uint32_t g_sectionNotesMissed[OF_BENCH_MAX_SECTIONS];
+static unsigned g_firstFrameMs = 0;
+
+/* Draw calls and mixing are timed on one frame in this many: timing them
+ * costs 3 to 5 ms of a battle frame on the device, which the game does not
+ * pay, so the frame times come out about half a millisecond high. The tables
+ * of where the time went are averages over the timed frames. */
+#define OF_BENCH_DETAIL_EVERY 8
+
+void ofBenchStart(void) {
+    if (ofGame.benchSectionCount > OF_BENCH_MAX_SECTIONS) ofDiagHalt("benchmark has more sections than OF_BENCH_MAX_SECTIONS");
+    g_running = true;
+    g_startNanos = nowNanos();
+    ofPerfDetailEvery(OF_BENCH_DETAIL_EVERY);
+    ofPlatformSetInputScript(ofGame.benchScript);
+    if (ofGame.benchJumpCount > 0) ofPlatformSetJumps(ofGame.benchJumps, ofGame.benchJumpCount);
+    ofPlatformSetUncapped(true);
+    ofSaveFsSetVolatile(true);
+}
+
+/* SD read throughput, cold and warm.
+ *
+ * Earlier versions of this test read the same 2 MB of data.win several times
+ * and reported 13 MB/s for everything but the first pass, while the loader,
+ * reading the file for the first time, managed about 1.2 MB/s. That pattern
+ * says repeat reads are served from a cache somewhere below the app. So each
+ * test here reads its own, previously untouched megabyte of music.bin (far
+ * larger than anything played during the benchmark), and one region is read
+ * twice to show the warm figure. */
+#define OF_IO_BYTES (1024u * 1024u)
+#define OF_IO_MB(n) ((n) / ofGame.ioDivisor)
+#define OF_IO_ASYNC_MB(i) (ofGame.ioAsyncBase + ofGame.ioAsyncStep * (i))
+#define OF_IO_FILE "music.bin"
+
+static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
+    uint8_t *buffer = malloc(OF_IO_BYTES);
+    if (buffer == NULL) return 0;
+
+    FILE *file = fopen(OF_IO_FILE, "rb");
+    if (file == NULL) {
+        free(buffer);
+        return 0;
+    }
+    setvbuf(file, NULL, _IONBF, 0);
+    fseek(file, (long) megabyteOffset * 1024 * 1024, SEEK_SET);
+
+    uint64_t start = nowNanos();
+    uint32_t done = 0;
+    while (done < OF_IO_BYTES) {
+        size_t got = fread(buffer, 1, chunk, file);
+        if (got == 0) break;
+        done += (uint32_t) got;
+    }
+    uint64_t micros = (nowNanos() - start) / 1000u;
+    fclose(file);
+    free(buffer);
+
+    return micros > 0 ? (unsigned) ((uint64_t) done * 1000000u / 1024u / micros) : 0;
+}
+
+static void ioReport(void) {
+    /* Offsets are spread through the second half of the pack. */
+    ofLogPrint("SD read, KB/s, 1 MB each from " OF_IO_FILE ":\n");
+    ofLogPrint("cold: 4K %u, 64K %u, 1M %u\n", ioTest(OF_IO_MB(70u), 4096), ioTest(OF_IO_MB(85u), 65536), ioTest(OF_IO_MB(100u), OF_IO_BYTES));
+    ofLogPrint("same 64K region again: %u\n", ioTest(OF_IO_MB(85u), 65536));
+}
+
+/* The same pack read with the OS's non-blocking call instead of fread.
+ * fread is served from the OS file cache, which fetches one 32 KB block per
+ * command to the Pocket's host however much was asked for, and each command
+ * has a round trip of its own. This times single commands of several sizes,
+ * to show how much of a read is that round trip and how much is data, and
+ * then a megabyte in the largest commands the OS accepts: into the OS's
+ * staging memory (no copy) and into ordinary memory (one copy). */
+#ifndef OF_PC
+#define OF_ASYNC_TIMEOUT_NANOS 3000000000ull
+#define OF_ASYNC_READS_PER_SIZE 8
+
+static volatile int g_asyncDone;
+static volatile int g_asyncResult;
+
+/* Runs from the read-completion interrupt. */
+static void asyncCallback(int token, int result) {
+    (void) token;
+    g_asyncResult = result;
+    g_asyncDone = 1;
+}
+
+/* Reads `total` bytes from `offset` in commands of `length`. Returns the
+ * time in microseconds, or 0 if a read failed or timed out. */
+static uint32_t asyncTime(uint32_t slot, uint32_t offset, uint8_t *dest, bool advanceDest, uint32_t length, uint32_t total) {
+    uint64_t start = nowNanos();
+    for (uint32_t done = 0; done < total; done += length) {
+        g_asyncDone = 0;
+        g_asyncResult = 0;
+        uint64_t issued = nowNanos();
+        if (of_file_read_async((int) slot, offset + done, advanceDest ? dest + done : dest, length, asyncCallback) < 0) return 0;
+        /* The poll is the OS's fallback for a lost interrupt. */
+        while (!g_asyncDone && of_file_async_poll() != 1) {
+            if (nowNanos() - issued > OF_ASYNC_TIMEOUT_NANOS) return 0;
+        }
+        if (g_asyncResult < 0) return 0;
+    }
+    return (uint32_t) ((nowNanos() - start) / 1000u);
+}
+
+static void asyncReport(void) {
+    static const uint32_t sizes[] = { 4096, 16384, 32768, 65536 };
+    char line[64];
+    int at;
+
+    uint32_t slot = 0;
+    uint32_t maxRead = of_file_async_max_read();
+    uint8_t *stage = maxRead > 0 ? of_file_dma_stage_alloc(maxRead, 4096) : NULL;
+    if (stage == NULL || of_file_slot_find(OF_IO_FILE, &slot) != 0) {
+        ofLogPrint("async read: not available (max %u)\n", (unsigned) maxRead);
+        return;
+    }
+
+    at = snprintf(line, sizeof(line), "async max %uK ms:", (unsigned) (maxRead / 1024u));
+    for (int i = 0; i < 4; i++) {
+        if (sizes[i] > maxRead) continue;
+        /* Each size gets its own untouched stretch of the pack. */
+        uint32_t micros = asyncTime(slot, OF_IO_ASYNC_MB((uint32_t) i) * 1024u * 1024u, stage, false, sizes[i],
+                                    sizes[i] * OF_ASYNC_READS_PER_SIZE);
+        unsigned tenths = micros / (100u * OF_ASYNC_READS_PER_SIZE);
+        at += snprintf(line + at, sizeof(line) - (size_t) at, " %uK %u.%u", (unsigned) (sizes[i] / 1024u), tenths / 10, tenths % 10);
+    }
+    ofLogPrint("%s\n", line);
+
+    uint32_t total = OF_IO_BYTES - OF_IO_BYTES % maxRead;
+    uint32_t staged = asyncTime(slot, OF_IO_MB(118u) * 1024u * 1024u, stage, false, maxRead, total);
+    uint8_t *heapBuffer = malloc(OF_IO_BYTES);
+    uint32_t copied = heapBuffer != NULL ? asyncTime(slot, OF_IO_MB(120u) * 1024u * 1024u, heapBuffer, true, maxRead, total) : 0;
+    free(heapBuffer);
+    ofLogPrint("async 1M KB/s: staged %u, copied %u\n",
+               staged > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / staged) : 0,
+               copied > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / copied) : 0);
+}
+#else
+static void asyncReport(void) {}
+#endif
+
+void ofBenchAddFlipTime(uint64_t nanos) {
+    if (g_running) g_flipNanos += nanos;
+}
+
+void ofBenchFrame(void) {
+    if (!g_running) return;
+
+    uint64_t now = nowNanos();
+    if (g_frame == 0) {
+        g_firstFrameMs = (unsigned) ((now - g_startNanos) / 1000000u);
+        g_sectionStart = now;
+        ofPerfTakeTotals(NULL); /* loading is not part of the first section */
+        swrCallNotes = true;
+        swrCallNotesTake(NULL, 0, NULL);
+    }
+    g_frame++;
+    if (g_frame < ofGame.benchSections[g_section].lastFrame) return;
+
+    g_sectionMs[g_section] = (unsigned) ((now - g_sectionStart) / 1000000u);
+    g_sectionFlipMs[g_section] = (unsigned) (g_flipNanos / 1000000u);
+    ofPerfTakeTotals(&g_sectionTotals[g_section]);
+    g_sectionNoteCount[g_section] = swrCallNotesTake(g_sectionNotes[g_section], OF_BENCH_NOTES, &g_sectionNotesMissed[g_section]);
+    g_sectionStart = now;
+    g_flipNanos = 0;
+    if (++g_section < ofGame.benchSectionCount) return;
+
+    g_running = false;
+    swrCallNotes = false;
+    ofPerfDetailEvery(0);
+    /* A build with optimisation flags of its own (OF_OPT) says so in the title. */
+    const char *note = "";
+#ifdef OF_BUILD_NOTE
+    note = OF_BUILD_NOTE;
+#endif
+    char drawn[40] = "";
+    if (ofPlatformForcedSkip() > 0) snprintf(drawn, sizeof(drawn), ", drawing 1 frame in %d", ofPlatformForcedSkip());
+    ofLogPrint("=== %s benchmark, %s%s%s%s ===\n", ofGame.benchTitle, ofPlatformSpeedMode() ? "speed" : "accuracy",
+               note[0] != '\0' ? ", " : "", note, drawn);
+#ifndef OF_PC
+    {
+        /* Say which OS and bitstream this ran on; tables look alike otherwise. */
+        const struct of_capabilities *caps = of_get_caps();
+        ofLogPrint("OS %u.%u.%u, core variant %u, CPU %u MHz\n", (unsigned) ((caps->os_version >> 16) & 0xFF),
+                   (unsigned) ((caps->os_version >> 8) & 0xFF), (unsigned) (caps->os_version & 0xFF),
+                   (unsigned) caps->core_variant, (unsigned) (caps->cpu_freq_hz / 1000000u));
+    }
+#endif
+    ofLogPrint("load to first frame: %u.%u s\n", g_firstFrameMs / 1000, (g_firstFrameMs % 1000) / 100);
+    ofLogPrint("%s\n", ofLogLoadSummary());
+    ofLogPrint("%s\n", ofLogLoadPhases());
+    ofLogPrint("ms per frame:          work   total\n");
+    int firstFrame = 0;
+    unsigned totalMs = 0;
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        unsigned frames = (unsigned) (ofGame.benchSections[i].lastFrame - firstFrame);
+        unsigned total = g_sectionMs[i] * 10u / frames;
+        unsigned work = (g_sectionMs[i] - g_sectionFlipMs[i]) * 10u / frames;
+        ofLogPrint("%-21s %3u.%u  %3u.%u\n", ofGame.benchSections[i].name, work / 10, work % 10, total / 10, total % 10);
+        firstFrame = ofGame.benchSections[i].lastFrame;
+        totalMs += g_sectionMs[i];
+    }
+    ofLogPrint("%d frames in %u.%u s; full speed is 33.3\n", firstFrame, totalMs / 1000, (totalMs % 1000) / 100);
+    ofLogPrint("work = total minus display flip\n");
+    ioReport();
+    asyncReport();
+    {
+        unsigned clock, draw, drawUntimed, audioFree;
+        ofPlatformCallCosts(&clock, &draw, &drawUntimed, &audioFree);
+        ofLogPrint("call costs, us: clock %u.%02u, skipped sprite draw %u.%02u (%u.%02u without its timing), audio queue %u.%02u\n",
+                   clock / 1000, clock % 1000 / 10, draw / 1000, draw % 1000 / 10, drawUntimed / 1000, drawUntimed % 1000 / 10,
+                   audioFree / 1000, audioFree % 1000 / 10);
+    }
+    /* Where each section's time went, in ms per frame. step: game code; draw:
+     * all drawing, of which the next five are sprites, sprite parts and
+     * tiles, text, tiled backgrounds and rectangles (what is left of draw is
+     * none of those: clears, held layers let out by another kind of draw,
+     * the runner's own work); snd: the audio update; out: presenting. The
+     * second table is how many of each kind of draw call a frame makes.
+     * The five kinds are averages over the frames timed in detail. */
+    #define TENTHS(nanos, frames) (unsigned) ((nanos) / ((uint64_t) (frames) * 1000000u)), \
+                                  (unsigned) ((nanos) / ((uint64_t) (frames) * 100000u) % 10u)
+    ofLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
+    firstFrame = 0;
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
+        int frames = ofGame.benchSections[i].lastFrame - firstFrame;
+        int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
+        ofLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", ofGame.benchSections[i].tag,
+                   TENTHS(t->phaseNanos[OF_PHASE_STEP], frames), TENTHS(t->phaseNanos[OF_PHASE_DRAW], frames),
+                   TENTHS(t->drawNanos[0], detail), TENTHS(t->drawNanos[1], detail), TENTHS(t->drawNanos[2], detail),
+                   TENTHS(t->drawNanos[3], detail), TENTHS(t->drawNanos[4], detail),
+                   TENTHS(t->phaseNanos[OF_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[OF_PHASE_OUT], frames));
+        firstFrame = ofGame.benchSections[i].lastFrame;
+    }
+    /* Sound, in ms per frame wherever in the frame it ran (the draw profiler
+     * feeds the queue too, so this is not the snd column): mix is all of
+     * mixing, of which voices is decoding and summing them and write is
+     * handing the samples to the OS; music is reading it from the card; fx
+     * is loading sound effects. Then output sample pairs per frame, and how
+     * many voices were playing on average, in tenths. */
+    ofLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
+    firstFrame = 0;
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
+        int frames = ofGame.benchSections[i].lastFrame - firstFrame;
+        int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
+        uint64_t pairs = t->loadNanos[OF_LOAD_MIX_PAIRS];
+        unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[OF_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
+        ofLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", ofGame.benchSections[i].tag,
+                   TENTHS(t->loadNanos[OF_LOAD_MIX], detail), TENTHS(t->loadNanos[OF_LOAD_MIX_VOICES], detail),
+                   TENTHS(t->loadNanos[OF_LOAD_MIX_WRITE], detail), TENTHS(t->loadNanos[OF_LOAD_MUSIC], frames),
+                   TENTHS(t->loadNanos[OF_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
+        firstFrame = ofGame.benchSections[i].lastFrame;
+    }
+    #undef TENTHS
+    ofLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
+    firstFrame = 0;
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
+        uint64_t frames = (uint64_t) (ofGame.benchSections[i].lastFrame - firstFrame);
+        ofLogPrint("%-5s       %5u %5u %5u %5u %5u\n", ofGame.benchSections[i].tag, (unsigned) (t->drawCalls[0] / frames),
+                   (unsigned) (t->drawCalls[1] / frames), (unsigned) (t->drawCalls[2] / frames),
+                   (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
+        firstFrame = ofGame.benchSections[i].lastFrame;
+    }
+    /* For the last few sections, the draw calls that cost the most, grouped
+     * by what was asked for: ms per frame, calls per frame (in tenths), what.
+     * "of which" lines are parts of other calls and are counted in those too. */
+    firstFrame = 0;
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        /* Notes are only taken on the frames timed in detail. */
+        uint64_t frames = g_sectionTotals[i].detailFrames > 0 ? g_sectionTotals[i].detailFrames : 1;
+        firstFrame = ofGame.benchSections[i].lastFrame;
+        if (i < ofGame.benchSectionCount - 4 || g_sectionNoteCount[i] == 0) continue;
+        ofLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", ofGame.benchSections[i].tag, (unsigned) g_sectionNotesMissed[i]);
+        for (int n = 0; n < g_sectionNoteCount[i]; n++) {
+            const SWCallNote *draw = &g_sectionNotes[i][n];
+            unsigned tenths = (unsigned) (draw->nanos / (frames * 100000u));
+            unsigned callTenths = (unsigned) ((uint64_t) draw->calls * 10u / frames);
+            ofLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
+        }
+    }
+    {
+        /* What a direct read costs by what read came just before it (ofPlatformReadCosts), ms. */
+        unsigned tenths[OF_READ_COSTS];
+        ofPlatformReadCosts(tenths);
+        #define MS(n) tenths[n] / 10, tenths[n] % 10
+        ofLogPrint("4 KB read, ms: tex>tex %u.%u music>tex %u.%u tex>music %u.%u music>music %u.%u idle>tex %u.%u data.win>tex %u.%u\n",
+                   MS(OF_READ_TEX_TEX), MS(OF_READ_MUSIC_TEX), MS(OF_READ_TEX_MUSIC), MS(OF_READ_MUSIC_MUSIC), MS(OF_READ_IDLE_TEX),
+                   MS(OF_READ_FILE_TEX));
+        #undef MS
+    }
+    /* One more measurement, after the report so far is safely in the file: it
+     * draws outside a frame, and a report must not be lost to it. */
+    ofLogDump();
+    {
+        /* A sprite draw cut short at each stage in turn (sw_call_notes.h), microseconds a call:
+         * what it has cost by the renderer's door, with its texture found, on entering the
+         * drawing code, clipped, set up, with held layers let out, and whole. */
+        int width, height, path;
+        unsigned at[7], outside;
+        ofPlatformSpriteCosts(&width, &height, at, &outside, &path);
+        #define US(n) (n) / 1000, (n) % 1000 / 10
+        ofLogPrint("sprite %dx%d draw, us, way %d: door %u.%02u texture %u.%02u entered %u.%02u\n", width, height, path,
+                   US(at[1]), US(at[2]), US(at[3]));
+        ofLogPrint("  clipped %u.%02u set up %u.%02u let out %u.%02u whole %u.%02u; out of view %u.%02u\n",
+                   US(at[4]), US(at[5]), US(at[6]), US(at[0]), US(outside));
+        #undef US
+    }
+    ofLogPrint("--- end of report ---\n"); /* ofLogDump keeps a report from its title to this line */
+    ofLogDump();
+    ofDiagHalt("benchmark finished");
+}

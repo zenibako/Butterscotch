@@ -26,7 +26,8 @@ This file says what is here and how to use it. It carries no measurements:
 frame times, load times and sizes change from build to build, and the
 benchmark (see On-device diagnostics) reports them for the build in hand.
 
-You must supply your own `data.win` from Undertale v1.08.
+You must supply your own game data: `data.win` from Undertale v1.08, or a
+Deltarune chapter (see Deltarune below).
 
 ## Layout
 
@@ -34,6 +35,9 @@ You must supply your own `data.win` from Undertale v1.08.
 |------|------|
 | `main.c` | Entry point: registers `data.win` on data slot 4 and starts the runner |
 | `platform/of_platform.c` | Butterscotch platform hooks on the `of_*` API (video, pad, timing) |
+| `platform/of_*.c` | The rest of the platform layer; the same for every game |
+| `platform/game_undertale.c`, `platform/game_deltarune.c` | What differs per game (prompt patches, native scripts, benchmark route); the build compiles the one `GAME` names (see `platform/of_game.h`) |
+| `games/<game>/` | Your own game data (`data.win`, `music/`) and the packs built from it; not tracked |
 | `../` | Butterscotch itself; `../sw/` is the software renderer |
 | `dist/` | Pocket core definition (core, data slots, instance JSON) |
 | `out/` | Everything the build writes; not tracked |
@@ -64,8 +68,9 @@ cd butterscotch-pocket/src/openfpga
 
 # Your own game data: data.win (named game.ios inside the macOS app) and
 # the folder holding the game's .ogg files.
-cp /path/to/data.win data.win
-ln -s /path/to/folder-with-ogg-files music
+mkdir -p games/undertale
+cp /path/to/data.win games/undertale/data.win
+ln -s /path/to/folder-with-ogg-files games/undertale/music
 
 make            # builds the core and its data packs into out/build/pocket/butterscotch/
 make copy       # copies it to a mounted Pocket SD card
@@ -82,32 +87,35 @@ export USE_SDK_CONTAINER=0
 
 ```bash
 make            # RISC-V ELF + Pocket SD tree in out/build/pocket/butterscotch/
-make test       # desktop binary ./undertale_pc (run it next to a data.win)
+make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
+                # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
 ```
 
-Put your `data.win` in this directory (on macOS it is `game.ios` inside
+Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
-game's `.ogg` files as `music/`. The build copies it to
+game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this
+directory; the build stops and says so if it finds them here.) The build copies it to
 `Assets/butterscotch/common/` in the SD tree.
 
-Desktop extras: `UT_DUMP_FRAME=<n> UT_DUMP_PATH=out.ppm ./undertale_pc`
-writes frame `n` of the 320x240 output and exits. `UT_UNCAPPED=1` disables
-frame pacing for timing runs. `UT_SEED=<n>` fixes the game's RNG and
-`UT_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
+Desktop extras: `BS_DUMP_FRAME=<n> BS_DUMP_PATH=out.ppm ../../undertale_pc` (from `games/undertale/`)
+writes frame `n` of the 320x240 output and exits. `BS_UNCAPPED=1` disables
+frame pacing for timing runs. `BS_SEED=<n>` fixes the game's RNG and
+`BS_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
 E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
-enables older bytecode versions for testing other games.
+enables older bytecode versions for testing other games. These settings were
+named `UT_*` until 2026-10-13; the old names still work and the log says so.
 
 `make profiler-fixture WADS="16 17"` builds the asset-free
-`./undertale_pc_profiler_fixture` check for Script times. It exercises nested
+`./<PC_BIN>_profiler_fixture` check (CI names it `bs_pc`) for Script times. It exercises nested
 script/builtin counts, native success/fallback accounting, report/reset, and
 off/on/off toggles between executions. Pass the same `PC_EXTRA_CFLAGS` sanitizer
 flags as an ASan build to check memory safety too.
 
 `make sprite-clipping-fixture WADS="16 17"` builds the asset-free
-`./undertale_pc_sprite_clipping_fixture`. It compares clipped sprites against
+`./<PC_BIN>_sprite_clipping_fixture`. It compares clipped sprites against
 crops of unclipped draws, including horizontal/vertical flips, scaling,
 transparency and an offset viewport. Pass sanitizer flags in `PC_EXTRA_CFLAGS`
 to check texture-read bounds as well.
@@ -116,7 +124,8 @@ to check texture-read bounds as well.
 
 The core lists two games on the Pocket, Undertale and Deltarune. They are
 the same code built twice (`GAME=deltarune` enables the newer bytecode
-version), and the SD tree is assembled from every game built so far:
+version and compiles `platform/game_deltarune.c` in place of
+`platform/game_undertale.c`), and the SD tree is assembled from every game built so far:
 
 ```bash
 tools/deltarune-setup.sh "<...>/DELTARUNE.app/Contents/Resources" 1   # links your files into games/deltarune/
@@ -137,11 +146,11 @@ Two things differ from Undertale. The music folder is shared by all
 chapters, so the setup script links only the `.ogg` files the chapter's
 data file names. And the game reads its text from `lang_en.json`, which
 has no data slot to live in, so it is stored in `music.bin` and the file
-layer reads it from there (`utAudioReadPackFile`).
+layer reads it from there (`ofAudioReadPackFile`).
 
 `--bench` works for Deltarune too, and `make compare` adds its benchmark
 entries to the card (`tools/mkcompare.sh` names them; the route they play is
-in `platform/ut_bench.c`).
+in `platform/of_bench.c`).
 
 What the software renderer does for Deltarune's rooms and screens (tile
 layers, stacks of mirrored translucent layers, the battle background) is
@@ -166,7 +175,7 @@ when the game is running behind (see Frame skipping).
 
 Select opens the port's menu over the paused game, drawn in the game's own
 font (the first of `fnt_main`, `fnt_maintext` and `fnt_small` the game has,
-copied out of its texture page the first time; see `platform/ut_font.c`).
+copied out of its texture page the first time; see `platform/of_font.c`).
 Up/Down choose a row and A or Left/Right change it. The debug settings are
 on a page of their own: A on "Debug" opens it and B goes back. B on the
 first page, or Select or Start on either, closes the menu. The sound stops
@@ -189,7 +198,7 @@ hardware gives a core no menu variables of its own.
 | Save log | writes the log to the spare save slot; leave through the Analogue menu to keep it |
 
 With the debug buttons on (or after starting with `--debug` in the OS
-config's `ARGS=`, or `UT_DEBUG=1` on desktop):
+config's `ARGS=`, or `BS_DEBUG=1` on desktop):
 
 - R toggles the log.
 - "Accuracy" or "Speed" stays in the top right corner, the way L's toggle
@@ -275,13 +284,13 @@ there than `fread`; a read is never left in flight, because the OS fails
 ordinary reads while one is. The comments in `platform/of_audio_system.c`
 have the sizes and the reasons.
 
-Desktop: `UT_AUDIO_DUMP=out.raw` captures the mixed output (48 kHz stereo
-s16le) and `UT_AUDIO_LOG=1` logs every effect, for checking without speakers.
+Desktop: `BS_AUDIO_DUMP=out.raw` captures the mixed output (48 kHz stereo
+s16le) and `BS_AUDIO_LOG=1` logs every effect, for checking without speakers.
 
 ## Saves
 
 Undertale keeps its progress in a few small files (`file0`, `file9`,
-`undertale.ini`, ...). `platform/ut_save_fs.c` stores them all as one small
+`undertale.ini`, ...). `platform/of_save_fs.c` stores them all as one small
 archive in the first save slot (`undertale_0.sav`). The Pocket writes save
 slots back to the SD card when the core is closed from its menu. The
 benchmark neither reads nor writes saves.
@@ -300,7 +309,7 @@ deliberately not part of the SD tree, so copying a build never touches saves.
 
 The game's on-screen key prompts ("[Z or ENTER]", "[C]", the instruction
 screen) are renamed to the Pocket's buttons in memory after loading; see
-`platform/ut_strings.c`. `data.win` itself is not modified.
+`platform/of_strings.c`. `data.win` itself is not modified.
 
 ## On-device diagnostics
 
@@ -317,7 +326,7 @@ first NUL byte (`strings`, or `tr -d '\0'`, reads it).
 route with scripted input and end by writing a report to the log: time per
 frame for each section of the route, then tables of where it went (game
 code, drawing by kind of call, sound, presenting) and the draw calls that
-cost the most. `platform/ut_bench.c` has the route and says what each
+cost the most. `platform/of_bench.c` has the route and says what each
 table's columns are. Quote numbers from a report together with the commit
 it was built from.
 
@@ -326,7 +335,7 @@ is prefixed with seconds since start, so load stages can be timed by eye.
 If the app exits or aborts it halts with the log visible instead of
 rebooting.
 
-A frame that takes much longer than it should (`UT_PERF_SLOW_FRAME_MS`)
+A frame that takes much longer than it should (`OF_PERF_SLOW_FRAME_MS`)
 logs three lines, kept short enough to fit the log overlay:
 
 ```

@@ -1,6 +1,6 @@
 ---
-name: undertale-pocket-perf
-description: Measure and diagnose performance of the Undertale port on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
+name: butterscotch-pocket-perf
+description: Measure and diagnose performance of the Butterscotch port (Undertale and Deltarune) on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
 argument-hint: "[card: SD mount path] [harness: path or host:path of the os25 harness, if any]"
 ---
 
@@ -38,7 +38,7 @@ where a section's time goes.
 
 L switches between two settings, and the core starts in **speed** (the
 desktop build starts in accuracy, because frame comparisons are made against
-what the game asks for; `UT_SMOOTH=1` gives it speed). The user's rule,
+what the game asks for; `BS_SMOOTH=1` gives it speed). The user's rule,
 2026-10-09: accuracy is the target. A shortcut that changes the picture or
 drops frames belongs under speed only, and whenever an optimisation brings
 accuracy up to speed's frame rate in some domain, remove speed's shortcut
@@ -152,7 +152,7 @@ code against 1.27 MB) is 16 to 22% slower and unaligned code 2 to 4% slower.
 That does not settle whether fetching code from SDRAM is what holds the
 scripts back: `-Os` also inlines less, and neither build moved the hot code
 out of SDRAM. The direct test was the interpreter's loop (8.9 KB) in the
-app's 14 KB of uncached block RAM (`of_fastram.h`, `-DUT_FAST_LOOP`).
+app's 14 KB of uncached block RAM (`of_fastram.h`, `-DOF_FAST_LOOP`).
 *Measured:* 2 to 4% of an undrawn frame in every section (battle rows 46.7,
 47.2, 47.5 became 45.3, 46.2, 46.4). Kept as the default, but it shows the
 loop itself is not where a script operation's time goes; the desktop
@@ -246,7 +246,7 @@ screenshot is the screenshot), and the log overlay only shows the first 53 chara
 line, so anything longer is invisible on the device.
 
 **Script times** (the menu, or Select + X with the debug buttons on;
-`UT_PROFILE=n` on desktop).
+`BS_PROFILE=n` on desktop).
 The slow-frame line says "step 300"; this says which scripts the step
 went to. It is Butterscotch's GML profiler (`--profile-gml-scripts`),
 reported every 60 frames in a form that fits the log overlay:
@@ -278,7 +278,7 @@ When asking the user for it: go to the scene, Select, "Show script times in log"
 log comes up with it), close the menu, wait a few seconds, screenshot.
 
 **Opcode ranking** (desktop only: `make ops`, then run `undertale_pc_ops`
-with `UT_EXIT_FRAME=n`, usually with `UT_PLAYBACK` or `UT_SCRIPT`). Prints
+with `BS_EXIT_FRAME=n`, usually with `BS_PLAYBACK` or `BS_SCRIPT`). Prints
 how often each bytecode instruction ran, split by operand types, when it
 leaves the main loop. Counts are the same as on the device. Use it before
 hand-tuning the interpreter, to see which instruction and type
@@ -306,7 +306,7 @@ so ask which build a screenshot came from if it matters, and remember the
 user may be one build behind what you last produced.
 
 Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
-(320x240, point sampled). Edit `platform/ut_bench.c` to add a measurement;
+(320x240, point sampled). Edit `platform/of_bench.c` to add a measurement;
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
@@ -342,11 +342,11 @@ marks a mode switch. `Audio: playing NAME` marks a streamed track.
 ## Working through a report from the user
 
 1. Reproduce the scene on desktop if you can (see the
-   undertale-pocket-verify skill) and read the log for texture loads,
+   butterscotch-pocket-verify skill) and read the log for texture loads,
    room changes and mode switches around the moment they describe. A
    freeze that lines up with `Loaded TXTR page` is a page load.
 2. If the slow part is `step`, get script times for the scene: on desktop
-   for the ranking by instructions (`UT_PROFILE=60`), and from the user
+   for the ranking by instructions (`BS_PROFILE=60`), and from the user
    (Select + X) for real milliseconds.
 3. Profile the desktop build with `sample <pid> 5` while the scene runs.
    The game's own functions are a small share of samples next to the SDL
@@ -378,8 +378,8 @@ illegal instructions), so there is no cheaper clock. Consequences:
   and 33.5 us was the two clock reads timing it. A battle makes about 100
   draw calls a frame: 3 to 4 ms of timing, more with the mixing split.
 - Draw calls and mixing are therefore only timed "in detail"
-  (`utPerfDetail` / `swrDrawTimed`): every frame while an overlay or debug
-  mode is on, one frame in 8 during a benchmark (`UT_BENCH_DETAIL_EVERY`),
+  (`ofPerfDetail` / `swrDrawTimed`): every frame while an overlay or debug
+  mode is on, one frame in 8 during a benchmark (`OF_BENCH_DETAIL_EVERY`),
   never in plain play. The benchmark's spr/til/txt/bkg/rct columns, the
   mix/voices/write columns and the costliest-draws list are averages over
   the timed frames; frame times and step/draw/snd/out are of every frame.

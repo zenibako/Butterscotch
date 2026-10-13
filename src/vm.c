@@ -2901,11 +2901,11 @@ static void unwindVMStack(VMContext* ctx, int32_t newStackTop) {
     ctx->stack.top = newStackTop;
 }
 
-// UT_FAST_LOOP (openfpgaOS only): the interpreter's loop goes into the app's
+// OF_FAST_LOOP (openfpgaOS only): the interpreter's loop goes into the app's
 // 14 KB of zero-wait, uncached block RAM (of_fastram.h), not into SDRAM
 // behind the instruction cache. Measured on the Pocket at 2 to 4% of a frame
 // with the drawing left out, in every section; the loop is 8.9 KB.
-#if defined(UT_FAST_LOOP) && !defined(OF_PC)
+#if defined(OF_FAST_LOOP) && !defined(OF_PC)
 #include "of_fastram.h"
 OF_FASTTEXT
 #endif
@@ -2914,7 +2914,7 @@ static RValue executeLoop(VMContext* ctx) {
     // reload the values at the end of every iteration.
     const uint32_t codeEnd = ctx->codeEnd;
     const uint8_t* const bytecodeBase = ctx->bytecodeBase;
-#if defined(ENABLE_VM_GML_PROFILER) && defined(UT_FAST_LOOP)
+#if defined(ENABLE_VM_GML_PROFILER) && defined(OF_FAST_LOOP)
     // Pocket applies Script times toggles between frames. Its profiler stays alive
     // throughout this call, including nested scripts and audio service hooks.
     Profiler* const instructionProfiler = ctx->profiler;
@@ -2982,7 +2982,7 @@ static RValue executeLoop(VMContext* ctx) {
 #endif
 
 #ifdef ENABLE_VM_GML_PROFILER
-#ifndef UT_FAST_LOOP
+#ifndef OF_FAST_LOOP
         // Other platforms can change the profiler while the interpreter runs.
         Profiler* const instructionProfiler = ctx->profiler;
 #endif

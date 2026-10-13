@@ -1,5 +1,5 @@
 /*
- * The game's own font for the port's screens; see ut_font.h.
+ * The game's own font for the port's screens; see of_font.h.
  *
  * GameMaker keeps a font as one picture on a texture page plus, for each
  * character, where its glyph sits in that picture and how far to move on
@@ -11,10 +11,10 @@
  * (not sprite) font with a capital A. Undertale's fonts are drawn at 320x240;
  * Deltarune's are drawn at 640x480 with every pixel doubled, so a font whose
  * glyphs are all made of 2x2 blocks is copied at half size. Either way the
- * copy is at 320x240 size, and utFontScale doubles it for 640x480 frames.
+ * copy is at 320x240 size, and ofFontScale doubles it for 640x480 frames.
  */
 
-#include "ut_font.h"
+#include "of_font.h"
 
 #include "data_win.h"
 #include "log.h"
@@ -28,12 +28,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define UT_FONT_FIRST ' '
-#define UT_FONT_LAST  '~'
-#define UT_FONT_COUNT (UT_FONT_LAST - UT_FONT_FIRST + 1)
+#define OF_FONT_FIRST ' '
+#define OF_FONT_LAST  '~'
+#define OF_FONT_COUNT (OF_FONT_LAST - OF_FONT_FIRST + 1)
 /* A font taller than this at 320x240 would leave too few menu rows. */
-#define UT_FONT_MAX_HEIGHT 24
-#define UT_FONT_MIN_HEIGHT 6
+#define OF_FONT_MAX_HEIGHT 24
+#define OF_FONT_MIN_HEIGHT 6
 
 /* Undertale's and Deltarune's dialogue font comes first. */
 static const char *const g_fontNames[] = { "fnt_main", "fnt_maintext", "fnt_small" };
@@ -43,16 +43,16 @@ typedef struct {
     int8_t offset;  /* from the pen position to the glyph's left edge */
     int8_t shift;   /* how far the pen moves on */
     uint32_t start; /* first pixel in g_ink */
-} UtGlyph;
+} OfGlyph;
 
 static Runner *g_runner = NULL;
 static bool g_ready = false;    /* glyphs copied */
 static bool g_gaveUp = false;   /* the game has no font that fits: use the log font */
-static UtGlyph g_glyphs[UT_FONT_COUNT];
+static OfGlyph g_glyphs[OF_FONT_COUNT];
 static uint8_t *g_ink = NULL;   /* 1 where a glyph pixel is drawn */
 static int g_lineHeight = 0;
 
-void utFontSetRunner(Runner *runner) {
+void ofFontSetRunner(Runner *runner) {
     g_runner = runner;
 }
 
@@ -86,7 +86,7 @@ static bool inkAt(const SWTexture *texture, int pageX, int pageY) {
  * its pixels doubled. */
 static bool doubledPixels(const Font *font, const TexturePageItem *tpag, const SWTexture *texture) {
     bool anyInk = false;
-    for (int c = UT_FONT_FIRST; c <= UT_FONT_LAST; c++) {
+    for (int c = OF_FONT_FIRST; c <= OF_FONT_LAST; c++) {
         const FontGlyph *glyph = TextUtils_findGlyph((Font *) font, (uint16_t) c);
         if (glyph == NULL) continue;
         int left = tpag->sourceX + glyph->sourceX, top = tpag->sourceY + glyph->sourceY;
@@ -118,14 +118,14 @@ static bool copyGlyphs(void) {
 
     int step = doubledPixels(font, tpag, texture) ? 2 : 1;
     int lineHeight = (int) font->maxGlyphHeight / step;
-    if (lineHeight < UT_FONT_MIN_HEIGHT || lineHeight > UT_FONT_MAX_HEIGHT) {
+    if (lineHeight < OF_FONT_MIN_HEIGHT || lineHeight > OF_FONT_MAX_HEIGHT) {
         logInfo("Font: %s is %d px high; the port's screens use the log font\n", font->name, lineHeight);
         g_gaveUp = true;
         return false;
     }
 
     size_t total = 0;
-    for (int c = UT_FONT_FIRST; c <= UT_FONT_LAST; c++) {
+    for (int c = OF_FONT_FIRST; c <= OF_FONT_LAST; c++) {
         const FontGlyph *glyph = TextUtils_findGlyph(font, (uint16_t) c);
         if (glyph != NULL) total += (size_t) (glyph->sourceWidth / step) * (size_t) (glyph->sourceHeight / step);
     }
@@ -134,8 +134,8 @@ static bool copyGlyphs(void) {
 
     uint32_t at = 0;
     const FontGlyph *space = TextUtils_findGlyph(font, ' ');
-    for (int c = UT_FONT_FIRST; c <= UT_FONT_LAST; c++) {
-        UtGlyph *out = &g_glyphs[c - UT_FONT_FIRST];
+    for (int c = OF_FONT_FIRST; c <= OF_FONT_LAST; c++) {
+        OfGlyph *out = &g_glyphs[c - OF_FONT_FIRST];
         const FontGlyph *glyph = TextUtils_findGlyph(font, (uint16_t) c);
         if (glyph == NULL) glyph = TextUtils_findGlyph(font, '?');
         if (glyph == NULL) {
@@ -167,31 +167,31 @@ static bool ready(void) {
     return copyGlyphs();
 }
 
-int utFontScale(int frameWidth) {
+int ofFontScale(int frameWidth) {
     return frameWidth >= 640 ? 2 : 1;
 }
 
-int utFontLineHeight(int scale) {
-    return ready() ? g_lineHeight * scale : UT_LOG_CELL_H;
+int ofFontLineHeight(int scale) {
+    return ready() ? g_lineHeight * scale : OF_LOG_CELL_H;
 }
 
-int utFontWidth(const char *text, int scale) {
-    if (!ready()) return (int) strlen(text) * UT_LOG_CELL_W;
+int ofFontWidth(const char *text, int scale) {
+    if (!ready()) return (int) strlen(text) * OF_LOG_CELL_W;
     int width = 0;
     for (const char *p = text; *p != '\0'; p++) {
         int c = (unsigned char) *p;
-        if (c < UT_FONT_FIRST || c > UT_FONT_LAST) c = '?';
-        width += g_glyphs[c - UT_FONT_FIRST].shift * scale;
+        if (c < OF_FONT_FIRST || c > OF_FONT_LAST) c = '?';
+        width += g_glyphs[c - OF_FONT_FIRST].shift * scale;
     }
     return width;
 }
 
-int utFontDraw(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color, int scale) {
-    if (!ready()) return utPerfDrawLogText(fb, width, height, x, y, text, color);
+int ofFontDraw(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color, int scale) {
+    if (!ready()) return ofPerfDrawLogText(fb, width, height, x, y, text, color);
     for (const char *p = text; *p != '\0'; p++) {
         int c = (unsigned char) *p;
-        if (c < UT_FONT_FIRST || c > UT_FONT_LAST) c = '?';
-        const UtGlyph *glyph = &g_glyphs[c - UT_FONT_FIRST];
+        if (c < OF_FONT_FIRST || c > OF_FONT_LAST) c = '?';
+        const OfGlyph *glyph = &g_glyphs[c - OF_FONT_FIRST];
         const uint8_t *ink = g_ink + glyph->start;
         int left = x + glyph->offset * scale;
         for (int gy = 0; gy < glyph->h; gy++) {

@@ -1,5 +1,6 @@
 /*
- * undertale — Butterscotch (GameMaker: Studio runner) on openfpgaOS
+ * Butterscotch (GameMaker: Studio runner) on openfpgaOS, one program per
+ * game (GAME=undertale or GAME=deltarune; see the Makefile)
  *
  * Build: make
  * Copy:  make copy
@@ -10,7 +11,7 @@
 
 #include "loop.h"
 #include "platform/of_diag.h"
-#include "platform/ut_bench.h"
+#include "platform/of_bench.h"
 #include "platform/of_hooks.h"
 #include "stb_ds.h"
 
@@ -28,30 +29,56 @@ extern int swrMirrorFaintAlpha;
  * data.win, slot 5 the optional texture pack built from it, slot 6 the
  * optional music pack. */
 /* The Makefile names the game being built (GAME=...). */
-#ifndef UT_GAME_NAME
-#define UT_GAME_NAME "undertale"
+#ifndef OF_GAME_NAME
+#error "OF_GAME_NAME is not set; build with the Makefile (GAME=undertale or GAME=deltarune)"
 #endif
 
-#define UT_SLOT_DATA_WIN 4
-#define UT_DATA_WIN_NAME "data.win"
-#define UT_SLOT_TEXTURES 5
-#define UT_TEXTURES_NAME "textures.bin"
-#define UT_SLOT_MUSIC 6
-#define UT_MUSIC_NAME "music.bin"
+#define OF_SLOT_DATA_WIN 4
+#define OF_DATA_WIN_NAME "data.win"
+#define OF_SLOT_TEXTURES 5
+#define OF_TEXTURES_NAME "textures.bin"
+#define OF_SLOT_MUSIC 6
+#define OF_MUSIC_NAME "music.bin"
 
 #ifdef OF_PC
 /* In loop.c, which has no header for it: writes the input recording out. */
 void saveInputRecording(void);
+
+extern char **environ;
+
+/* The desktop settings were UT_* until 2026-10-13 and are BS_* now. An old
+ * name still works, unless the new one is set too, and is pointed out.
+ * (rename-ut: keep) */
+static void adoptOldSettings(void) {
+    /* Gathered first: setenv may move environ while it is being walked. */
+    const char *old[64];
+    int count = 0;
+    for (char **env = environ; env != NULL && *env != NULL && count < 64; env++)
+        if (strncmp(*env, "UT_", 3) == 0) old[count++] = *env;
+
+    char name[64];
+    for (int i = 0; i < count; i++) {
+        const char *equals = strchr(old[i], '=');
+        size_t length = equals != NULL ? (size_t) (equals - old[i]) : 0;
+        if (length < 4 || length >= sizeof(name)) continue;
+        snprintf(name, sizeof(name), "BS_%.*s", (int) (length - 3), old[i] + 3);
+        if (getenv(name) != NULL) continue;
+        printf("[butterscotch] %.*s is now %s\n", (int) length, old[i], name);
+        setenv(name, equals + 1, 0);
+    }
+}
 #endif
 
 int main(int argc, char **argv) {
-#ifndef OF_PC
-    of_file_slot_register(UT_SLOT_DATA_WIN, UT_DATA_WIN_NAME);
-    of_file_slot_register(UT_SLOT_TEXTURES, UT_TEXTURES_NAME);
-    of_file_slot_register(UT_SLOT_MUSIC, UT_MUSIC_NAME);
+#ifdef OF_PC
+    adoptOldSettings();
+#else
+    of_file_slot_register(OF_SLOT_DATA_WIN, OF_DATA_WIN_NAME);
+    of_file_slot_register(OF_SLOT_TEXTURES, OF_TEXTURES_NAME);
+    of_file_slot_register(OF_SLOT_MUSIC, OF_MUSIC_NAME);
 #endif
-    utDiagInstall();
-    utDiagCheckFile(UT_DATA_WIN_NAME);
+    ofDiagInstall();
+    ofDiagCheckFile(OF_DATA_WIN_NAME);
 
     CommandLineArgs args = {0};
     args.exitAtFrame = -1;
@@ -63,7 +90,7 @@ int main(int argc, char **argv) {
     args.lazyTextures = true;
     args.lazyAudio = true;
     args.renderer = SOFTWARE;
-    args.dataWinPath = UT_DATA_WIN_NAME;
+    args.dataWinPath = OF_DATA_WIN_NAME;
     for (int i = 0; i < argc; i++) {
         /* --bench measures accuracy mode and --bench-smooth speed mode,
          * whichever the player would start in. --bench-lowres keeps every
@@ -74,68 +101,68 @@ int main(int argc, char **argv) {
         if (lowres || smooth || strcmp(argv[i], "--bench") == 0) {
             args.seed = 7;
             args.hasSeed = true;
-            utPlatformSetSmoothLowres(smooth);
-            if (lowres) utPlatformSetHiresAllowed(false);
-            utBenchStart();
+            ofPlatformSetSmoothLowres(smooth);
+            if (lowres) ofPlatformSetHiresAllowed(false);
+            ofBenchStart();
         }
-        if (strcmp(argv[i], "--debug") == 0) utPlatformSetDebugMode(true);
-        if (strcmp(argv[i], "--mute") == 0) utAudioSetMode(UT_AUDIO_DISABLED); /* as the menu's audio mode, or Select + Down in debug mode */
-        /* Game-script times in the log every 150 frames (see utPerfScriptReport): which scripts a section's
+        if (strcmp(argv[i], "--debug") == 0) ofPlatformSetDebugMode(true);
+        if (strcmp(argv[i], "--mute") == 0) ofAudioSetMode(OF_AUDIO_DISABLED); /* as the menu's audio mode, or Select + Down in debug mode */
+        /* Game-script times in the log every 150 frames (see ofPerfScriptReport): which scripts a section's
          * "step" and unexplained "draw" time are. Timing every script call slows the run, so a benchmark
          * with this on is for the names, not for its totals. */
-        if (strcmp(argv[i], "--scripts") == 0) utPlatformSetScriptProfile(150);
+        if (strcmp(argv[i], "--scripts") == 0) ofPlatformSetScriptProfile(150);
         /* --draw-every <n>: only every nth frame is drawn, the rest skipped as speed mode skips them. With a
          * benchmark and a large n this times everything but the drawing: what a skipped frame costs. */
-        if (strcmp(argv[i], "--draw-every") == 0 && i + 1 < argc) utPlatformSetForcedSkip(atoi(argv[++i]));
+        if (strcmp(argv[i], "--draw-every") == 0 && i + 1 < argc) ofPlatformSetForcedSkip(atoi(argv[++i]));
     }
 
 #ifdef OF_PC
-    if (getenv("UT_SCRIPT") != NULL) utPlatformSetInputScript(getenv("UT_SCRIPT"));
-    if (getenv("UT_UNCAPPED") != NULL) utPlatformSetUncapped(true);
-    if (getenv("UT_SMOOTH") != NULL) utPlatformSetSmoothLowres(true);
-    /* UT_NO_MIRROR=1 draws mirrored layers the ordinary way; UT_MIRROR_FAINT=<alpha of 256> sets how faint
+    if (getenv("BS_SCRIPT") != NULL) ofPlatformSetInputScript(getenv("BS_SCRIPT"));
+    if (getenv("BS_UNCAPPED") != NULL) ofPlatformSetUncapped(true);
+    if (getenv("BS_SMOOTH") != NULL) ofPlatformSetSmoothLowres(true);
+    /* BS_NO_MIRROR=1 draws mirrored layers the ordinary way; BS_MIRROR_FAINT=<alpha of 256> sets how faint
      * a mirrored layer has to be to be left out (4 leaves none out). For comparing frames. */
-    if (getenv("UT_NO_MIRROR") != NULL) swrMirrorMerge = false;
-    if (getenv("UT_NO_TILELAYER") != NULL) swrTileLayerFast = false;
-    if (getenv("UT_MIRROR_FAINT") != NULL) utPlatformSetMirrorFaint(atoi(getenv("UT_MIRROR_FAINT")));
-    /* UT_SKIP=<n> draws only every nth frame, to check that a skipped frame leaves the game where a drawn
+    if (getenv("BS_NO_MIRROR") != NULL) swrMirrorMerge = false;
+    if (getenv("BS_NO_TILELAYER") != NULL) swrTileLayerFast = false;
+    if (getenv("BS_MIRROR_FAINT") != NULL) ofPlatformSetMirrorFaint(atoi(getenv("BS_MIRROR_FAINT")));
+    /* BS_SKIP=<n> draws only every nth frame, to check that a skipped frame leaves the game where a drawn
      * one would. */
-    if (getenv("UT_SKIP") != NULL) utPlatformSetForcedSkip(atoi(getenv("UT_SKIP")));
-    if (getenv("UT_DEBUG") != NULL) utPlatformSetDebugMode(true);
-    /* UT_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report the menu's script times give
+    if (getenv("BS_SKIP") != NULL) ofPlatformSetForcedSkip(atoi(getenv("BS_SKIP")));
+    if (getenv("BS_DEBUG") != NULL) ofPlatformSetDebugMode(true);
+    /* BS_PROFILE=<frames> logs the heaviest game scripts every that many frames (the report the menu's script times give
      * on the device). */
-    if (getenv("UT_PROFILE") != NULL) utPlatformSetScriptProfile(atoi(getenv("UT_PROFILE")));
+    if (getenv("BS_PROFILE") != NULL) ofPlatformSetScriptProfile(atoi(getenv("BS_PROFILE")));
 #ifdef ENABLE_VM_OPCODE_PROFILER
     /* `make ops` builds with this: the ranking of bytecode instructions executed, printed on the way out. */
     args.opcodeProfiler = true;
 #endif
-    /* UT_RECORD=<file> writes every key press and release, by frame, when the run ends; UT_PLAYBACK=<file>
+    /* BS_RECORD=<file> writes every key press and release, by frame, when the run ends; BS_PLAYBACK=<file>
      * replays one. Both together replay and then go on recording, to extend a recording. */
-    args.recordInputsPath = getenv("UT_RECORD");
-    args.playbackInputsPath = getenv("UT_PLAYBACK");
+    args.recordInputsPath = getenv("BS_RECORD");
+    args.playbackInputsPath = getenv("BS_PLAYBACK");
     if (args.recordInputsPath != NULL) atexit(saveInputRecording);
-    /* UT_EXIT_FRAME=<n> leaves the main loop at that frame, the ordinary way out: the opcode ranking of
+    /* BS_EXIT_FRAME=<n> leaves the main loop at that frame, the ordinary way out: the opcode ranking of
      * `make ops` is only printed on that path (a frame dump exits on the spot). */
-    if (getenv("UT_EXIT_FRAME") != NULL) args.exitAtFrame = atoi(getenv("UT_EXIT_FRAME"));
-    /* UT_DUMP_STATE=<frame> prints every instance and its variables at that
-     * frame; UT_DISASM=<code entry name, or *> prints its bytecode at start. */
-    if (getenv("UT_DUMP_STATE") != NULL) {
-        int frame = atoi(getenv("UT_DUMP_STATE"));
+    if (getenv("BS_EXIT_FRAME") != NULL) args.exitAtFrame = atoi(getenv("BS_EXIT_FRAME"));
+    /* BS_DUMP_STATE=<frame> prints every instance and its variables at that
+     * frame; BS_DISASM=<code entry name, or *> prints its bytecode at start. */
+    if (getenv("BS_DUMP_STATE") != NULL) {
+        int frame = atoi(getenv("BS_DUMP_STATE"));
         hmput(args.dumpFrames, frame, true);
     }
-    if (getenv("UT_DISASM") != NULL) shput(args.disassemble, getenv("UT_DISASM"), true);
-    /* UT_SEED=<n> fixes the game's RNG so desktop runs are repeatable. */
-    const char *seed = getenv("UT_SEED");
+    if (getenv("BS_DISASM") != NULL) shput(args.disassemble, getenv("BS_DISASM"), true);
+    /* BS_SEED=<n> fixes the game's RNG so desktop runs are repeatable. */
+    const char *seed = getenv("BS_SEED");
     if (seed != NULL) {
         args.seed = atoi(seed);
         args.hasSeed = true;
     }
 #endif
-#ifdef UT_TRACE_FRAMES
+#ifdef OF_TRACE_FRAMES
     args.traceFrames = true;
 #endif
 
-    int ret = loop(args, UT_GAME_NAME);
+    int ret = loop(args, OF_GAME_NAME);
     freeCommandLineArgs(&args);
     return ret;
 }

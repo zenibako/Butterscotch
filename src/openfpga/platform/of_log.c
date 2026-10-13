@@ -7,7 +7,7 @@
 #include "gettime.h"
 #include "of_hooks.h"
 #include "of_perf.h"
-#include "ut_save_format.h"
+#include "of_save_format.h"
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -16,7 +16,7 @@
 #include <string.h>
 
 /* The last few lines, kept for the on-screen log overlay. */
-static char g_lines[UT_LOG_LINES][UT_LOG_LINE_LEN];
+static char g_lines[OF_LOG_LINES][OF_LOG_LINE_LEN];
 static int g_lineHead = 0; /* line currently being written */
 static int g_linePos = 0;
 
@@ -25,31 +25,31 @@ static int g_linePos = 0;
  * platform turns it off after the first frame. The overlay buffer is kept. */
 static bool g_console = true;
 
-void utLogSetConsole(bool enabled) {
+void ofLogSetConsole(bool enabled) {
     g_console = enabled;
 }
 
 /* The Makefile names these after the game being built. */
-#ifndef UT_GAME_NAME
-#define UT_GAME_NAME "undertale"
+#ifndef OF_GAME_NAME
+#error "OF_GAME_NAME is not set; build with the Makefile (GAME=undertale or GAME=deltarune)"
 #endif
-#ifndef UT_LOG_SLOT_FILE
-#define UT_LOG_SLOT_FILE "undertale_1.sav"
+#ifndef OF_LOG_SLOT_FILE
+#error "OF_LOG_SLOT_FILE is not set; build with the Makefile"
 #endif
 
-/* Everything logged since start, for utLogDump. When it fills up, the older
+/* Everything logged since start, for ofLogDump. When it fills up, the older
  * half goes and a line says so. */
-#define UT_LOG_HISTORY (160u * 1024u)
-static char g_history[UT_LOG_HISTORY];
+#define OF_LOG_HISTORY (160u * 1024u)
+static char g_history[OF_LOG_HISTORY];
 static uint32_t g_historyLen = 0;
 static bool g_historyCut = false;
 
 static void keepHistory(const char *text) {
     size_t len = strlen(text);
-    if (len >= UT_LOG_HISTORY / 2) return;
-    if (g_historyLen + len > UT_LOG_HISTORY) {
+    if (len >= OF_LOG_HISTORY / 2) return;
+    if (g_historyLen + len > OF_LOG_HISTORY) {
         /* Drop the older half, from the start of a line. */
-        uint32_t from = UT_LOG_HISTORY / 2;
+        uint32_t from = OF_LOG_HISTORY / 2;
         while (from < g_historyLen && g_history[from - 1] != '\n') from++;
         memmove(g_history, g_history + from, g_historyLen - from);
         g_historyLen -= from;
@@ -71,24 +71,24 @@ static void keepHistory(const char *text) {
  * then as much of the file's end as fits. Each run's own log starts with a
  * "Butterscotch log" line.
  * Returns false if the file could not be written. */
-#define UT_LOG_REPORTS (24u * 1024u)
-#define UT_LOG_EARLIER (48u * 1024u)
-#define UT_LOG_HEADER "Butterscotch log, " UT_GAME_NAME "\n"
+#define OF_LOG_REPORTS (24u * 1024u)
+#define OF_LOG_EARLIER (48u * 1024u)
+#define OF_LOG_HEADER "Butterscotch log, " OF_GAME_NAME "\n"
 
-bool utLogDump(void) {
+bool ofLogDump(void) {
     /* Read the earlier runs once; later dumps in this run replace only this run's part. */
     static char *earlier = NULL;
     static uint32_t earlierLen = 0;
     static bool earlierRead = false;
     if (!earlierRead) {
         earlierRead = true;
-        FILE *old = fopen(UT_LOG_SLOT_FILE, "rb");
-        char *text = old != NULL ? malloc(UT_SAVE_SLOT_BYTES) : NULL;
+        FILE *old = fopen(OF_LOG_SLOT_FILE, "rb");
+        char *text = old != NULL ? malloc(OF_SAVE_SLOT_BYTES) : NULL;
         if (text != NULL) {
             /* In pieces: one read for more than the slot holds came back empty on the device. */
             size_t got = 0;
-            while (got < UT_SAVE_SLOT_BYTES - 1) {
-                size_t want = UT_SAVE_SLOT_BYTES - 1 - got;
+            while (got < OF_SAVE_SLOT_BYTES - 1) {
+                size_t want = OF_SAVE_SLOT_BYTES - 1 - got;
                 size_t piece = fread(text + got, 1, want < 4096 ? want : 4096, old);
                 if (piece == 0) break;
                 got += piece;
@@ -99,7 +99,7 @@ bool utLogDump(void) {
             if (len > 0 && strncmp(text, "Butterscotch log, ", 18) == 0) {
                 /* Kept: every benchmark report in the file, whole (a run's log is half the slot, so only
                  * the last one or two would survive otherwise), then as much of the file's end as fits. */
-                char *kept = malloc(UT_LOG_REPORTS + UT_LOG_EARLIER + 64);
+                char *kept = malloc(OF_LOG_REPORTS + OF_LOG_EARLIER + 64);
                 size_t keptLen = 0;
                 if (kept != NULL) {
                     for (char *at = text; (at = strstr(at, "=== ")) != NULL; at += 4) {
@@ -113,19 +113,19 @@ bool utLogDump(void) {
                         bool seen = false;
                         for (size_t k = 0; k + blockLen <= keptLen && !seen; k++)
                             seen = memcmp(kept + k, at, blockLen) == 0;
-                        if (seen || blockLen > UT_LOG_REPORTS) continue;
-                        if (keptLen + blockLen > UT_LOG_REPORTS) { /* drop the oldest half to make room */
+                        if (seen || blockLen > OF_LOG_REPORTS) continue;
+                        if (keptLen + blockLen > OF_LOG_REPORTS) { /* drop the oldest half to make room */
                             size_t drop = keptLen / 2;
                             while (drop < keptLen && kept[drop - 1] != '\n') drop++;
                             memmove(kept, kept + drop, keptLen - drop);
                             keptLen -= drop;
-                            if (keptLen + blockLen > UT_LOG_REPORTS) keptLen = 0; /* still too big: keep only this one */
+                            if (keptLen + blockLen > OF_LOG_REPORTS) keptLen = 0; /* still too big: keep only this one */
                         }
                         memcpy(kept + keptLen, at, blockLen);
                         keptLen += blockLen;
                     }
                     if (keptLen > 0) kept[keptLen++] = '\n';
-                    size_t from = len > UT_LOG_EARLIER ? len - UT_LOG_EARLIER : 0;
+                    size_t from = len > OF_LOG_EARLIER ? len - OF_LOG_EARLIER : 0;
                     while (from > 0 && from < len && text[from - 1] != '\n') from++;
                     memcpy(kept + keptLen, text + from, len - from);
                     keptLen += len - from;
@@ -138,17 +138,17 @@ bool utLogDump(void) {
         if (old != NULL) fclose(old);
     }
 
-    FILE *file = fopen(UT_LOG_SLOT_FILE, "wb");
+    FILE *file = fopen(OF_LOG_SLOT_FILE, "wb");
     if (file == NULL) return false;
     static const char cut[] = "(the start of this run's log no longer fitted and was dropped)\n";
     /* The file always starts with this line: it is how the next run knows the slot holds a log. */
-    bool ok = fputs("Butterscotch log, file for " UT_GAME_NAME ": reports from earlier runs, the end of the last log, then this run\n\n", file) >= 0;
+    bool ok = fputs("Butterscotch log, file for " OF_GAME_NAME ": reports from earlier runs, the end of the last log, then this run\n\n", file) >= 0;
     if (earlier != NULL) {
         ok = fwrite(earlier, 1, earlierLen, file) == earlierLen;
         if (earlierLen > 0 && earlier[earlierLen - 1] != '\n') ok = ok && fputc('\n', file) != EOF;
         ok = ok && fputs("\n", file) >= 0;
     }
-    ok = ok && fputs(UT_LOG_HEADER, file) >= 0;
+    ok = ok && fputs(OF_LOG_HEADER, file) >= 0;
     if (g_historyCut) ok = ok && fputs(cut, file) >= 0;
     ok = ok && fwrite(g_history, 1, g_historyLen, file) == g_historyLen;
     /* Text ends here; whatever the slot held beyond this is cut off by the NUL for a reader that stops at one. */
@@ -160,39 +160,39 @@ static void keepText(const char *text) {
     keepHistory(text);
     for (; *text != '\0'; text++) {
         if (*text == '\n') {
-            g_lineHead = (g_lineHead + 1) % UT_LOG_LINES;
+            g_lineHead = (g_lineHead + 1) % OF_LOG_LINES;
             g_linePos = 0;
             g_lines[g_lineHead][0] = '\0';
-        } else if (g_linePos < UT_LOG_LINE_LEN - 1) {
+        } else if (g_linePos < OF_LOG_LINE_LEN - 1) {
             g_lines[g_lineHead][g_linePos++] = *text;
             g_lines[g_lineHead][g_linePos] = '\0';
         }
     }
 }
 
-const char *utLogLine(int age) {
-    if (age < 0 || age >= UT_LOG_LINES - 1) return "";
+const char *ofLogLine(int age) {
+    if (age < 0 || age >= OF_LOG_LINES - 1) return "";
     /* The head line is still being written; age 0 is the last complete one. */
-    return g_lines[(g_lineHead - 1 - age + 2 * UT_LOG_LINES) % UT_LOG_LINES];
+    return g_lines[(g_lineHead - 1 - age + 2 * OF_LOG_LINES) % OF_LOG_LINES];
 }
 
 /* Load breakdown: DATAWIN_LOG_CHUNKS makes the loader log "DataWin: NAME, ..."
  * as it starts each chunk. Time between consecutive lines is the time spent
  * on the earlier chunk; the slowest few are kept so the benchmark report can
  * show where loading time goes after the boot log has scrolled away. */
-#define UT_LOAD_TOP 4
+#define OF_LOAD_TOP 4
 static char g_chunkName[5];
 static uint64_t g_chunkStart = 0;
-static struct { char name[5]; unsigned ms; } g_slowest[UT_LOAD_TOP];
-static char g_loadSummary[UT_LOG_LINE_LEN];
-static char g_loadPhases[UT_LOG_LINE_LEN];
+static struct { char name[5]; unsigned ms; } g_slowest[OF_LOAD_TOP];
+static char g_loadSummary[OF_LOG_LINE_LEN];
+static char g_loadPhases[OF_LOG_LINE_LEN];
 
 static void finishChunk(uint64_t now) {
     if (g_chunkStart == 0) return;
     unsigned ms = (unsigned) ((now - g_chunkStart) / 1000000u);
-    for (int i = 0; i < UT_LOAD_TOP; i++) {
+    for (int i = 0; i < OF_LOAD_TOP; i++) {
         if (ms <= g_slowest[i].ms) continue;
-        for (int j = UT_LOAD_TOP - 1; j > i; j--) g_slowest[j] = g_slowest[j - 1];
+        for (int j = OF_LOAD_TOP - 1; j > i; j--) g_slowest[j] = g_slowest[j - 1];
         memcpy(g_slowest[i].name, g_chunkName, sizeof(g_chunkName));
         g_slowest[i].ms = ms;
         break;
@@ -203,7 +203,7 @@ static void finishChunk(uint64_t now) {
 /* Room and texture loads announce themselves in the log; their time goes
  * into the slow-frame report (see of_perf.h). The host tools share this file
  * but have no frames to report on. */
-#ifdef UT_HOST_TOOL
+#ifdef OF_HOST_TOOL
 static void trackFrameLoads(const char *format, const char *text, uint64_t now) {
     (void) format; (void) text; (void) now;
 }
@@ -212,13 +212,13 @@ static void trackFrameLoads(const char *format, const char *text, uint64_t now) 
     static uint64_t roomStart = 0;
     if (strncmp(format, "Room changed:", 13) == 0) {
         roomStart = now;
-        utAudioRoomChange();
+        ofAudioRoomChange();
     } else if (strncmp(format, "Runner: Room loaded:", 20) == 0) {
-        if (roomStart != 0) utPerfAddLoad(UT_LOAD_ROOM, now - roomStart);
+        if (roomStart != 0) ofPerfAddLoad(OF_LOAD_ROOM, now - roomStart);
         roomStart = 0;
     } else if (strncmp(format, "SWR: Loaded TXTR", 16) == 0) {
         const char *took = strstr(text, " took ");
-        if (took != NULL) utPerfAddLoad(UT_LOAD_TEXTURE, strtoull(took + 6, NULL, 10) * 1000000u);
+        if (took != NULL) ofPerfAddLoad(OF_LOAD_TEXTURE, strtoull(took + 6, NULL, 10) * 1000000u);
     }
 }
 #endif
@@ -238,21 +238,21 @@ static void trackLoad(const char *format, const char *text, uint64_t now) {
     } else if (strncmp(format, "Loaded \"", 8) == 0 || strncmp(format, "Unknown chunk", 13) == 0) {
         finishChunk(now);
         int n = snprintf(g_loadSummary, sizeof(g_loadSummary), "slowest chunks:");
-        for (int i = 0; i < UT_LOAD_TOP && g_slowest[i].ms > 0; i++)
+        for (int i = 0; i < OF_LOAD_TOP && g_slowest[i].ms > 0; i++)
             n += snprintf(g_loadSummary + n, sizeof(g_loadSummary) - (size_t) n, " %s %u.%us", g_slowest[i].name,
                           g_slowest[i].ms / 1000, (g_slowest[i].ms % 1000) / 100);
     }
 }
 
-const char *utLogLoadSummary(void) {
+const char *ofLogLoadSummary(void) {
     return g_loadSummary;
 }
 
-const char *utLogLoadPhases(void) {
+const char *ofLogLoadPhases(void) {
     return g_loadPhases;
 }
 
-void utLogPrint(const char *format, ...) {
+void ofLogPrint(const char *format, ...) {
     char text[256];
     va_list va;
     va_start(va, format);
