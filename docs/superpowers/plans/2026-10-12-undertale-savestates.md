@@ -568,3 +568,13 @@ standard signed-16-bit bound to that shim. A fallback-header compilation
 fails before this definition and passes afterward; the native system header
 and checked-grid arithmetic are unchanged. The hosted MSVC rerun is still
 required to confirm its complete build.
+
+
+The next hosted run passed MSVC 4.0, GNU C++98 and GCC 3.0. GCC 2.95 uses
+its system stdint header, which hides the limit macro in C++ mode, so the
+fallback-header fix did not cover it. Checked-grid sizing now names its fixed
+signed-16-bit coordinate maximum directly instead of relying on that optional
+macro. A compilation fixture with INT16_MAX deliberately undefined fails
+before the change and passes in C99 and GNU C++98 afterward. Boundary checks
+cover the coordinate limit, 65536-cell limit, zero dimensions and uint32
+extremes; the accepted dimension bounds are unchanged.
