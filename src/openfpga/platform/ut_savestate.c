@@ -13,6 +13,7 @@
 #include <limits.h>
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
 #include "of_savestate.h"
+#include "of_timer.h"
 #endif
 
 static uint64_t g_gameId;
@@ -27,6 +28,9 @@ static void captureProgress(const char *stage) {
 }
 #if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
 static bool g_service;
+/* The HW-mixer runtime otherwise leaves the machine timer off. Its file
+ * watchdog needs the 1 kHz tick; the app callback itself has no work. */
+static void fileWatchdogTick(void) {}
 #endif
 
 void utSavestateStartup(void) {
@@ -34,6 +38,12 @@ void utSavestateStartup(void) {
     /* Mark support before the slow asset load, so a wake request survives the
      * OS pickup deadline. It remains pending until the completed first frame. */
     g_service = of_savestate_enable(UT_SNAPSHOT_LIMIT) == 0;
+    if (g_service) {
+        volatile const uint32_t *timerControl = (volatile const uint32_t *)(uintptr_t)0x400000b8u;
+        uint32_t before = *timerControl;
+        of_timer_set_callback(fileWatchdogTick, 1000);
+        logInfo("State file watchdog: control %x -> %x, 1 kHz\n", before, *timerControl);
+    }
 #endif
 }
 

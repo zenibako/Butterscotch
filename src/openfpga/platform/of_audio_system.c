@@ -278,12 +278,16 @@ static bool readDirect(OfAudioSystem *ut, uint32_t filePos, uint32_t want) {
              * this one as in flight. */
             uint64_t gaveUp = nowNanos();
             while (of_file_async_busy() == 1 && nowNanos() - gaveUp < OF_DIRECT_SETTLE_NANOS) of_file_async_poll();
+#ifdef OF_NATIVE_SAVESTATES
+            logWarn("Audio: direct read timed out; deferring streamed refill.\n");
+#else
             logWarn("Audio: a direct read timed out; using fread from here on.\n");
             ut->directStage = NULL;
+#endif
             return false;
         }
     }
-    return g_directResult >= 0;
+    return g_directDone && g_directResult >= 0;
 }
 
 static void openDirect(OfAudioSystem *ut) {
@@ -296,13 +300,21 @@ static void openDirect(OfAudioSystem *ut) {
 #endif
 
 /* Reads `want` bytes at `filePos` of the pack into `dest`; returns the count read. */
-static size_t readPack(OfAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint32_t want) {
+static size_t readPack(OfAudioSystem *ut, uint32_t filePos, uint8_t *dest, uint32_t want, bool optional) {
 #ifndef OF_PC
-    if (ut->directStage != NULL && readDirect(ut, filePos, want)) {
-        memcpy(dest, ut->directStage, want);
-        return want;
+    if (ut->directStage != NULL) {
+        if (readDirect(ut, filePos, want)) {
+            memcpy(dest, ut->directStage, want);
+            return want;
+        }
+#ifdef OF_NATIVE_SAVESTATES
+        /* Watchdog completion does not cancel the host transfer. Never
+         * replace a failed optional async read with another host command. */
+        if (optional) return 0;
+#endif
     }
 #endif
+    if (optional && ofSavestateDeferFileReads()) return 0;
     if (fseek(ut->file, (long) filePos, SEEK_SET) != 0) return 0;
     /* Read into static memory and copy: on openfpgaOS a read straight
      * into the heap (where the voices live) is about ten times slower. */
@@ -348,7 +360,7 @@ bool ofAudioReadPackFile(const char *path, uint8_t **outData, uint32_t *outSize)
     if (data == NULL) return false;
     for (uint32_t done = 0; done < size;) {
         uint32_t want = size - done < OF_READ_PIECE ? size - done : OF_READ_PIECE;
-        if (readPack(ut, track->offset + done, data + done, want) != want) {
+        if (readPack(ut, track->offset + done, data + done, want, false) != want) {
             free(data);
             return false;
         }
@@ -401,7 +413,7 @@ static void refillVoice(OfAudioSystem *ut, OfVoice *voice) {
         /* Anything that mixes from this voice meanwhile only touches bytes
          * below bufferLen, which is not advanced until after the read. */
         uint64_t readStart = nowNanos();
-        size_t got = readPack(ut, filePos, voice->data + voice->bufferLen, want);
+        size_t got = readPack(ut, filePos, voice->data + voice->bufferLen, want, true);
         ofPerfAddLoad(OF_LOAD_MUSIC, nowNanos() - readStart);
         if (got == 0) break;
         voice->bufferLen += (uint32_t) got;
