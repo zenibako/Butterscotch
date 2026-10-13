@@ -1,8 +1,8 @@
 /*
  * Save-slot file system for Butterscotch.
  *
- * Undertale keeps its progress in a handful of small files next to the game
- * (file0, file9, undertale.ini, system_information_96x). openfpgaOS has no
+ * A game keeps its progress in a handful of small files next to it (Undertale:
+ * file0, file9, undertale.ini, system_information_96x). openfpgaOS has no
  * writable directory; it has ten fixed 256 KB save slots, exposed as files
  * named in the instance JSON, which the Pocket writes back to the SD card
  * when the core is closed.
@@ -20,6 +20,11 @@
 #include "of_hooks.h"
 #include "of_bench.h"
 #include "of_save_format.h"
+
+/* The Makefile names it after the game being built. */
+#ifndef OF_SAVE_SLOT_FILE
+#error "OF_SAVE_SLOT_FILE is not set; build with the Makefile"
+#endif
 #include "utils.h"
 
 #include <stdio.h>

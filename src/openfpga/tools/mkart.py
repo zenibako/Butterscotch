@@ -2,9 +2,9 @@
 """
 mkart.py — draws the core's menu images for the Analogue Pocket.
 
-    mkart.py <dist/undertale directory> [preview directory]
+    mkart.py <dist directory> [preview directory]
 
-Writes Platforms/_images/undertale.bin (521x165, the banner shown in the
+Writes Platforms/_images/butterscotch.bin (521x165, the banner shown in the
 openFPGA menu) and Cores/<core>/icon.bin (36x36). With a preview directory
 it also writes PNGs of both as the Pocket shows them.
 
@@ -110,7 +110,7 @@ def main():
     if len(cores) != 1:
         sys.exit(f"mkart: expected one core under {dist / 'Cores'}")
 
-    images = {"banner": (banner(), dist / "Platforms/_images/undertale.bin"), "icon": (icon(), cores[0] / "icon.bin")}
+    images = {"banner": (banner(), dist / "Platforms/_images/butterscotch.bin"), "icon": (icon(), cores[0] / "icon.bin")}
     for name, (image, path) in images.items():
         write_bin(image, path)
         print(f"{path} ({image.width}x{image.height})")

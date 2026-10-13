@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-verify
-description: Verify changes to the Undertale Pocket port on the desktop build before the user spends an SD-card trip on them. Use this for any change to the renderer, loader, audio, saves, input or platform layer in src/openfpga — to check frames are pixel-identical, reproduce a scene the user describes, drive the game to a specific point with scripted input, capture audio, or produce a screenshot to show the user. Use it even when the change "obviously" can't affect output; a card trip costs the user several minutes and a desktop check costs seconds.
+description: Verify changes to the Butterscotch Pocket port (Undertale and Deltarune) on the desktop build before the user spends an SD-card trip on them. Use this for any change to the renderer, loader, audio, saves, input or platform layer in src/openfpga — to check frames are pixel-identical, reproduce a scene the user describes, drive the game to a specific point with scripted input, capture audio, or produce a screenshot to show the user. Use it even when the change "obviously" can't affect output; a card trip costs the user several minutes and a desktop check costs seconds.
 ---
 
 # Verifying on the desktop build
@@ -18,6 +18,8 @@ still untested on the device.
 
 ## The tools
 
+Desktop binaries open `data.win` in the current directory, so run them from
+`src/openfpga/games/<game>/` (`scripts/bs-frames.sh -g <game>` does this for you).
 Build with `make -C src/openfpga undertale_pc` (this never touches the
 SD-card tree). Then, from this skill's directory:
 
@@ -30,7 +32,7 @@ python3 scripts/ppmtool.py crop f2400.ppm text.png 380 120 240 120 3
 ```
 
 `bs-frames.sh` runs each frame from a clean save state with seed 7 and no
-frame pacing, in `$OF_RUN_DIR` (default `/tmp/undertale-pocket-run`), and
+frame pacing, in `$BS_RUN_DIR` (default `/tmp/butterscotch-pocket-run-<game>`), and
 leaves the last run's log in `<prefix>last.log`. Use the Read tool on a PNG
 to look at it.
 
@@ -143,7 +145,7 @@ make -C src/openfpga asan    # builds undertale_pc_asan (ASan + UBSan)
 
 Run `lint` after touching `main.c`, `platform/` or `tools/`. Run the frame
 scripts through `undertale_pc_asan` after changing anything that indexes
-memory (renderer, caches, audio buffers): it takes the same `UT_*`
+memory (renderer, caches, audio buffers): it takes the same `BS_*`
 variables and is a few times slower. On macOS it needs
 `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`, or SDL blocks on a dialog
 that only shows on the Mac's own screen; run it under a watchdog. Use

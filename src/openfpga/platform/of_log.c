@@ -31,10 +31,10 @@ void ofLogSetConsole(bool enabled) {
 
 /* The Makefile names these after the game being built. */
 #ifndef OF_GAME_NAME
-#define OF_GAME_NAME "undertale"
+#error "OF_GAME_NAME is not set; build with the Makefile (GAME=undertale or GAME=deltarune)"
 #endif
 #ifndef OF_LOG_SLOT_FILE
-#define OF_LOG_SLOT_FILE "undertale_1.sav"
+#error "OF_LOG_SLOT_FILE is not set; build with the Makefile"
 #endif
 
 /* Everything logged since start, for ofLogDump. When it fills up, the older

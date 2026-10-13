@@ -4,6 +4,7 @@
 
 #include "gettime.h"
 #include "of_diag.h"
+#include "of_game.h"
 #include "of_perf.h"
 #include "sw_call_notes.h"
 
@@ -12,95 +13,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct {
-    const char *name;
-    int lastFrame;
-    const char *tag; /* five letters at most, for the breakdown table */
-} OfBenchSection;
-
-#ifdef GAME_DELTARUNE
-#define OF_BENCH_TITLE "Deltarune ch. 1"
-
-/* The opening is played as it comes (left and confirm, which gets through the
- * first text and into the character creation screens). The town and the Dark
- * World are a long way into the game, so the run jumps to them: the party and
- * the dark-zone flag are set the frame before each jump. In the field the
- * walk to the right runs into the room's enemy, and confirm plays the battle
- * out. Room numbers and frame counts are for the chapter 1 data file. */
-#define OF_DR_YARD 2100
-#define OF_DR_FIELD 2600
-static const char g_script[] =
-    "150:L*4,160:Z,174:L*4,184:Z,198:L*4,208:Z,222:L*4,232:Z,246:L*4,256:Z,270:L*4,280:Z,294:L*4,304:Z,318:L*4,"
-    "328:Z,342:L*4,352:Z,366:L*4,376:Z,390:L*4,400:Z,414:L*4,424:Z,438:L*4,448:Z,462:L*4,472:Z,486:L*4,496:Z,"
-    "510:L*4,520:Z,534:L*4,544:Z,558:L*4,568:Z,582:L*4,592:Z,606:L*4,616:Z,630:L*4,640:Z,654:L*4,664:Z,678:L*4,"
-    "688:Z,702:L*4,712:Z,726:L*4,736:Z,750:L*4,760:Z,774:L*4,784:Z,798:L*4,808:Z,822:L*4,832:Z,846:L*4,856:Z,"
-    "870:L*4,880:Z,894:L*4,904:Z,918:L*4,928:Z,942:L*4,952:Z,966:L*4,976:Z,990:L*4,1000:Z,1014:L*4,1024:Z,1038:L*4,"
-    "1048:Z,1062:L*4,1072:Z,1086:L*4,1096:Z,1110:L*4,1120:Z,1134:L*4,1144:Z,1158:L*4,1168:Z,1182:L*4,1192:Z,"
-    "1206:L*4,1216:Z,1230:L*4,1240:Z,1254:L*4,1264:Z,1278:L*4,1288:Z,1302:L*4,1312:Z,1326:L*4,1336:Z,1350:L*4,"
-    "1360:Z,1374:L*4,1384:Z,1398:L*4,1408:Z,1422:L*4,1432:Z,1446:L*4,1456:Z,1470:L*4,1480:Z,1494:L*4,1504:Z,"
-    "1518:L*4,1528:Z,1542:L*4,1552:Z,1566:L*4,1576:Z,1590:L*4,1600:Z,1614:L*4,1624:Z,1638:L*4,1648:Z,1662:L*4,"
-    "1672:Z,1686:L*4,1696:Z,1710:L*4,1720:Z,1734:L*4,1744:Z,1758:L*4,1768:Z,1782:L*4,1792:Z,1806:L*4,1816:Z,"
-    "1830:L*4,1840:Z,1854:L*4,1864:Z,1878:L*4,1888:Z,1902:L*4,1912:Z,1926:L*4,1936:Z,1950:L*4,1960:Z,1974:L*4,"
-    "1984:Z,1998:L*4,2008:Z,2022:L*4,2032:Z,2046:L*4,2056:Z,2150:R*120,2290:D*60,2370:L*100,2490:U*60,2720:R*500,"
-    "3000:Z,3015:Z,3030:Z,3045:Z,3060:Z,3075:Z,3090:Z,3105:Z,3120:Z,3135:Z,3150:Z,3165:Z,3180:Z,3195:Z,3210:Z,"
-    "3225:Z,3240:Z,3255:Z,3270:Z,3285:Z,3300:Z,3315:Z,3330:Z,3345:Z,3360:Z,3375:Z,3390:Z,3405:Z,3420:Z,3435:Z,"
-    "3450:Z,3465:Z,3480:Z,3495:Z,3510:Z,3525:Z,3540:Z,3555:Z,3570:Z,3585:Z";
-
-static const OfJump g_jumps[] = {
-    { OF_DR_YARD - 1, -1, "plot=60,interact=0" }, /* past the scene that would otherwise start in the yard */
-    { OF_DR_YARD, 7, NULL },
-    { OF_DR_FIELD - 1, -1, "darkzone=1,char[1]=2,char[2]=3,plot=60,interact=0" },
-    { OF_DR_FIELD, 52, NULL },
-};
-
-static const OfBenchSection g_sections[] = {
-    { "opening text 320x240", 1700, "text" },
-    { "creation screens 320", 2100, "creat" },
-    { "town yard 320x240", 2600, "yard" },
-    { "field (640x480)", 3050, "field" },
-    /* The battle in three: choosing and attacking, the enemy's turn (the
-     * heart in its box among the bullets), and the turn after. */
-    { "battle: menu, attack", 3225, "bmenu" },
-    { "battle: dodging", 3380, "dodge" },
-    { "battle: next turn", 3600, "bnext" },
-};
-/* The audio pack is about 43 MB against Undertale's 134; the read tests use the same offsets, scaled. */
-#define OF_IO_MB(n) ((n) / 3u)
-#define OF_IO_ASYNC_MB(i) (35u + (i))
-#else
-#define OF_BENCH_TITLE "Undertale"
-
-/* Key presses that walk from boot to the first battle; see runInputScript()
- * in of_platform.c for the syntax. Frame numbers assume a fresh save state. */
-static const char g_script[] =
-    "30:Z,100:Z,160:Z,220:Z,230:D,238:D,246:D,254:D,262:D,270:D,278:D,286:D,300:R,308:R,330:Z,370:R,380:Z,700:R*400,1100:L*10,1120:U*400,1560:Z,1605:Z,1650:Z,1695:Z,1740:Z,1785:Z,1830:Z,1875:Z,1920:Z,1965:Z,2010:Z,2055:Z,2100:Z,2145:Z,2190:Z,2235:Z,2280:Z,2325:Z,2370:Z,2415:Z,2460:Z,2505:Z,2550:Z,2595:Z,2640:Z,2685:Z";
-
-/* Sections end on these frames; they follow the script above. */
-static const OfBenchSection g_sections[] = {
-    { "intro, menu, naming", 650, "intro" },
-    { "first room 320x240", 1220, "room" },
-    { "Flowey talk 320x240", 2060, "talk" },
-    { "Flowey battle (640x480)", 2600, "battl" },
-};
-#define OF_IO_MB(n) (n)
-#define OF_IO_ASYNC_MB(i) (110u + 2u * (i))
-#endif
-#define OF_BENCH_SECTIONS ((int) (sizeof(g_sections) / sizeof(g_sections[0])))
 
 static bool g_running = false;
 static int g_frame = 0;
 static int g_section = 0;
 static uint64_t g_startNanos = 0;
 static uint64_t g_sectionStart = 0;
-static unsigned g_sectionMs[OF_BENCH_SECTIONS];
+static unsigned g_sectionMs[OF_BENCH_MAX_SECTIONS];
 static uint64_t g_flipNanos = 0; /* time inside the display flip this section */
-static unsigned g_sectionFlipMs[OF_BENCH_SECTIONS];
-static OfPerfTotals g_sectionTotals[OF_BENCH_SECTIONS];
+static unsigned g_sectionFlipMs[OF_BENCH_MAX_SECTIONS];
+static OfPerfTotals g_sectionTotals[OF_BENCH_MAX_SECTIONS];
 /* The draw calls each section spent most on (see sw_call_notes.h). */
 #define OF_BENCH_NOTES 10
-static SWCallNote g_sectionNotes[OF_BENCH_SECTIONS][OF_BENCH_NOTES];
-static int g_sectionNoteCount[OF_BENCH_SECTIONS];
-static uint32_t g_sectionNotesMissed[OF_BENCH_SECTIONS];
+static SWCallNote g_sectionNotes[OF_BENCH_MAX_SECTIONS][OF_BENCH_NOTES];
+static int g_sectionNoteCount[OF_BENCH_MAX_SECTIONS];
+static uint32_t g_sectionNotesMissed[OF_BENCH_MAX_SECTIONS];
 static unsigned g_firstFrameMs = 0;
 
 /* Draw calls and mixing are timed on one frame in this many: timing them
@@ -110,13 +37,12 @@ static unsigned g_firstFrameMs = 0;
 #define OF_BENCH_DETAIL_EVERY 8
 
 void ofBenchStart(void) {
+    if (ofGame.benchSectionCount > OF_BENCH_MAX_SECTIONS) ofDiagHalt("benchmark has more sections than OF_BENCH_MAX_SECTIONS");
     g_running = true;
     g_startNanos = nowNanos();
     ofPerfDetailEvery(OF_BENCH_DETAIL_EVERY);
-    ofPlatformSetInputScript(g_script);
-#ifdef GAME_DELTARUNE
-    ofPlatformSetJumps(g_jumps, (int) (sizeof(g_jumps) / sizeof(g_jumps[0])));
-#endif
+    ofPlatformSetInputScript(ofGame.benchScript);
+    if (ofGame.benchJumpCount > 0) ofPlatformSetJumps(ofGame.benchJumps, ofGame.benchJumpCount);
     ofPlatformSetUncapped(true);
     ofSaveFsSetVolatile(true);
 }
@@ -131,6 +57,8 @@ void ofBenchStart(void) {
  * larger than anything played during the benchmark), and one region is read
  * twice to show the warm figure. */
 #define OF_IO_BYTES (1024u * 1024u)
+#define OF_IO_MB(n) ((n) / ofGame.ioDivisor)
+#define OF_IO_ASYNC_MB(i) (ofGame.ioAsyncBase + ofGame.ioAsyncStep * (i))
 #define OF_IO_FILE "music.bin"
 
 static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
@@ -258,7 +186,7 @@ void ofBenchFrame(void) {
         swrCallNotesTake(NULL, 0, NULL);
     }
     g_frame++;
-    if (g_frame < g_sections[g_section].lastFrame) return;
+    if (g_frame < ofGame.benchSections[g_section].lastFrame) return;
 
     g_sectionMs[g_section] = (unsigned) ((now - g_sectionStart) / 1000000u);
     g_sectionFlipMs[g_section] = (unsigned) (g_flipNanos / 1000000u);
@@ -266,7 +194,7 @@ void ofBenchFrame(void) {
     g_sectionNoteCount[g_section] = swrCallNotesTake(g_sectionNotes[g_section], OF_BENCH_NOTES, &g_sectionNotesMissed[g_section]);
     g_sectionStart = now;
     g_flipNanos = 0;
-    if (++g_section < OF_BENCH_SECTIONS) return;
+    if (++g_section < ofGame.benchSectionCount) return;
 
     g_running = false;
     swrCallNotes = false;
@@ -278,7 +206,7 @@ void ofBenchFrame(void) {
 #endif
     char drawn[40] = "";
     if (ofPlatformForcedSkip() > 0) snprintf(drawn, sizeof(drawn), ", drawing 1 frame in %d", ofPlatformForcedSkip());
-    ofLogPrint("=== " OF_BENCH_TITLE " benchmark, %s%s%s%s ===\n", ofPlatformSpeedMode() ? "speed" : "accuracy",
+    ofLogPrint("=== %s benchmark, %s%s%s%s ===\n", ofGame.benchTitle, ofPlatformSpeedMode() ? "speed" : "accuracy",
                note[0] != '\0' ? ", " : "", note, drawn);
 #ifndef OF_PC
     {
@@ -295,12 +223,12 @@ void ofBenchFrame(void) {
     ofLogPrint("ms per frame:          work   total\n");
     int firstFrame = 0;
     unsigned totalMs = 0;
-    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
-        unsigned frames = (unsigned) (g_sections[i].lastFrame - firstFrame);
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
+        unsigned frames = (unsigned) (ofGame.benchSections[i].lastFrame - firstFrame);
         unsigned total = g_sectionMs[i] * 10u / frames;
         unsigned work = (g_sectionMs[i] - g_sectionFlipMs[i]) * 10u / frames;
-        ofLogPrint("%-21s %3u.%u  %3u.%u\n", g_sections[i].name, work / 10, work % 10, total / 10, total % 10);
-        firstFrame = g_sections[i].lastFrame;
+        ofLogPrint("%-21s %3u.%u  %3u.%u\n", ofGame.benchSections[i].name, work / 10, work % 10, total / 10, total % 10);
+        firstFrame = ofGame.benchSections[i].lastFrame;
         totalMs += g_sectionMs[i];
     }
     ofLogPrint("%d frames in %u.%u s; full speed is 33.3\n", firstFrame, totalMs / 1000, (totalMs % 1000) / 100);
@@ -325,16 +253,16 @@ void ofBenchFrame(void) {
                                   (unsigned) ((nanos) / ((uint64_t) (frames) * 100000u) % 10u)
     ofLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
     firstFrame = 0;
-    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
         const OfPerfTotals *t = &g_sectionTotals[i];
-        int frames = g_sections[i].lastFrame - firstFrame;
+        int frames = ofGame.benchSections[i].lastFrame - firstFrame;
         int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
-        ofLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", g_sections[i].tag,
+        ofLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", ofGame.benchSections[i].tag,
                    TENTHS(t->phaseNanos[OF_PHASE_STEP], frames), TENTHS(t->phaseNanos[OF_PHASE_DRAW], frames),
                    TENTHS(t->drawNanos[0], detail), TENTHS(t->drawNanos[1], detail), TENTHS(t->drawNanos[2], detail),
                    TENTHS(t->drawNanos[3], detail), TENTHS(t->drawNanos[4], detail),
                    TENTHS(t->phaseNanos[OF_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[OF_PHASE_OUT], frames));
-        firstFrame = g_sections[i].lastFrame;
+        firstFrame = ofGame.benchSections[i].lastFrame;
     }
     /* Sound, in ms per frame wherever in the frame it ran (the draw profiler
      * feeds the queue too, so this is not the snd column): mix is all of
@@ -344,39 +272,39 @@ void ofBenchFrame(void) {
      * many voices were playing on average, in tenths. */
     ofLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
     firstFrame = 0;
-    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
         const OfPerfTotals *t = &g_sectionTotals[i];
-        int frames = g_sections[i].lastFrame - firstFrame;
+        int frames = ofGame.benchSections[i].lastFrame - firstFrame;
         int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
         uint64_t pairs = t->loadNanos[OF_LOAD_MIX_PAIRS];
         unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[OF_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
-        ofLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", g_sections[i].tag,
+        ofLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", ofGame.benchSections[i].tag,
                    TENTHS(t->loadNanos[OF_LOAD_MIX], detail), TENTHS(t->loadNanos[OF_LOAD_MIX_VOICES], detail),
                    TENTHS(t->loadNanos[OF_LOAD_MIX_WRITE], detail), TENTHS(t->loadNanos[OF_LOAD_MUSIC], frames),
                    TENTHS(t->loadNanos[OF_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
-        firstFrame = g_sections[i].lastFrame;
+        firstFrame = ofGame.benchSections[i].lastFrame;
     }
     #undef TENTHS
     ofLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
     firstFrame = 0;
-    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
         const OfPerfTotals *t = &g_sectionTotals[i];
-        uint64_t frames = (uint64_t) (g_sections[i].lastFrame - firstFrame);
-        ofLogPrint("%-5s       %5u %5u %5u %5u %5u\n", g_sections[i].tag, (unsigned) (t->drawCalls[0] / frames),
+        uint64_t frames = (uint64_t) (ofGame.benchSections[i].lastFrame - firstFrame);
+        ofLogPrint("%-5s       %5u %5u %5u %5u %5u\n", ofGame.benchSections[i].tag, (unsigned) (t->drawCalls[0] / frames),
                    (unsigned) (t->drawCalls[1] / frames), (unsigned) (t->drawCalls[2] / frames),
                    (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
-        firstFrame = g_sections[i].lastFrame;
+        firstFrame = ofGame.benchSections[i].lastFrame;
     }
     /* For the last few sections, the draw calls that cost the most, grouped
      * by what was asked for: ms per frame, calls per frame (in tenths), what.
      * "of which" lines are parts of other calls and are counted in those too. */
     firstFrame = 0;
-    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < ofGame.benchSectionCount; i++) {
         /* Notes are only taken on the frames timed in detail. */
         uint64_t frames = g_sectionTotals[i].detailFrames > 0 ? g_sectionTotals[i].detailFrames : 1;
-        firstFrame = g_sections[i].lastFrame;
-        if (i < OF_BENCH_SECTIONS - 4 || g_sectionNoteCount[i] == 0) continue;
-        ofLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", g_sections[i].tag, (unsigned) g_sectionNotesMissed[i]);
+        firstFrame = ofGame.benchSections[i].lastFrame;
+        if (i < ofGame.benchSectionCount - 4 || g_sectionNoteCount[i] == 0) continue;
+        ofLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", ofGame.benchSections[i].tag, (unsigned) g_sectionNotesMissed[i]);
         for (int n = 0; n < g_sectionNoteCount[i]; n++) {
             const SWCallNote *draw = &g_sectionNotes[i][n];
             unsigned tenths = (unsigned) (draw->nanos / (frames * 100000u));

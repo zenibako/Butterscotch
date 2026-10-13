@@ -1,10 +1,10 @@
-# Butterscotch for openfpgaOS (Analogue Pocket / MiSTer), packaged as an
-# Undertale core.
+# Butterscotch for openfpgaOS (Analogue Pocket / MiSTer), packaged as one
+# core with an entry per game (Undertale, Deltarune).
 #
 # Built against the openfpgaOS SDK, which is not part of this repository:
 # point SDK_ROOT at a checkout of https://github.com/openfpgaOS/openfpgaSDK
 # (default: one next to this repository). The software renderer draws into
-# the SDK's RGB555 framebuffer. You supply your own Undertale data.win.
+# the SDK's RGB555 framebuffer. You supply your own game data (data.win).
 #
 # Everything the build writes goes under out/ here; the SDK checkout is only
 # read. The SD card tree ends up in out/build/pocket/butterscotch/.
@@ -14,21 +14,30 @@
 #   make debug        Build, push via UART, stream console
 #   make copy         Copy this custom core to Pocket SD
 #   make package      Package this custom core into a ZIP
-#   make test         Test on desktop (SDL2) -> ./undertale_pc
+#   make test         Test on desktop (SDL2) -> ./<game>_pc
 #   make clean        Remove build artifacts
 #
 
 # GAME picks which game's program is built. The core is one, with an entry
 # per game on the Pocket; each game has its own program, folder of game
 # data and save file:
-#   undertale (default)  data beside this Makefile                           WAD 16
+#   undertale (default)  games/undertale/                                    WAD 16
 #   deltarune            games/deltarune/ (see tools/deltarune-setup.sh)     WAD 17
 # The SD tree is assembled from every game built so far (tools/mkcard.sh),
 # so `make && make GAME=deltarune` gives a card with both.
 GAME     ?= undertale
 ifeq ($(GAME),undertale)
-G         =
+G         = games/undertale/
 WADS     ?= 16
+GAME_DEFS = -DGAME_UNDERTALE
+# Desktop save folder for `make import-save` (macOS).
+SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
+# Undertale's data lived beside this Makefile until 2026-10-13.
+ifneq ($(wildcard data.win),)
+ifeq ($(wildcard $(G)data.win),)
+$(error Undertale's data now goes in $(G): move data.win, and music/, textures.bin and music.bin if you have them, from here into $(G))
+endif
+endif
 else ifeq ($(GAME),deltarune)
 G         = games/deltarune/
 WADS     ?= 17
@@ -81,7 +90,7 @@ BS_VENDOR_SRCS = $(wildcard $(BS_VENDOR)/bzip2/*.c) \
 # Box2D physics is left out (ENABLE_PHYSICS off): Undertale does not use it.
 BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics_disabled.c
 
-SRCS = main.c platform/of_platform.c platform/of_diag.c platform/of_log.c \
+SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
        platform/of_strings.c platform/of_save_fs.c platform/of_native.c \
        platform/of_font.c platform/of_menu.c \
@@ -128,7 +137,8 @@ BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
 # Experiments ride the same way as defines. Tried so and dropped: a pool for
 # script call frames in place of calloc and free (0.2 to 0.3 ms of a 46 ms
 # undrawn battle frame, within run-to-run variation).
-OF_OPT ?=
+# UT_OPT is the name it had until 2026-10-13. rename-ut: keep
+OF_OPT ?= $(UT_OPT)
 CFLAGS = $(BS_DEFS) $(BS_INCLUDES) $(BS_WARN) $(OF_OPT) -DOF_BUILD_NOTE='"$(OF_OPT)"'
 LDFLAGS += $(OF_OPT)
 
@@ -186,12 +196,12 @@ $(G)music.bin: $(MKMUSIC) $(G)data.win $(wildcard $(G)music/*.ogg) $(MUSIC_EXTRA
 	$(MKMUSIC) $(G)data.win $(G)music $@ $(MUSIC_RATE) $(MUSIC_EXTRAS)
 
 # Host tool: packs a desktop save folder into the save slot file and back.
-#   make import-save SAVE_DIR=<desktop save folder>   -> undertale_0.sav
-#   make export-save EXPORT_DIR=<folder to write>     <- undertale_0.sav
+# It knows Undertale's save files only (file0..9, undertale.ini and the like).
+#   make import-save SAVE_DIR=<desktop save folder>   -> <game>_0.sav
+#   make export-save EXPORT_DIR=<folder to write>     <- <game>_0.sav
 # The slot file belongs at Saves/butterscotch/common/ on the SD card. It is not
 # part of the SD tree, so copying a build never replaces progress on the card.
 MKSAVE = $(ROOT)/.obj/$(APP)-tools/mksave
-SAVE_DIR ?= $(HOME)/Library/Application Support/com.tobyfox.undertale
 SAVE_FILE ?= $(APP)_0.sav
 
 $(MKSAVE): tools/mksave.c platform/of_save_format.h
@@ -200,6 +210,7 @@ $(MKSAVE): tools/mksave.c platform/of_save_format.h
 
 .PHONY: import-save export-save
 import-save: $(MKSAVE)
+	@[ -n "$(SAVE_DIR)" ] || { echo "import-save: give SAVE_DIR=<desktop save folder>"; exit 1; }
 	$(MKSAVE) pack "$(SAVE_DIR)" $(SAVE_FILE)
 
 export-save: $(MKSAVE)
@@ -303,7 +314,7 @@ profiler-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/profiler.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_profiler_fixture
 
 # The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
-# as undertale_pc_asan. Run it through the same frame scripts as undertale_pc:
+# as <game>_pc_asan. Run it through the same frame scripts as <game>_pc:
 # it stops with a report on an out-of-bounds access, a use after free or
 # undefined arithmetic, which on the device would be garbage or a hang.
 # Undefined-behaviour findings are printed once per place and the run goes on
@@ -315,16 +326,16 @@ profiler-fixture: $(PC_OBJS)
 ASAN_FLAGS = -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined \
              -fno-sanitize=alignment,function
 asan:
-	$(MAKE) PC_BIN=undertale_pc_asan PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-asan \
-	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" undertale_pc_asan
+	$(MAKE) PC_BIN=$(APP)_pc_asan PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-asan \
+	        PC_EXTRA_CFLAGS="$(ASAN_FLAGS)" $(APP)_pc_asan
 
 # The desktop build again, counting every bytecode instruction the game runs,
-# as undertale_pc_ops. Run it with BS_EXIT_FRAME=<n>: it prints the ranking
+# as <game>_pc_ops. Run it with BS_EXIT_FRAME=<n>: it prints the ranking
 # when it leaves the main loop. A separate binary because the count is a
 # compile-time option of Butterscotch's and costs time on every instruction.
 ops:
-	$(MAKE) PC_BIN=undertale_pc_ops PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-ops \
-	        PC_EXTRA_CFLAGS="-DENABLE_VM_OPCODE_PROFILER" undertale_pc_ops
+	$(MAKE) PC_BIN=$(APP)_pc_ops PC_OBJ_DIR=$(ROOT)/.obj/$(APP)-pc-ops \
+	        PC_EXTRA_CFLAGS="-DENABLE_VM_OPCODE_PROFILER" $(APP)_pc_ops
 
 # Strict warnings for the code this port owns (not Butterscotch or the SDK,
 # whose headers are treated as system headers so they stay quiet). Compiles
@@ -340,7 +351,7 @@ lint:
 	done; [ -z "$$failed" ] && echo "lint: clean"
 
 clean: sdk-clean
-	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops undertale_pc undertale_pc_asan undertale_pc_ops
+	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops $(APP)_pc $(APP)_pc_asan $(APP)_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
 .PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean

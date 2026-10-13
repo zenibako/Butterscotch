@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-build
-description: Build, package and deploy the Undertale port for the Analogue Pocket (Butterscotch on openfpgaOS) in this repo. Use this whenever the task involves building src/openfpga, running make here, producing the SD card tree, copying to the Pocket's SD card (from the build machine or another one), regenerating textures.bin or music.bin, the v0.9 comparison cores, or committing work in this repo — even if the user only says "rebuild it", "copy it" or "is it ready to copy?".
+description: Build, package and deploy the Butterscotch port for the Analogue Pocket (Undertale and Deltarune on openfpgaOS) in this repo. Use this whenever the task involves building src/openfpga, running make here, producing the SD card tree, copying to the Pocket's SD card (from the build machine or another one), regenerating textures.bin or music.bin, the v0.9 comparison cores, or committing work in this repo — even if the user only says "rebuild it", "copy it" or "is it ready to copy?".
 argument-hint: "[checkout: path or host:path with game data + toolchain] [card: SD mount path, and which machine]"
 ---
 
@@ -31,8 +31,10 @@ undertale-pocket/                 not a git repo; holds the pieces below
 │       ├── platform/             of_* glue: video, audio, saves, log, bench
 │       ├── tools/                mktexpack.c, mkmusic.c, mkcompare.sh, sdcopy.sh
 │       ├── dist/                 Pocket core definition (core.json, data slots, instance JSON)
-│       ├── data.win, music/      the user's own game data (gitignored)
-│       ├── textures.bin, music.bin   generated packs (gitignored)
+│       ├── platform/game_<game>.c   what differs per game; the rest of platform/ is shared
+│       ├── games/<game>/         the user's own game data (data.win, music/) and the
+│       │                         packs built from it (textures.bin, music.bin); gitignored.
+│       │                         Undertale's was in src/openfpga/ itself until 2026-10-13
 │       └── out/                  everything the build writes (gitignored):
 │           └── build/pocket/butterscotch/   assembled SD card tree
 ├── openfpgaSDK/                  the openfpgaOS SDK, read only; SDK_ROOT points here by default

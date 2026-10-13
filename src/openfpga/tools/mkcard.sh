@@ -5,8 +5,8 @@
 # its data file is there; the entries of the others are left out, so the
 # Pocket never lists a game that cannot start.
 #
-# Both games are the same program reading "data.win", "textures.bin" and
-# "music.bin": on the card Deltarune's files carry their own names, and its
+# Each game's program reads "data.win", "textures.bin" and "music.bin" from
+# games/<game>/: on the card Deltarune's files carry their own names, and its
 # entry (dist/.../Deltarune.json) puts them in the same data slots.
 #
 # Usage: mkcard.sh <SDK image.sh> <root holding runtime/ and build/> <dist dir> <port dir>
@@ -18,7 +18,7 @@ OUT="$ROOT/build/pocket/$NAME"
 
 # <game> <instance file> <folder with its data> <data> <textures> <music>: names on the card
 GAMES=(
-    "undertale|Undertale.json|.|data.win|textures.bin|music.bin"
+    "undertale|Undertale.json|games/undertale|data.win|textures.bin|music.bin"
     "deltarune|Deltarune.json|games/deltarune|deltarune.win|dr_textures.bin|dr_music.bin"
 )
 
