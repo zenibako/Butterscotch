@@ -93,10 +93,10 @@ Put your `data.win` in this directory (on macOS it is `game.ios` inside
 game's `.ogg` files as `music/`. The build copies it to
 `Assets/butterscotch/common/` in the SD tree.
 
-Desktop extras: `UT_DUMP_FRAME=<n> UT_DUMP_PATH=out.ppm ./undertale_pc`
-writes frame `n` of the 320x240 output and exits. `UT_UNCAPPED=1` disables
-frame pacing for timing runs. `UT_SEED=<n>` fixes the game's RNG and
-`UT_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
+Desktop extras: `BS_DUMP_FRAME=<n> BS_DUMP_PATH=out.ppm ./undertale_pc`
+writes frame `n` of the 320x240 output and exits. `BS_UNCAPPED=1` disables
+frame pacing for timing runs. `BS_SEED=<n>` fixes the game's RNG and
+`BS_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
 E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
 enables older bytecode versions for testing other games.
 
@@ -137,11 +137,11 @@ Two things differ from Undertale. The music folder is shared by all
 chapters, so the setup script links only the `.ogg` files the chapter's
 data file names. And the game reads its text from `lang_en.json`, which
 has no data slot to live in, so it is stored in `music.bin` and the file
-layer reads it from there (`utAudioReadPackFile`).
+layer reads it from there (`ofAudioReadPackFile`).
 
 `--bench` works for Deltarune too, and `make compare` adds its benchmark
 entries to the card (`tools/mkcompare.sh` names them; the route they play is
-in `platform/ut_bench.c`).
+in `platform/of_bench.c`).
 
 What the software renderer does for Deltarune's rooms and screens (tile
 layers, stacks of mirrored translucent layers, the battle background) is
@@ -166,7 +166,7 @@ when the game is running behind (see Frame skipping).
 
 Select opens the port's menu over the paused game, drawn in the game's own
 font (the first of `fnt_main`, `fnt_maintext` and `fnt_small` the game has,
-copied out of its texture page the first time; see `platform/ut_font.c`).
+copied out of its texture page the first time; see `platform/of_font.c`).
 Up/Down choose a row and A or Left/Right change it. The debug settings are
 on a page of their own: A on "Debug" opens it and B goes back. B on the
 first page, or Select or Start on either, closes the menu. The sound stops
@@ -189,7 +189,7 @@ hardware gives a core no menu variables of its own.
 | Save log | writes the log to the spare save slot; leave through the Analogue menu to keep it |
 
 With the debug buttons on (or after starting with `--debug` in the OS
-config's `ARGS=`, or `UT_DEBUG=1` on desktop):
+config's `ARGS=`, or `BS_DEBUG=1` on desktop):
 
 - R toggles the log.
 - "Accuracy" or "Speed" stays in the top right corner, the way L's toggle
@@ -275,13 +275,13 @@ there than `fread`; a read is never left in flight, because the OS fails
 ordinary reads while one is. The comments in `platform/of_audio_system.c`
 have the sizes and the reasons.
 
-Desktop: `UT_AUDIO_DUMP=out.raw` captures the mixed output (48 kHz stereo
-s16le) and `UT_AUDIO_LOG=1` logs every effect, for checking without speakers.
+Desktop: `BS_AUDIO_DUMP=out.raw` captures the mixed output (48 kHz stereo
+s16le) and `BS_AUDIO_LOG=1` logs every effect, for checking without speakers.
 
 ## Saves
 
 Undertale keeps its progress in a few small files (`file0`, `file9`,
-`undertale.ini`, ...). `platform/ut_save_fs.c` stores them all as one small
+`undertale.ini`, ...). `platform/of_save_fs.c` stores them all as one small
 archive in the first save slot (`undertale_0.sav`). The Pocket writes save
 slots back to the SD card when the core is closed from its menu. The
 benchmark neither reads nor writes saves.
@@ -300,7 +300,7 @@ deliberately not part of the SD tree, so copying a build never touches saves.
 
 The game's on-screen key prompts ("[Z or ENTER]", "[C]", the instruction
 screen) are renamed to the Pocket's buttons in memory after loading; see
-`platform/ut_strings.c`. `data.win` itself is not modified.
+`platform/of_strings.c`. `data.win` itself is not modified.
 
 ## On-device diagnostics
 
@@ -317,7 +317,7 @@ first NUL byte (`strings`, or `tr -d '\0'`, reads it).
 route with scripted input and end by writing a report to the log: time per
 frame for each section of the route, then tables of where it went (game
 code, drawing by kind of call, sound, presenting) and the draw calls that
-cost the most. `platform/ut_bench.c` has the route and says what each
+cost the most. `platform/of_bench.c` has the route and says what each
 table's columns are. Quote numbers from a report together with the commit
 it was built from.
 
@@ -326,7 +326,7 @@ is prefixed with seconds since start, so load stages can be timed by eye.
 If the app exits or aborts it halts with the log visible instead of
 rebooting.
 
-A frame that takes much longer than it should (`UT_PERF_SLOW_FRAME_MS`)
+A frame that takes much longer than it should (`OF_PERF_SLOW_FRAME_MS`)
 logs three lines, kept short enough to fit the log overlay:
 
 ```

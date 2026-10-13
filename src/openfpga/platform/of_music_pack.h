@@ -1,5 +1,5 @@
-#ifndef UT_MUSIC_PACK_H
-#define UT_MUSIC_PACK_H
+#ifndef OF_MUSIC_PACK_H
+#define OF_MUSIC_PACK_H
 
 #include <stdint.h>
 
@@ -10,7 +10,7 @@
  * Layout (little-endian):
  *   char     magic[4]   "UTM1"
  *   uint32_t trackCount
- *   trackCount x UtMusicTrack, sorted by name
+ *   trackCount x OfMusicTrack, sorted by name
  *   ADPCM data
  *
  * Each track is one continuous ADPCM stream, 4 bits per sample, low nibble
@@ -18,27 +18,27 @@
  * even, so a track is exactly sampleCount / 2 bytes and looping restarts on
  * a byte boundary.
  *
- * A track whose sampleRate is UT_MUSIC_RAW_FILE is not sound: it is a file
+ * A track whose sampleRate is OF_MUSIC_RAW_FILE is not sound: it is a file
  * the game reads by name (full name with extension, lower case), stored
  * unchanged, sampleCount bytes long.
  */
-#define UT_MUSIC_RAW_FILE 0u
-#define UT_MUSIC_MAGIC "UTM1"
-#define UT_MUSIC_NAME_LEN 32
+#define OF_MUSIC_RAW_FILE 0u
+#define OF_MUSIC_MAGIC "UTM1"
+#define OF_MUSIC_NAME_LEN 32
 
 typedef struct {
-    char name[UT_MUSIC_NAME_LEN]; /* file name without extension, lower case, NUL padded */
+    char name[OF_MUSIC_NAME_LEN]; /* file name without extension, lower case, NUL padded */
     uint32_t offset;              /* absolute file offset of the ADPCM data */
     uint32_t sampleCount;
     uint32_t sampleRate;
     uint32_t reserved;
-} UtMusicTrack;
+} OfMusicTrack;
 
-static const int8_t utAdpcmIndexTable[16] = {
+static const int8_t ofAdpcmIndexTable[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8,
 };
 
-static const int16_t utAdpcmStepTable[89] = {
+static const int16_t ofAdpcmStepTable[89] = {
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
     50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
     253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
@@ -51,11 +51,11 @@ static const int16_t utAdpcmStepTable[89] = {
 typedef struct {
     int32_t predictor;
     int32_t stepIndex;
-} UtAdpcmState;
+} OfAdpcmState;
 
 /* Decodes one 4-bit code and returns the new sample. */
-static inline int16_t utAdpcmDecode(UtAdpcmState *state, uint32_t code) {
-    int32_t step = utAdpcmStepTable[state->stepIndex];
+static inline int16_t ofAdpcmDecode(OfAdpcmState *state, uint32_t code) {
+    int32_t step = ofAdpcmStepTable[state->stepIndex];
     int32_t diff = step >> 3;
     if (code & 4) diff += step;
     if (code & 2) diff += step >> 1;
@@ -67,7 +67,7 @@ static inline int16_t utAdpcmDecode(UtAdpcmState *state, uint32_t code) {
     if (predictor < -32768) predictor = -32768;
     state->predictor = predictor;
 
-    int32_t index = state->stepIndex + utAdpcmIndexTable[code];
+    int32_t index = state->stepIndex + ofAdpcmIndexTable[code];
     if (index < 0) index = 0;
     if (index > 88) index = 88;
     state->stepIndex = index;
@@ -75,4 +75,4 @@ static inline int16_t utAdpcmDecode(UtAdpcmState *state, uint32_t code) {
     return (int16_t) predictor;
 }
 
-#endif /* UT_MUSIC_PACK_H */
+#endif /* OF_MUSIC_PACK_H */

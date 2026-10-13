@@ -14,7 +14,7 @@
 #include "of_perf.h"
 
 #include "debug_font.h"
-#include "ut_font.h"
+#include "of_font.h"
 #include "gettime.h"
 #include "log.h"
 #include "profiler.h"
@@ -22,8 +22,8 @@
 
 #include <string.h>
 
-#define UT_PERF_WINDOW 30
-#define UT_PERF_SCALE  2
+#define OF_PERF_WINDOW 30
+#define OF_PERF_SCALE  2
 
 static bool g_enabled = false;
 static bool g_logEnabled = false;
@@ -33,12 +33,12 @@ static unsigned g_worstWork = 0, g_worstPeriod = 0, g_totalWork = 0;
 static unsigned g_shownWork = 0, g_shownPeriod = 0, g_shownAverage = 0;
 static int g_count = 0;
 static unsigned g_skipped = 0, g_shownSkipped = 0;
-static uint64_t g_loadNanos[UT_LOAD_KINDS];
-static uint64_t g_phaseNanos[UT_PHASES];
-static uint64_t g_drawNanos[UT_DRAW_KINDS];
-static unsigned g_drawCalls[UT_DRAW_KINDS];
-static UtPerfTotals g_totals;
-static UtPhase g_phase = UT_PHASE_OTHER;
+static uint64_t g_loadNanos[OF_LOAD_KINDS];
+static uint64_t g_phaseNanos[OF_PHASES];
+static uint64_t g_drawNanos[OF_DRAW_KINDS];
+static unsigned g_drawCalls[OF_DRAW_KINDS];
+static OfPerfTotals g_totals;
+static OfPhase g_phase = OF_PHASE_OTHER;
 static uint64_t g_phaseStart = 0;
 
 /* 3x5 digit glyphs, one row per 3 bits, top row first. */
@@ -47,21 +47,21 @@ static const uint16_t g_digits[10] = {
     074717, 074757, 071111, 075757, 075717,
 };
 
-void utPerfAddLoad(UtLoadKind kind, uint64_t nanos) {
+void ofPerfAddLoad(OfLoadKind kind, uint64_t nanos) {
     g_loadNanos[kind] += nanos;
 }
 
-bool utPerfDetail = true;
+bool ofPerfDetail = true;
 static int g_detailEvery = 0;
 static bool g_detailAlways = false;
 static unsigned g_frameNumber = 0;
 extern bool swrDrawTimed;
 
-void utPerfDetailEvery(int frames) {
+void ofPerfDetailEvery(int frames) {
     g_detailEvery = frames;
 }
 
-void utPerfDetailAlways(bool always) {
+void ofPerfDetailAlways(bool always) {
     g_detailAlways = always;
 }
 
@@ -84,13 +84,13 @@ void platformDrawProfile(int kind, uint64_t nanos) {
     /* Top the audio queue up every few milliseconds of drawing. */
     static uint64_t sinceTick = 0;
     sinceTick += nanos;
-    if (sinceTick >= UT_DRAW_TICK_NANOS) {
+    if (sinceTick >= OF_DRAW_TICK_NANOS) {
         sinceTick = 0;
         platformBusyTick();
     }
 }
 
-void utPerfPhase(UtPhase phase) {
+void ofPerfPhase(OfPhase phase) {
     uint64_t now = nowNanos();
     if (g_phaseStart != 0) g_phaseNanos[g_phase] += now - g_phaseStart;
     g_phase = phase;
@@ -98,31 +98,31 @@ void utPerfPhase(UtPhase phase) {
 }
 
 static void reportSlowFrame(unsigned workMs) {
-    if (workMs >= UT_PERF_SLOW_FRAME_MS) {
-        unsigned load[UT_LOAD_KINDS], phase[UT_PHASES];
-        for (int i = 0; i < UT_LOAD_KINDS; i++) load[i] = (unsigned) (g_loadNanos[i] / 1000000u);
-        for (int i = 0; i < UT_PHASES; i++) phase[i] = (unsigned) (g_phaseNanos[i] / 1000000u);
-        logInfo("slow %u: step %u draw %u out %u snd %u\n", workMs, phase[UT_PHASE_STEP], phase[UT_PHASE_DRAW],
-                phase[UT_PHASE_OUT], phase[UT_PHASE_AUDIO]);
-        logInfo("  load: rm %u tx %u fx %u mix %u mus %u\n", load[UT_LOAD_ROOM], load[UT_LOAD_TEXTURE],
-                load[UT_LOAD_SOUND], load[UT_LOAD_MIX], load[UT_LOAD_MUSIC]);
-        unsigned draw[UT_DRAW_KINDS];
-        for (int i = 0; i < UT_DRAW_KINDS; i++) draw[i] = (unsigned) (g_drawNanos[i] / 1000000u);
+    if (workMs >= OF_PERF_SLOW_FRAME_MS) {
+        unsigned load[OF_LOAD_KINDS], phase[OF_PHASES];
+        for (int i = 0; i < OF_LOAD_KINDS; i++) load[i] = (unsigned) (g_loadNanos[i] / 1000000u);
+        for (int i = 0; i < OF_PHASES; i++) phase[i] = (unsigned) (g_phaseNanos[i] / 1000000u);
+        logInfo("slow %u: step %u draw %u out %u snd %u\n", workMs, phase[OF_PHASE_STEP], phase[OF_PHASE_DRAW],
+                phase[OF_PHASE_OUT], phase[OF_PHASE_AUDIO]);
+        logInfo("  load: rm %u tx %u fx %u mix %u mus %u\n", load[OF_LOAD_ROOM], load[OF_LOAD_TEXTURE],
+                load[OF_LOAD_SOUND], load[OF_LOAD_MIX], load[OF_LOAD_MUSIC]);
+        unsigned draw[OF_DRAW_KINDS];
+        for (int i = 0; i < OF_DRAW_KINDS; i++) draw[i] = (unsigned) (g_drawNanos[i] / 1000000u);
         /* Calls and ms per kind; the ms, like mix above, are zero on a frame taken without detail. */
         logInfo("  draw: s%u/%u p%u/%u t%u/%u b%u/%u r%u/%u%s\n", g_drawCalls[0], draw[0], g_drawCalls[1], draw[1],
-                g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4], utPerfDetail ? "" : " (not timed)");
+                g_drawCalls[2], draw[2], g_drawCalls[3], draw[3], g_drawCalls[4], draw[4], ofPerfDetail ? "" : " (not timed)");
     }
     g_totals.frames++;
-    if (utPerfDetail) g_totals.detailFrames++;
-    for (int i = 0; i < UT_LOAD_KINDS; i++) {
+    if (ofPerfDetail) g_totals.detailFrames++;
+    for (int i = 0; i < OF_LOAD_KINDS; i++) {
         g_totals.loadNanos[i] += g_loadNanos[i];
         g_loadNanos[i] = 0;
     }
-    for (int i = 0; i < UT_PHASES; i++) {
+    for (int i = 0; i < OF_PHASES; i++) {
         g_totals.phaseNanos[i] += g_phaseNanos[i];
         g_phaseNanos[i] = 0;
     }
-    for (int i = 0; i < UT_DRAW_KINDS; i++) {
+    for (int i = 0; i < OF_DRAW_KINDS; i++) {
         g_totals.drawNanos[i] += g_drawNanos[i];
         g_totals.drawCalls[i] += g_drawCalls[i];
         g_drawNanos[i] = 0;
@@ -130,33 +130,33 @@ static void reportSlowFrame(unsigned workMs) {
     }
 }
 
-void utPerfTakeTotals(UtPerfTotals *out) {
+void ofPerfTakeTotals(OfPerfTotals *out) {
     if (out != NULL) *out = g_totals;
     memset(&g_totals, 0, sizeof(g_totals));
 }
 
-void utPerfToggle(void) {
+void ofPerfToggle(void) {
     g_enabled = !g_enabled;
 }
 
-void utPerfToggleLog(void) {
+void ofPerfToggleLog(void) {
     g_logEnabled = !g_logEnabled;
 }
 
-void utPerfShowLog(void) {
+void ofPerfShowLog(void) {
     g_logEnabled = true;
 }
 
 /* Butterscotch's own report is a line per script too wide for a 320-pixel
  * log, so this writes its own: ms per frame and instructions per frame for
  * the heaviest few, names without the "gml_Object_"/"gml_Script_" prefix. */
-#define UT_SCRIPT_TOP 20 /* scripts and the built-in functions they call share the list */
+#define OF_SCRIPT_TOP 20 /* scripts and the built-in functions they call share the list */
 
-void utPerfScriptReport(const Profiler *profiler, int frames) {
+void ofPerfScriptReport(const Profiler *profiler, int frames) {
     if (profiler == NULL || frames <= 0) return;
     int count = (int) shlen(profiler->entries);
     uint64_t totalNanos = 0, totalOps = 0;
-    int top[UT_SCRIPT_TOP];
+    int top[OF_SCRIPT_TOP];
     int shown = 0;
     for (int i = 0; i < count; i++) {
         uint64_t nanos = profiler->entries[i].value.nanos;
@@ -164,8 +164,8 @@ void utPerfScriptReport(const Profiler *profiler, int frames) {
         totalOps += profiler->entries[i].value.ops;
         int at = shown;
         while (at > 0 && profiler->entries[top[at - 1]].value.nanos < nanos) at--;
-        if (at >= UT_SCRIPT_TOP) continue;
-        if (shown < UT_SCRIPT_TOP) shown++;
+        if (at >= OF_SCRIPT_TOP) continue;
+        if (shown < OF_SCRIPT_TOP) shown++;
         for (int j = shown - 1; j > at; j--) top[j] = top[j - 1];
         top[at] = i;
     }
@@ -186,95 +186,95 @@ void utPerfScriptReport(const Profiler *profiler, int frames) {
     }
 }
 
-bool utPerfOverlayOn(void) {
+bool ofPerfOverlayOn(void) {
     return g_enabled;
 }
 
-bool utPerfLogOn(void) {
+bool ofPerfLogOn(void) {
     return g_logEnabled;
 }
 
-void utPerfShown(unsigned *average, unsigned *worstWork, unsigned *worstPeriod, unsigned *skipped) {
+void ofPerfShown(unsigned *average, unsigned *worstWork, unsigned *worstPeriod, unsigned *skipped) {
     *average = g_shownAverage;
     *worstWork = g_shownWork;
     *worstPeriod = g_shownPeriod;
     *skipped = g_shownSkipped;
 }
 
-void utPerfRestartClock(void) {
+void ofPerfRestartClock(void) {
     g_lastFrame = 0;
     g_sleepNanos = 0;
 }
 
-void utPerfHideOverlays(void) {
+void ofPerfHideOverlays(void) {
     g_enabled = false;
     g_logEnabled = false;
 }
 
 /* Log overlay text: Butterscotch's debug font atlas shrunk 3:1 by averaging
- * coverage, which gives a 6x12 cell (UT_LOG_CELL_W, UT_LOG_CELL_H) that still
+ * coverage, which gives a 6x12 cell (OF_LOG_CELL_W, OF_LOG_CELL_H) that still
  * reads at 320x240. */
-#define UT_LOG_SHRINK 3
+#define OF_LOG_SHRINK 3
 
 static void drawLogChar(uint16_t *fb, int width, int x, int y, char c, uint16_t color) {
     if (c < DEBUGFONT_FIRST_CP || c > DEBUGFONT_LAST_CP) return;
     const DebugFontGlyphEntry *glyph = &debugFontGlyphs[c - DEBUGFONT_FIRST_CP];
 
-    for (int gy = 0; gy < glyph->h; gy += UT_LOG_SHRINK) {
-        for (int gx = 0; gx < glyph->w; gx += UT_LOG_SHRINK) {
+    for (int gy = 0; gy < glyph->h; gy += OF_LOG_SHRINK) {
+        for (int gx = 0; gx < glyph->w; gx += OF_LOG_SHRINK) {
             int sum = 0;
-            for (int sy = 0; sy < UT_LOG_SHRINK && gy + sy < glyph->h; sy++)
-                for (int sx = 0; sx < UT_LOG_SHRINK && gx + sx < glyph->w; sx++)
+            for (int sy = 0; sy < OF_LOG_SHRINK && gy + sy < glyph->h; sy++)
+                for (int sx = 0; sx < OF_LOG_SHRINK && gx + sx < glyph->w; sx++)
                     sum += debugFontPixels[(glyph->y + gy + sy) * DEBUGFONT_ATLAS_W + glyph->x + gx + sx];
-            if (sum < 80 * UT_LOG_SHRINK * UT_LOG_SHRINK) continue;
+            if (sum < 80 * OF_LOG_SHRINK * OF_LOG_SHRINK) continue;
 
-            int px = x + (glyph->xoffset + gx) / UT_LOG_SHRINK;
-            int py = y + (glyph->yoffset + gy) / UT_LOG_SHRINK;
+            int px = x + (glyph->xoffset + gx) / OF_LOG_SHRINK;
+            int py = y + (glyph->yoffset + gy) / OF_LOG_SHRINK;
             if (px >= 0 && px < width && py >= 0) fb[py * width + px] = color;
         }
     }
 }
 
-int utPerfDrawLogText(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color) {
-    if (y < 0 || y + UT_LOG_CELL_H > height) return x + (int) strlen(text) * UT_LOG_CELL_W;
-    for (; *text != '\0'; text++, x += UT_LOG_CELL_W) drawLogChar(fb, width, x, y, *text, color);
+int ofPerfDrawLogText(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color) {
+    if (y < 0 || y + OF_LOG_CELL_H > height) return x + (int) strlen(text) * OF_LOG_CELL_W;
+    for (; *text != '\0'; text++, x += OF_LOG_CELL_W) drawLogChar(fb, width, x, y, *text, color);
     return x;
 }
 
-void utPerfDrawLogScreen(uint16_t *fb, int width, int height) {
-    int rows = height / UT_LOG_CELL_H;
-    if (rows > UT_LOG_LINES - 1) rows = UT_LOG_LINES - 1;
-    int columns = width / UT_LOG_CELL_W;
+void ofPerfDrawLogScreen(uint16_t *fb, int width, int height) {
+    int rows = height / OF_LOG_CELL_H;
+    if (rows > OF_LOG_LINES - 1) rows = OF_LOG_LINES - 1;
+    int columns = width / OF_LOG_CELL_W;
 
     for (int i = 0; i < width * height; i++) fb[i] = 0;
     for (int row = 0; row < rows; row++) {
-        const char *line = utLogLine(rows - 1 - row);
+        const char *line = ofLogLine(rows - 1 - row);
         for (int col = 0; col < columns && line[col] != '\0'; col++)
-            drawLogChar(fb, width, col * UT_LOG_CELL_W, row * UT_LOG_CELL_H, line[col], 0x7FFF);
+            drawLogChar(fb, width, col * OF_LOG_CELL_W, row * OF_LOG_CELL_H, line[col], 0x7FFF);
     }
 }
 
 /* The in-game overlay shows fewer lines so most of the scene stays visible. */
-#define UT_LOG_OVERLAY_ROWS 11
+#define OF_LOG_OVERLAY_ROWS 11
 
 static void drawLog(uint16_t *fb, int width, int height) {
-    int rows = UT_LOG_OVERLAY_ROWS;
-    int columns = width / UT_LOG_CELL_W;
-    int top = height - rows * UT_LOG_CELL_H;
+    int rows = OF_LOG_OVERLAY_ROWS;
+    int columns = width / OF_LOG_CELL_W;
+    int top = height - rows * OF_LOG_CELL_H;
     if (top < 16) return;
 
     /* Darken the area behind the text so it reads over any scene. */
     for (int i = top * width; i < height * width; i++) fb[i] = (uint16_t) ((fb[i] >> 2) & 0x1CE7);
 
     for (int row = 0; row < rows; row++) {
-        const char *line = utLogLine(rows - 1 - row);
-        int y = top + row * UT_LOG_CELL_H;
+        const char *line = ofLogLine(rows - 1 - row);
+        int y = top + row * OF_LOG_CELL_H;
         for (int col = 0; col < columns && line[col] != '\0'; col++)
-            drawLogChar(fb, width, col * UT_LOG_CELL_W, y, line[col], 0x7FFF);
+            drawLogChar(fb, width, col * OF_LOG_CELL_W, y, line[col], 0x7FFF);
     }
 }
 
-void utPerfAddSleep(uint64_t nanos) {
+void ofPerfAddSleep(uint64_t nanos) {
     g_sleepNanos += nanos;
 }
 
@@ -284,9 +284,9 @@ static void drawDigit(uint16_t *fb, int width, int x, int y, int digit) {
         int bits = (glyph >> ((4 - row) * 3)) & 7;
         for (int col = 0; col < 3; col++) {
             uint16_t color = (bits & (4 >> col)) ? 0x7FFF : 0x0000;
-            for (int sy = 0; sy < UT_PERF_SCALE; sy++)
-                for (int sx = 0; sx < UT_PERF_SCALE; sx++)
-                    fb[(y + row * UT_PERF_SCALE + sy) * width + x + col * UT_PERF_SCALE + sx] = color;
+            for (int sy = 0; sy < OF_PERF_SCALE; sy++)
+                for (int sx = 0; sx < OF_PERF_SCALE; sx++)
+                    fb[(y + row * OF_PERF_SCALE + sy) * width + x + col * OF_PERF_SCALE + sx] = color;
         }
     }
 }
@@ -296,29 +296,29 @@ static int drawNumber(uint16_t *fb, int width, int x, int y, unsigned value) {
     int divisors[3] = { 100, 10, 1 };
     for (int i = 0; i < 3; i++) {
         drawDigit(fb, width, x, y, (value / divisors[i]) % 10);
-        x += 4 * UT_PERF_SCALE;
+        x += 4 * OF_PERF_SCALE;
     }
     return x;
 }
 
-void utPerfDrawMode(uint16_t *fb, int width, int height, const char *label) {
-    int scale = utFontScale(width);
+void ofPerfDrawMode(uint16_t *fb, int width, int height, const char *label) {
+    int scale = ofFontScale(width);
     int pad = 2 * scale;
-    int boxW = utFontWidth(label, scale) + 2 * pad;
-    int boxH = utFontLineHeight(scale) + 2 * pad;
+    int boxW = ofFontWidth(label, scale) + 2 * pad;
+    int boxH = ofFontLineHeight(scale) + 2 * pad;
     int left = width - boxW;
     if (left < 0 || height < boxH) return;
 
     /* A black box behind the words so they read over any scene. */
     for (int y = 0; y < boxH; y++)
         for (int x = left; x < width; x++) fb[y * width + x] = 0;
-    utFontDraw(fb, width, height, left + pad, pad, label, 0x7FFF, scale);
+    ofFontDraw(fb, width, height, left + pad, pad, label, 0x7FFF, scale);
 }
 
-void utPerfFrame(uint16_t *fb, int width, int height) {
+void ofPerfFrame(uint16_t *fb, int width, int height) {
     /* The frame ends here: whatever follows (overlays, copy, flip) is "out"
      * and is reported with the next frame. */
-    utPerfPhase(UT_PHASE_OUT);
+    ofPerfPhase(OF_PHASE_OUT);
     uint64_t now = nowNanos();
     if (fb == NULL) g_skipped++;
     if (g_lastFrame != 0) {
@@ -330,8 +330,8 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
         if (workMs > g_worstWork) g_worstWork = workMs;
         g_totalWork += workMs;
         reportSlowFrame(workMs);
-        if (++g_count >= UT_PERF_WINDOW) {
-            g_shownAverage = g_totalWork / UT_PERF_WINDOW;
+        if (++g_count >= OF_PERF_WINDOW) {
+            g_shownAverage = g_totalWork / OF_PERF_WINDOW;
             g_shownWork = g_worstWork;
             g_shownPeriod = g_worstPeriod;
             g_shownSkipped = g_skipped;
@@ -343,14 +343,14 @@ void utPerfFrame(uint16_t *fb, int width, int height) {
     g_lastFrame = now;
     g_sleepNanos = 0;
     g_frameNumber++;
-    utPerfDetail = g_enabled || g_logEnabled || g_detailAlways || (g_detailEvery > 0 && g_frameNumber % (unsigned) g_detailEvery == 0);
-    swrDrawTimed = utPerfDetail;
+    ofPerfDetail = g_enabled || g_logEnabled || g_detailAlways || (g_detailEvery > 0 && g_frameNumber % (unsigned) g_detailEvery == 0);
+    swrDrawTimed = ofPerfDetail;
 
     if (fb == NULL) return; /* a skipped frame: counted, nothing to draw on */
     if (g_logEnabled) drawLog(fb, width, height);
     if (!g_enabled || width < 128 || height < 16) return;
     int x = drawNumber(fb, width, 2, 2, g_shownAverage);
-    x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownWork);
-    x = drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownPeriod);
-    drawNumber(fb, width, x + 2 * UT_PERF_SCALE, 2, g_shownSkipped);
+    x = drawNumber(fb, width, x + 2 * OF_PERF_SCALE, 2, g_shownWork);
+    x = drawNumber(fb, width, x + 2 * OF_PERF_SCALE, 2, g_shownPeriod);
+    drawNumber(fb, width, x + 2 * OF_PERF_SCALE, 2, g_shownSkipped);
 }

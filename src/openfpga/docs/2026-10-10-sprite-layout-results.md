@@ -50,7 +50,7 @@ Load to first frame stayed at 11.5 seconds. Battle work improved by just
 `src/sw/sw_renderer.c:swrSpriteCostProbe` warms the sprite's texture and
 copies, disables per-draw timing and call notes, then times 2000 consecutive
 outside-view calls followed by 2000 inside-view calls.
-`src/openfpga/platform/of_platform.c:utPlatformSpriteCosts` selects that count.
+`src/openfpga/platform/of_platform.c:ofPlatformSpriteCosts` selects that count.
 The outside measurement includes repeated renderer calls and clipping;
 the inside measurement also draws pixels. It calls `Renderer_drawSprite`
 directly, so it does not measure the GML builtin wrapper or VM dispatch.

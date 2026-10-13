@@ -1,4 +1,4 @@
-#include "ut_bench.h"
+#include "of_bench.h"
 
 #include "of.h"
 
@@ -16,10 +16,10 @@ typedef struct {
     const char *name;
     int lastFrame;
     const char *tag; /* five letters at most, for the breakdown table */
-} UtBenchSection;
+} OfBenchSection;
 
-#ifdef UT_GAME_DELTARUNE
-#define UT_BENCH_TITLE "Deltarune ch. 1"
+#ifdef GAME_DELTARUNE
+#define OF_BENCH_TITLE "Deltarune ch. 1"
 
 /* The opening is played as it comes (left and confirm, which gets through the
  * first text and into the character creation screens). The town and the Dark
@@ -27,8 +27,8 @@ typedef struct {
  * the dark-zone flag are set the frame before each jump. In the field the
  * walk to the right runs into the room's enemy, and confirm plays the battle
  * out. Room numbers and frame counts are for the chapter 1 data file. */
-#define UT_DR_YARD 2100
-#define UT_DR_FIELD 2600
+#define OF_DR_YARD 2100
+#define OF_DR_FIELD 2600
 static const char g_script[] =
     "150:L*4,160:Z,174:L*4,184:Z,198:L*4,208:Z,222:L*4,232:Z,246:L*4,256:Z,270:L*4,280:Z,294:L*4,304:Z,318:L*4,"
     "328:Z,342:L*4,352:Z,366:L*4,376:Z,390:L*4,400:Z,414:L*4,424:Z,438:L*4,448:Z,462:L*4,472:Z,486:L*4,496:Z,"
@@ -46,14 +46,14 @@ static const char g_script[] =
     "3225:Z,3240:Z,3255:Z,3270:Z,3285:Z,3300:Z,3315:Z,3330:Z,3345:Z,3360:Z,3375:Z,3390:Z,3405:Z,3420:Z,3435:Z,"
     "3450:Z,3465:Z,3480:Z,3495:Z,3510:Z,3525:Z,3540:Z,3555:Z,3570:Z,3585:Z";
 
-static const UtJump g_jumps[] = {
-    { UT_DR_YARD - 1, -1, "plot=60,interact=0" }, /* past the scene that would otherwise start in the yard */
-    { UT_DR_YARD, 7, NULL },
-    { UT_DR_FIELD - 1, -1, "darkzone=1,char[1]=2,char[2]=3,plot=60,interact=0" },
-    { UT_DR_FIELD, 52, NULL },
+static const OfJump g_jumps[] = {
+    { OF_DR_YARD - 1, -1, "plot=60,interact=0" }, /* past the scene that would otherwise start in the yard */
+    { OF_DR_YARD, 7, NULL },
+    { OF_DR_FIELD - 1, -1, "darkzone=1,char[1]=2,char[2]=3,plot=60,interact=0" },
+    { OF_DR_FIELD, 52, NULL },
 };
 
-static const UtBenchSection g_sections[] = {
+static const OfBenchSection g_sections[] = {
     { "opening text 320x240", 1700, "text" },
     { "creation screens 320", 2100, "creat" },
     { "town yard 320x240", 2600, "yard" },
@@ -65,10 +65,10 @@ static const UtBenchSection g_sections[] = {
     { "battle: next turn", 3600, "bnext" },
 };
 /* The audio pack is about 43 MB against Undertale's 134; the read tests use the same offsets, scaled. */
-#define UT_IO_MB(n) ((n) / 3u)
-#define UT_IO_ASYNC_MB(i) (35u + (i))
+#define OF_IO_MB(n) ((n) / 3u)
+#define OF_IO_ASYNC_MB(i) (35u + (i))
 #else
-#define UT_BENCH_TITLE "Undertale"
+#define OF_BENCH_TITLE "Undertale"
 
 /* Key presses that walk from boot to the first battle; see runInputScript()
  * in of_platform.c for the syntax. Frame numbers assume a fresh save state. */
@@ -76,49 +76,49 @@ static const char g_script[] =
     "30:Z,100:Z,160:Z,220:Z,230:D,238:D,246:D,254:D,262:D,270:D,278:D,286:D,300:R,308:R,330:Z,370:R,380:Z,700:R*400,1100:L*10,1120:U*400,1560:Z,1605:Z,1650:Z,1695:Z,1740:Z,1785:Z,1830:Z,1875:Z,1920:Z,1965:Z,2010:Z,2055:Z,2100:Z,2145:Z,2190:Z,2235:Z,2280:Z,2325:Z,2370:Z,2415:Z,2460:Z,2505:Z,2550:Z,2595:Z,2640:Z,2685:Z";
 
 /* Sections end on these frames; they follow the script above. */
-static const UtBenchSection g_sections[] = {
+static const OfBenchSection g_sections[] = {
     { "intro, menu, naming", 650, "intro" },
     { "first room 320x240", 1220, "room" },
     { "Flowey talk 320x240", 2060, "talk" },
     { "Flowey battle (640x480)", 2600, "battl" },
 };
-#define UT_IO_MB(n) (n)
-#define UT_IO_ASYNC_MB(i) (110u + 2u * (i))
+#define OF_IO_MB(n) (n)
+#define OF_IO_ASYNC_MB(i) (110u + 2u * (i))
 #endif
-#define UT_BENCH_SECTIONS ((int) (sizeof(g_sections) / sizeof(g_sections[0])))
+#define OF_BENCH_SECTIONS ((int) (sizeof(g_sections) / sizeof(g_sections[0])))
 
 static bool g_running = false;
 static int g_frame = 0;
 static int g_section = 0;
 static uint64_t g_startNanos = 0;
 static uint64_t g_sectionStart = 0;
-static unsigned g_sectionMs[UT_BENCH_SECTIONS];
+static unsigned g_sectionMs[OF_BENCH_SECTIONS];
 static uint64_t g_flipNanos = 0; /* time inside the display flip this section */
-static unsigned g_sectionFlipMs[UT_BENCH_SECTIONS];
-static UtPerfTotals g_sectionTotals[UT_BENCH_SECTIONS];
+static unsigned g_sectionFlipMs[OF_BENCH_SECTIONS];
+static OfPerfTotals g_sectionTotals[OF_BENCH_SECTIONS];
 /* The draw calls each section spent most on (see sw_call_notes.h). */
-#define UT_BENCH_NOTES 10
-static SWCallNote g_sectionNotes[UT_BENCH_SECTIONS][UT_BENCH_NOTES];
-static int g_sectionNoteCount[UT_BENCH_SECTIONS];
-static uint32_t g_sectionNotesMissed[UT_BENCH_SECTIONS];
+#define OF_BENCH_NOTES 10
+static SWCallNote g_sectionNotes[OF_BENCH_SECTIONS][OF_BENCH_NOTES];
+static int g_sectionNoteCount[OF_BENCH_SECTIONS];
+static uint32_t g_sectionNotesMissed[OF_BENCH_SECTIONS];
 static unsigned g_firstFrameMs = 0;
 
 /* Draw calls and mixing are timed on one frame in this many: timing them
  * costs 3 to 5 ms of a battle frame on the device, which the game does not
  * pay, so the frame times come out about half a millisecond high. The tables
  * of where the time went are averages over the timed frames. */
-#define UT_BENCH_DETAIL_EVERY 8
+#define OF_BENCH_DETAIL_EVERY 8
 
-void utBenchStart(void) {
+void ofBenchStart(void) {
     g_running = true;
     g_startNanos = nowNanos();
-    utPerfDetailEvery(UT_BENCH_DETAIL_EVERY);
-    utPlatformSetInputScript(g_script);
-#ifdef UT_GAME_DELTARUNE
-    utPlatformSetJumps(g_jumps, (int) (sizeof(g_jumps) / sizeof(g_jumps[0])));
+    ofPerfDetailEvery(OF_BENCH_DETAIL_EVERY);
+    ofPlatformSetInputScript(g_script);
+#ifdef GAME_DELTARUNE
+    ofPlatformSetJumps(g_jumps, (int) (sizeof(g_jumps) / sizeof(g_jumps[0])));
 #endif
-    utPlatformSetUncapped(true);
-    utSaveFsSetVolatile(true);
+    ofPlatformSetUncapped(true);
+    ofSaveFsSetVolatile(true);
 }
 
 /* SD read throughput, cold and warm.
@@ -130,14 +130,14 @@ void utBenchStart(void) {
  * test here reads its own, previously untouched megabyte of music.bin (far
  * larger than anything played during the benchmark), and one region is read
  * twice to show the warm figure. */
-#define UT_IO_BYTES (1024u * 1024u)
-#define UT_IO_FILE "music.bin"
+#define OF_IO_BYTES (1024u * 1024u)
+#define OF_IO_FILE "music.bin"
 
 static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
-    uint8_t *buffer = malloc(UT_IO_BYTES);
+    uint8_t *buffer = malloc(OF_IO_BYTES);
     if (buffer == NULL) return 0;
 
-    FILE *file = fopen(UT_IO_FILE, "rb");
+    FILE *file = fopen(OF_IO_FILE, "rb");
     if (file == NULL) {
         free(buffer);
         return 0;
@@ -147,7 +147,7 @@ static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
 
     uint64_t start = nowNanos();
     uint32_t done = 0;
-    while (done < UT_IO_BYTES) {
+    while (done < OF_IO_BYTES) {
         size_t got = fread(buffer, 1, chunk, file);
         if (got == 0) break;
         done += (uint32_t) got;
@@ -161,9 +161,9 @@ static unsigned ioTest(uint32_t megabyteOffset, uint32_t chunk) {
 
 static void ioReport(void) {
     /* Offsets are spread through the second half of the pack. */
-    utLogPrint("SD read, KB/s, 1 MB each from " UT_IO_FILE ":\n");
-    utLogPrint("cold: 4K %u, 64K %u, 1M %u\n", ioTest(UT_IO_MB(70u), 4096), ioTest(UT_IO_MB(85u), 65536), ioTest(UT_IO_MB(100u), UT_IO_BYTES));
-    utLogPrint("same 64K region again: %u\n", ioTest(UT_IO_MB(85u), 65536));
+    ofLogPrint("SD read, KB/s, 1 MB each from " OF_IO_FILE ":\n");
+    ofLogPrint("cold: 4K %u, 64K %u, 1M %u\n", ioTest(OF_IO_MB(70u), 4096), ioTest(OF_IO_MB(85u), 65536), ioTest(OF_IO_MB(100u), OF_IO_BYTES));
+    ofLogPrint("same 64K region again: %u\n", ioTest(OF_IO_MB(85u), 65536));
 }
 
 /* The same pack read with the OS's non-blocking call instead of fread.
@@ -174,8 +174,8 @@ static void ioReport(void) {
  * then a megabyte in the largest commands the OS accepts: into the OS's
  * staging memory (no copy) and into ordinary memory (one copy). */
 #ifndef OF_PC
-#define UT_ASYNC_TIMEOUT_NANOS 3000000000ull
-#define UT_ASYNC_READS_PER_SIZE 8
+#define OF_ASYNC_TIMEOUT_NANOS 3000000000ull
+#define OF_ASYNC_READS_PER_SIZE 8
 
 static volatile int g_asyncDone;
 static volatile int g_asyncResult;
@@ -198,7 +198,7 @@ static uint32_t asyncTime(uint32_t slot, uint32_t offset, uint8_t *dest, bool ad
         if (of_file_read_async((int) slot, offset + done, advanceDest ? dest + done : dest, length, asyncCallback) < 0) return 0;
         /* The poll is the OS's fallback for a lost interrupt. */
         while (!g_asyncDone && of_file_async_poll() != 1) {
-            if (nowNanos() - issued > UT_ASYNC_TIMEOUT_NANOS) return 0;
+            if (nowNanos() - issued > OF_ASYNC_TIMEOUT_NANOS) return 0;
         }
         if (g_asyncResult < 0) return 0;
     }
@@ -213,8 +213,8 @@ static void asyncReport(void) {
     uint32_t slot = 0;
     uint32_t maxRead = of_file_async_max_read();
     uint8_t *stage = maxRead > 0 ? of_file_dma_stage_alloc(maxRead, 4096) : NULL;
-    if (stage == NULL || of_file_slot_find(UT_IO_FILE, &slot) != 0) {
-        utLogPrint("async read: not available (max %u)\n", (unsigned) maxRead);
+    if (stage == NULL || of_file_slot_find(OF_IO_FILE, &slot) != 0) {
+        ofLogPrint("async read: not available (max %u)\n", (unsigned) maxRead);
         return;
     }
 
@@ -222,19 +222,19 @@ static void asyncReport(void) {
     for (int i = 0; i < 4; i++) {
         if (sizes[i] > maxRead) continue;
         /* Each size gets its own untouched stretch of the pack. */
-        uint32_t micros = asyncTime(slot, UT_IO_ASYNC_MB((uint32_t) i) * 1024u * 1024u, stage, false, sizes[i],
-                                    sizes[i] * UT_ASYNC_READS_PER_SIZE);
-        unsigned tenths = micros / (100u * UT_ASYNC_READS_PER_SIZE);
+        uint32_t micros = asyncTime(slot, OF_IO_ASYNC_MB((uint32_t) i) * 1024u * 1024u, stage, false, sizes[i],
+                                    sizes[i] * OF_ASYNC_READS_PER_SIZE);
+        unsigned tenths = micros / (100u * OF_ASYNC_READS_PER_SIZE);
         at += snprintf(line + at, sizeof(line) - (size_t) at, " %uK %u.%u", (unsigned) (sizes[i] / 1024u), tenths / 10, tenths % 10);
     }
-    utLogPrint("%s\n", line);
+    ofLogPrint("%s\n", line);
 
-    uint32_t total = UT_IO_BYTES - UT_IO_BYTES % maxRead;
-    uint32_t staged = asyncTime(slot, UT_IO_MB(118u) * 1024u * 1024u, stage, false, maxRead, total);
-    uint8_t *heapBuffer = malloc(UT_IO_BYTES);
-    uint32_t copied = heapBuffer != NULL ? asyncTime(slot, UT_IO_MB(120u) * 1024u * 1024u, heapBuffer, true, maxRead, total) : 0;
+    uint32_t total = OF_IO_BYTES - OF_IO_BYTES % maxRead;
+    uint32_t staged = asyncTime(slot, OF_IO_MB(118u) * 1024u * 1024u, stage, false, maxRead, total);
+    uint8_t *heapBuffer = malloc(OF_IO_BYTES);
+    uint32_t copied = heapBuffer != NULL ? asyncTime(slot, OF_IO_MB(120u) * 1024u * 1024u, heapBuffer, true, maxRead, total) : 0;
     free(heapBuffer);
-    utLogPrint("async 1M KB/s: staged %u, copied %u\n",
+    ofLogPrint("async 1M KB/s: staged %u, copied %u\n",
                staged > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / staged) : 0,
                copied > 0 ? (unsigned) ((uint64_t) total * 1000000u / 1024u / copied) : 0);
 }
@@ -242,18 +242,18 @@ static void asyncReport(void) {
 static void asyncReport(void) {}
 #endif
 
-void utBenchAddFlipTime(uint64_t nanos) {
+void ofBenchAddFlipTime(uint64_t nanos) {
     if (g_running) g_flipNanos += nanos;
 }
 
-void utBenchFrame(void) {
+void ofBenchFrame(void) {
     if (!g_running) return;
 
     uint64_t now = nowNanos();
     if (g_frame == 0) {
         g_firstFrameMs = (unsigned) ((now - g_startNanos) / 1000000u);
         g_sectionStart = now;
-        utPerfTakeTotals(NULL); /* loading is not part of the first section */
+        ofPerfTakeTotals(NULL); /* loading is not part of the first section */
         swrCallNotes = true;
         swrCallNotesTake(NULL, 0, NULL);
     }
@@ -262,55 +262,55 @@ void utBenchFrame(void) {
 
     g_sectionMs[g_section] = (unsigned) ((now - g_sectionStart) / 1000000u);
     g_sectionFlipMs[g_section] = (unsigned) (g_flipNanos / 1000000u);
-    utPerfTakeTotals(&g_sectionTotals[g_section]);
-    g_sectionNoteCount[g_section] = swrCallNotesTake(g_sectionNotes[g_section], UT_BENCH_NOTES, &g_sectionNotesMissed[g_section]);
+    ofPerfTakeTotals(&g_sectionTotals[g_section]);
+    g_sectionNoteCount[g_section] = swrCallNotesTake(g_sectionNotes[g_section], OF_BENCH_NOTES, &g_sectionNotesMissed[g_section]);
     g_sectionStart = now;
     g_flipNanos = 0;
-    if (++g_section < UT_BENCH_SECTIONS) return;
+    if (++g_section < OF_BENCH_SECTIONS) return;
 
     g_running = false;
     swrCallNotes = false;
-    utPerfDetailEvery(0);
-    /* A build with optimisation flags of its own (UT_OPT) says so in the title. */
+    ofPerfDetailEvery(0);
+    /* A build with optimisation flags of its own (OF_OPT) says so in the title. */
     const char *note = "";
-#ifdef UT_BUILD_NOTE
-    note = UT_BUILD_NOTE;
+#ifdef OF_BUILD_NOTE
+    note = OF_BUILD_NOTE;
 #endif
     char drawn[40] = "";
-    if (utPlatformForcedSkip() > 0) snprintf(drawn, sizeof(drawn), ", drawing 1 frame in %d", utPlatformForcedSkip());
-    utLogPrint("=== " UT_BENCH_TITLE " benchmark, %s%s%s%s ===\n", utPlatformSpeedMode() ? "speed" : "accuracy",
+    if (ofPlatformForcedSkip() > 0) snprintf(drawn, sizeof(drawn), ", drawing 1 frame in %d", ofPlatformForcedSkip());
+    ofLogPrint("=== " OF_BENCH_TITLE " benchmark, %s%s%s%s ===\n", ofPlatformSpeedMode() ? "speed" : "accuracy",
                note[0] != '\0' ? ", " : "", note, drawn);
 #ifndef OF_PC
     {
         /* Say which OS and bitstream this ran on; tables look alike otherwise. */
         const struct of_capabilities *caps = of_get_caps();
-        utLogPrint("OS %u.%u.%u, core variant %u, CPU %u MHz\n", (unsigned) ((caps->os_version >> 16) & 0xFF),
+        ofLogPrint("OS %u.%u.%u, core variant %u, CPU %u MHz\n", (unsigned) ((caps->os_version >> 16) & 0xFF),
                    (unsigned) ((caps->os_version >> 8) & 0xFF), (unsigned) (caps->os_version & 0xFF),
                    (unsigned) caps->core_variant, (unsigned) (caps->cpu_freq_hz / 1000000u));
     }
 #endif
-    utLogPrint("load to first frame: %u.%u s\n", g_firstFrameMs / 1000, (g_firstFrameMs % 1000) / 100);
-    utLogPrint("%s\n", utLogLoadSummary());
-    utLogPrint("%s\n", utLogLoadPhases());
-    utLogPrint("ms per frame:          work   total\n");
+    ofLogPrint("load to first frame: %u.%u s\n", g_firstFrameMs / 1000, (g_firstFrameMs % 1000) / 100);
+    ofLogPrint("%s\n", ofLogLoadSummary());
+    ofLogPrint("%s\n", ofLogLoadPhases());
+    ofLogPrint("ms per frame:          work   total\n");
     int firstFrame = 0;
     unsigned totalMs = 0;
-    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
         unsigned frames = (unsigned) (g_sections[i].lastFrame - firstFrame);
         unsigned total = g_sectionMs[i] * 10u / frames;
         unsigned work = (g_sectionMs[i] - g_sectionFlipMs[i]) * 10u / frames;
-        utLogPrint("%-21s %3u.%u  %3u.%u\n", g_sections[i].name, work / 10, work % 10, total / 10, total % 10);
+        ofLogPrint("%-21s %3u.%u  %3u.%u\n", g_sections[i].name, work / 10, work % 10, total / 10, total % 10);
         firstFrame = g_sections[i].lastFrame;
         totalMs += g_sectionMs[i];
     }
-    utLogPrint("%d frames in %u.%u s; full speed is 33.3\n", firstFrame, totalMs / 1000, (totalMs % 1000) / 100);
-    utLogPrint("work = total minus display flip\n");
+    ofLogPrint("%d frames in %u.%u s; full speed is 33.3\n", firstFrame, totalMs / 1000, (totalMs % 1000) / 100);
+    ofLogPrint("work = total minus display flip\n");
     ioReport();
     asyncReport();
     {
         unsigned clock, draw, drawUntimed, audioFree;
-        utPlatformCallCosts(&clock, &draw, &drawUntimed, &audioFree);
-        utLogPrint("call costs, us: clock %u.%02u, skipped sprite draw %u.%02u (%u.%02u without its timing), audio queue %u.%02u\n",
+        ofPlatformCallCosts(&clock, &draw, &drawUntimed, &audioFree);
+        ofLogPrint("call costs, us: clock %u.%02u, skipped sprite draw %u.%02u (%u.%02u without its timing), audio queue %u.%02u\n",
                    clock / 1000, clock % 1000 / 10, draw / 1000, draw % 1000 / 10, drawUntimed / 1000, drawUntimed % 1000 / 10,
                    audioFree / 1000, audioFree % 1000 / 10);
     }
@@ -323,17 +323,17 @@ void utBenchFrame(void) {
      * The five kinds are averages over the frames timed in detail. */
     #define TENTHS(nanos, frames) (unsigned) ((nanos) / ((uint64_t) (frames) * 1000000u)), \
                                   (unsigned) ((nanos) / ((uint64_t) (frames) * 100000u) % 10u)
-    utLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
+    ofLogPrint("ms/fr  step   draw =  spr   til   txt   bkg   rct   snd   out\n");
     firstFrame = 0;
-    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
-        const UtPerfTotals *t = &g_sectionTotals[i];
+    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
         int frames = g_sections[i].lastFrame - firstFrame;
         int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
-        utLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", g_sections[i].tag,
-                   TENTHS(t->phaseNanos[UT_PHASE_STEP], frames), TENTHS(t->phaseNanos[UT_PHASE_DRAW], frames),
+        ofLogPrint("%-5s %3u.%u %4u.%u  %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u %3u.%u\n", g_sections[i].tag,
+                   TENTHS(t->phaseNanos[OF_PHASE_STEP], frames), TENTHS(t->phaseNanos[OF_PHASE_DRAW], frames),
                    TENTHS(t->drawNanos[0], detail), TENTHS(t->drawNanos[1], detail), TENTHS(t->drawNanos[2], detail),
                    TENTHS(t->drawNanos[3], detail), TENTHS(t->drawNanos[4], detail),
-                   TENTHS(t->phaseNanos[UT_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[UT_PHASE_OUT], frames));
+                   TENTHS(t->phaseNanos[OF_PHASE_AUDIO], frames), TENTHS(t->phaseNanos[OF_PHASE_OUT], frames));
         firstFrame = g_sections[i].lastFrame;
     }
     /* Sound, in ms per frame wherever in the frame it ran (the draw profiler
@@ -342,27 +342,27 @@ void utBenchFrame(void) {
      * handing the samples to the OS; music is reading it from the card; fx
      * is loading sound effects. Then output sample pairs per frame, and how
      * many voices were playing on average, in tenths. */
-    utLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
+    ofLogPrint("sound   mix = voices write  music    fx  pairs voices\n");
     firstFrame = 0;
-    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
-        const UtPerfTotals *t = &g_sectionTotals[i];
+    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
         int frames = g_sections[i].lastFrame - firstFrame;
         int detail = t->detailFrames > 0 ? (int) t->detailFrames : 1;
-        uint64_t pairs = t->loadNanos[UT_LOAD_MIX_PAIRS];
-        unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[UT_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
-        utLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", g_sections[i].tag,
-                   TENTHS(t->loadNanos[UT_LOAD_MIX], detail), TENTHS(t->loadNanos[UT_LOAD_MIX_VOICES], detail),
-                   TENTHS(t->loadNanos[UT_LOAD_MIX_WRITE], detail), TENTHS(t->loadNanos[UT_LOAD_MUSIC], frames),
-                   TENTHS(t->loadNanos[UT_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
+        uint64_t pairs = t->loadNanos[OF_LOAD_MIX_PAIRS];
+        unsigned voices = pairs > 0 ? (unsigned) (t->loadNanos[OF_LOAD_MIX_VOICE_PAIRS] * 10u / pairs) : 0;
+        ofLogPrint("%-5s %3u.%u   %3u.%u %3u.%u  %3u.%u %3u.%u  %5u  %2u.%u\n", g_sections[i].tag,
+                   TENTHS(t->loadNanos[OF_LOAD_MIX], detail), TENTHS(t->loadNanos[OF_LOAD_MIX_VOICES], detail),
+                   TENTHS(t->loadNanos[OF_LOAD_MIX_WRITE], detail), TENTHS(t->loadNanos[OF_LOAD_MUSIC], frames),
+                   TENTHS(t->loadNanos[OF_LOAD_SOUND], frames), (unsigned) (pairs / (uint64_t) frames), voices / 10, voices % 10);
         firstFrame = g_sections[i].lastFrame;
     }
     #undef TENTHS
-    utLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
+    ofLogPrint("calls/fr      spr   til   txt   bkg   rct\n");
     firstFrame = 0;
-    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
-        const UtPerfTotals *t = &g_sectionTotals[i];
+    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
+        const OfPerfTotals *t = &g_sectionTotals[i];
         uint64_t frames = (uint64_t) (g_sections[i].lastFrame - firstFrame);
-        utLogPrint("%-5s       %5u %5u %5u %5u %5u\n", g_sections[i].tag, (unsigned) (t->drawCalls[0] / frames),
+        ofLogPrint("%-5s       %5u %5u %5u %5u %5u\n", g_sections[i].tag, (unsigned) (t->drawCalls[0] / frames),
                    (unsigned) (t->drawCalls[1] / frames), (unsigned) (t->drawCalls[2] / frames),
                    (unsigned) (t->drawCalls[3] / frames), (unsigned) (t->drawCalls[4] / frames));
         firstFrame = g_sections[i].lastFrame;
@@ -371,47 +371,47 @@ void utBenchFrame(void) {
      * by what was asked for: ms per frame, calls per frame (in tenths), what.
      * "of which" lines are parts of other calls and are counted in those too. */
     firstFrame = 0;
-    for (int i = 0; i < UT_BENCH_SECTIONS; i++) {
+    for (int i = 0; i < OF_BENCH_SECTIONS; i++) {
         /* Notes are only taken on the frames timed in detail. */
         uint64_t frames = g_sectionTotals[i].detailFrames > 0 ? g_sectionTotals[i].detailFrames : 1;
         firstFrame = g_sections[i].lastFrame;
-        if (i < UT_BENCH_SECTIONS - 4 || g_sectionNoteCount[i] == 0) continue;
-        utLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", g_sections[i].tag, (unsigned) g_sectionNotesMissed[i]);
+        if (i < OF_BENCH_SECTIONS - 4 || g_sectionNoteCount[i] == 0) continue;
+        ofLogPrint("%s: costliest draws, ms/fr calls/fr (%u calls dropped from the list)\n", g_sections[i].tag, (unsigned) g_sectionNotesMissed[i]);
         for (int n = 0; n < g_sectionNoteCount[i]; n++) {
             const SWCallNote *draw = &g_sectionNotes[i][n];
             unsigned tenths = (unsigned) (draw->nanos / (frames * 100000u));
             unsigned callTenths = (unsigned) ((uint64_t) draw->calls * 10u / frames);
-            utLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
+            ofLogPrint(" %3u.%u %3u.%u %s\n", tenths / 10, tenths % 10, callTenths / 10, callTenths % 10, draw->what);
         }
     }
     {
-        /* What a direct read costs by what read came just before it (utPlatformReadCosts), ms. */
-        unsigned tenths[UT_READ_COSTS];
-        utPlatformReadCosts(tenths);
+        /* What a direct read costs by what read came just before it (ofPlatformReadCosts), ms. */
+        unsigned tenths[OF_READ_COSTS];
+        ofPlatformReadCosts(tenths);
         #define MS(n) tenths[n] / 10, tenths[n] % 10
-        utLogPrint("4 KB read, ms: tex>tex %u.%u music>tex %u.%u tex>music %u.%u music>music %u.%u idle>tex %u.%u data.win>tex %u.%u\n",
-                   MS(UT_READ_TEX_TEX), MS(UT_READ_MUSIC_TEX), MS(UT_READ_TEX_MUSIC), MS(UT_READ_MUSIC_MUSIC), MS(UT_READ_IDLE_TEX),
-                   MS(UT_READ_FILE_TEX));
+        ofLogPrint("4 KB read, ms: tex>tex %u.%u music>tex %u.%u tex>music %u.%u music>music %u.%u idle>tex %u.%u data.win>tex %u.%u\n",
+                   MS(OF_READ_TEX_TEX), MS(OF_READ_MUSIC_TEX), MS(OF_READ_TEX_MUSIC), MS(OF_READ_MUSIC_MUSIC), MS(OF_READ_IDLE_TEX),
+                   MS(OF_READ_FILE_TEX));
         #undef MS
     }
     /* One more measurement, after the report so far is safely in the file: it
      * draws outside a frame, and a report must not be lost to it. */
-    utLogDump();
+    ofLogDump();
     {
         /* A sprite draw cut short at each stage in turn (sw_call_notes.h), microseconds a call:
          * what it has cost by the renderer's door, with its texture found, on entering the
          * drawing code, clipped, set up, with held layers let out, and whole. */
         int width, height, path;
         unsigned at[7], outside;
-        utPlatformSpriteCosts(&width, &height, at, &outside, &path);
+        ofPlatformSpriteCosts(&width, &height, at, &outside, &path);
         #define US(n) (n) / 1000, (n) % 1000 / 10
-        utLogPrint("sprite %dx%d draw, us, way %d: door %u.%02u texture %u.%02u entered %u.%02u\n", width, height, path,
+        ofLogPrint("sprite %dx%d draw, us, way %d: door %u.%02u texture %u.%02u entered %u.%02u\n", width, height, path,
                    US(at[1]), US(at[2]), US(at[3]));
-        utLogPrint("  clipped %u.%02u set up %u.%02u let out %u.%02u whole %u.%02u; out of view %u.%02u\n",
+        ofLogPrint("  clipped %u.%02u set up %u.%02u let out %u.%02u whole %u.%02u; out of view %u.%02u\n",
                    US(at[4]), US(at[5]), US(at[6]), US(at[0]), US(outside));
         #undef US
     }
-    utLogPrint("--- end of report ---\n"); /* utLogDump keeps a report from its title to this line */
-    utLogDump();
-    utDiagHalt("benchmark finished");
+    ofLogPrint("--- end of report ---\n"); /* ofLogDump keeps a report from its title to this line */
+    ofLogDump();
+    ofDiagHalt("benchmark finished");
 }
