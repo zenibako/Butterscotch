@@ -98,7 +98,7 @@ make copy       # copy the core to a mounted Pocket SD card
 
 The save-state build requires a matching os25 runtime with
 `INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build
-openfpgaOS revision `7561ace` with
+openfpgaOS revision `865d627` with
 `tools/openfpgaos/os25-savestates.patch` applied, then stage it into a separate SDK:
 
 The prototype patch uses the existing `INCLUDE_CLK90` option for os25. It
