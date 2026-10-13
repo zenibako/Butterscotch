@@ -324,3 +324,42 @@ Snapshot tests, lint and native build pass. The card runtime pair matches; repla
 only `Assets/butterscotch/common/undertale.elf` from `room-cache-test`.
 Pocket load timing, warning removal and the additional heap footprint remain
 hardware verification gates.
+
+### ROOM cache hardware result and archive timing
+
+The next Pocket run confirms room 47 payload preparation fell from 8,347 ms
+to 7 ms with the retained ROOM chunk. Core preparation took 2,548 ms, but
+progress archive application took 6,213 ms; total restore was 9,123 ms and
+returned success. The user confirms the red Loading failed warning remains,
+with faster loading afterward. This does not establish which archive operation
+blocked: slot lookup, open, unbuffered write and close all share that interval.
+
+Add native-only timings around lookup, open, buffering, write and close,
+emitting one line after those calls finish. Keep persistence and completion
+ordering unchanged. This diagnostic requires another manual load and log export
+to identify the blocking operation before altering the handoff.
+
+Source tracing found that both registered filename lookup passes call the
+Pocket GETFILE implementation, which first performs a synchronous four-byte
+DS_CMD_READ. Slot lookup and fopen can therefore issue host commands before
+LOAD acknowledgement despite the archive write being memory-backed. Pocket
+slot IDs remain fixed during this launch, so kernel lookup now trusts registry
+hits there. MiSTer and sim retain live stale-mapping validation. Lookup misses
+still use the existing discovery path; archive persistence and transactional
+restore ordering remain unchanged.
+
+An executable extracted-source regression covers both registered lookup passes,
+full-name ordering, misses and stale dynamic mappings on all three targets.
+It fails before the Pocket guard and passes afterward. Rebuild only the OS
+firmware; the FPGA bitstream, boot ABI and app service layout are unchanged.
+The diagnostic app retains split archive timings for hardware attribution.
+
+Verification: snapshot suite (including transactional archive fault cases),
+lookup regression, async-save and timeout regressions, and lint pass. The
+native ELF contains the archive timers. The firmware rebuild passes its contract
+check; packaged OS CRC and boot ABI match the unchanged runtime contract.
+The regenerated patch applies cleanly to the pinned OS revision. Package
+`butterscotch-load-handoff-test.zip` contains only `Assets/butterscotch/common/`
+`os.bin` and `undertale.elf`, with no Saves or bitstream replacement. The user
+must manually test load and export the log: warning removal and latency remain
+unverified on hardware.

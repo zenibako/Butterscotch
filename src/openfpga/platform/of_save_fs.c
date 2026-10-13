@@ -34,6 +34,7 @@
 #include <string.h>
 #if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 #include "of_file.h"
+#include "gettime.h"
 #endif
 
 typedef struct {
@@ -441,17 +442,38 @@ bool ofSaveFsApplySnapshot(FileSystem *base, void *ptr) {
         /* Reject the kernel's save-name fallback: the slot must have been
          * discovered from the Pocket instance, so close can publish its size. */
 #ifdef OF_NATIVE_SAVESTATES
+        uint64_t timings[6] = {nowNanos(), 0, 0, 0, 0, 0};
         uint32_t slotId = 0;
         if (of_file_slot_find(OF_SAVE_SLOT_FILE, &slotId) != 0 || slotId != 10) return false;
+        timings[1] = nowNanos();
 #endif
         /* The pinned Pocket kernel validates a whole CRAM write before its
          * memcpy. One unbuffered write fits the 256 KiB slot; r+b avoids
          * O_TRUNC before that validation. Header.totalBytes ignores old tail
          * bytes when the restored archive is shorter. */
         FILE *slot = fopen(OF_SAVE_SLOT_FILE, "r+b");
-        bool ok = slot && setvbuf(slot, NULL, _IONBF, 0) == 0 &&
-            fwrite(p->archive, 1, p->size, slot) == p->size;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[2] = nowNanos();
+#endif
+        bool ok = slot && setvbuf(slot, NULL, _IONBF, 0) == 0;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[3] = nowNanos();
+#endif
+        if (ok) ok = fwrite(p->archive, 1, p->size, slot) == p->size;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[4] = nowNanos();
+#endif
         if (slot) fclose(slot);
+#ifdef OF_NATIVE_SAVESTATES
+        timings[5] = nowNanos();
+        logInfo("State archive phases: lookup %llu open %llu buffer %llu write %llu close %llu ms; %zu bytes, %s\n",
+            (unsigned long long)((timings[1] - timings[0]) / 1000000),
+            (unsigned long long)((timings[2] - timings[1]) / 1000000),
+            (unsigned long long)((timings[3] - timings[2]) / 1000000),
+            (unsigned long long)((timings[4] - timings[3]) / 1000000),
+            (unsigned long long)((timings[5] - timings[4]) / 1000000),
+            p->size, ok ? "ok" : "failed");
+#endif
 #endif
         if (!ok) return false;
     }
