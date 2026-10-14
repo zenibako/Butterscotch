@@ -122,9 +122,10 @@ wrapper mounts both the SDK and this repository. Packaging needs Bash 4 or later
 on the host (Homebrew's Bash on macOS).
 
 Use the Pocket's Memories controls to save or load, or its power button to
-sleep. Exact snapshots are accepted in supported overworld scenes and the
-game's own menus. Battles, dialogue, cutscenes, the port's Select menu, and
-unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+sleep. Exact snapshots are accepted in supported overworld scenes, the
+game's own menus and its dialogue. Battles (including the room a battle was
+entered from, which the game keeps as persistent), the player's cutscenes, the
+port's Select menu, and unsupported runtime resources, live dynamic sprites, and a debug-paused runner
 produce an on-screen refusal. Select → Save states
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
