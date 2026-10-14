@@ -19,7 +19,10 @@ static unsigned evictionRequests;
 static void pressureSprite(Renderer* renderer, int32_t index, float x, float y,
                            float ox, float oy, float xs, float ys, float angle,
                            uint32_t color, float alpha) {
-    if (evictDuringGrid) { ++evictionRequests; swrTileRunsFree(); }
+    if (evictDuringGrid) {
+        ++evictionRequests;
+        assert(!swrTileRunsFree());
+    }
     SWRenderer_drawSprite(renderer, index, x, y, ox, oy, xs, ys, angle, color, alpha);
 }
 
