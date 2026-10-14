@@ -22,7 +22,7 @@ GAMES=(
     "deltarune|Deltarune.json|games/deltarune|deltarune.win|dr_textures.bin|dr_music.bin"
 )
 if [ "${SAVESTATES:-0}" = 1 ]; then
-    GAMES=("undertale|Undertale.json|.|data.win|textures.bin|music.bin")
+    GAMES=("undertale|Undertale.json|games/undertale|data.win|textures.bin|music.bin")
     [ -f "$ROOT/runtime/pocket/UNDERTALE_SAVESTATES" ] || {
         echo "mkcard: use an SDK staged with the save-state-enabled os25 runtime"; exit 1;
     }
