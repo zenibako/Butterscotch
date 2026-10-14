@@ -12,6 +12,7 @@
 
 #include "data_win.h"
 #include "of_bench.h"
+#include "runner.h"
 #include "vm.h"
 
 /* A game string replaced as loaded (see of_strings.c). */
@@ -71,6 +72,11 @@ typedef struct {
     uint32_t ioDivisor;
     uint32_t ioAsyncBase;
     uint32_t ioAsyncStep;
+
+    /* Why the current scene can't be saved as a state, or NULL if it can
+     * (NULL here: the game has no save states yet). The runner's own
+     * resource check (Runner_snapshotCheck) runs after it. */
+    const char *(*savestateReason)(Runner *runner);
 } OfGame;
 
 extern const OfGame ofGame;

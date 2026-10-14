@@ -214,6 +214,12 @@ static const OfBenchSection g_sections[] = {
     { "battle: next turn", 3600, "bnext" },
 };
 
+/* Save states are not supported yet (see of_state_requests.c). */
+static const char *savestateReason(Runner *r) {
+    (void)r;
+    return "Deltarune saves aren't ready";
+}
+
 const OfGame ofGame = {
     .natives = g_natives,
     .nativeCount = sizeof(g_natives) / sizeof(g_natives[0]),
@@ -230,4 +236,5 @@ const OfGame ofGame = {
     .ioDivisor = 3u,
     .ioAsyncBase = 35u,
     .ioAsyncStep = 1u,
+    .savestateReason = savestateReason,
 };
