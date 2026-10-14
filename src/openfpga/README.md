@@ -195,6 +195,29 @@ failure handling, notice bounds, and request completion. It also checks
 container-supplied game fingerprints. Native hardware
 behavior still requires Pocket tests.
 
+To see where a state can be taken, `BS_STATE_PROBE=<n>` makes the desktop build
+try every n frames and print a tab-separated `State probe` line on stderr:
+frame, room index and name, what the scene policy says, whether a capture
+works with the policy set aside, its size, and every refusal the serializer
+has (`Runner_snapshotBlockers`), not only the first. It looks behind the
+Deltarune gate too, without lifting it. `BS_STATE_PROBE_BYPASS=1` lets
+`BS_STATE_SAVE_FRAME` save in a scene the policy refuses, so that a restore
+there can be compared. Neither exists in the device build.
+`tools/state-coverage.sh` runs a route with the probe and prints the table;
+given `save:compare` frame pairs it also saves, restores in a fresh process
+and checks the later frame is identical to an uninterrupted run:
+
+```bash
+tools/state-coverage.sh -g undertale -s route.script -x 2700 1500:1700 900:1100
+tools/state-coverage.sh -g deltarune -b          # the benchmark's route
+```
+
+Each comparison frame must follow both the saved frame and the fresh process's
+restore at frame 40. The tool requires a successful load before comparing pixels.
+`-p recording.json` accepts relative paths and can probe a recorded route, but
+cannot be combined with frame pairs: snapshots do not yet preserve the recorded
+input playback cursor. Use `-s route.script` for repeatable restore comparisons.
+
 Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
 game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this
