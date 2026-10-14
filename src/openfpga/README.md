@@ -212,6 +212,12 @@ tools/state-coverage.sh -g undertale -s route.script -x 2700 1500:1700 900:1100
 tools/state-coverage.sh -g deltarune -b          # the benchmark's route
 ```
 
+Each comparison frame must follow both the saved frame and the fresh process's
+restore at frame 40. The tool requires a successful load before comparing pixels.
+`-p recording.json` accepts relative paths and can probe a recorded route, but
+cannot be combined with frame pairs: snapshots do not yet preserve the recorded
+input playback cursor. Use `-s route.script` for repeatable restore comparisons.
+
 Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
 game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this

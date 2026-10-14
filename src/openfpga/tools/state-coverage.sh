@@ -26,6 +26,30 @@ while getopts "g:n:x:s:p:be:" opt; do
     esac
 done
 shift $((OPTIND - 1))
+# Resolve relative recordings before moving into the isolated run directory.
+if [ -n "$playback" ]; then
+    [ -r "$playback" ] || { echo "Cannot read recording: $playback" >&2; exit 2; }
+    playback="$(cd "$(dirname "$playback")" && pwd)/$(basename "$playback")"
+fi
+has_playback=${BS_PLAYBACK+x}
+[ -z "$playback" ] || has_playback=1
+for setting in ${extra[@]+"${extra[@]}"}; do
+    case $setting in BS_PLAYBACK=*) has_playback=1 ;; esac
+done
+if [ -n "$has_playback" ] && [ "$#" -gt 0 ]; then
+    echo "Recording comparisons are unsupported: snapshots do not restore the playback cursor; use -s instead." >&2
+    exit 2
+fi
+load=40
+for pair in "$@"; do
+    if [[ ! "$pair" =~ ^[1-9][0-9]{0,9}:[1-9][0-9]{0,9}$ ]]; then
+        echo "Invalid frame pair: $pair (expected positive save:compare frames)" >&2; exit 2
+    fi
+    save=${pair%%:*} compare=${pair##*:}
+    if (( save > 2147483645 || compare > 2147483647 || compare <= save || compare <= load )); then
+        echo "Invalid frame pair: $pair (compare must follow save and restore frame $load)" >&2; exit 2
+    fi
+done
 bin="$port/${game}_pc"
 [ -x "$bin" ] || { echo "Build it first: make GAME=$game ${game}_pc" >&2; exit 1; }
 data="$port/games/$game"
@@ -66,6 +90,7 @@ grep 'State probe' last.log | sed 's/^.*State probe	//' | awk -F'\t' '
 status=0
 for pair in "$@"; do
     save=${pair%%:*} compare=${pair##*:}
+    rm -f state.bin ref.ppm restored.ppm
     play BS_DUMP_FRAME="$compare" BS_DUMP_PATH="$run/ref.ppm"
     play BS_STATE_PROBE_BYPASS=1 BS_STATE_SAVE_FRAME="$save" BS_STATE_SAVE_PATH="$run/state.bin" \
         BS_EXIT_FRAME=$((save + 2))
@@ -75,8 +100,13 @@ for pair in "$@"; do
     fi
     size=$(wc -c < state.bin | tr -d ' ')
     rm -f restored.ppm
-    play BS_STATE_PROBE_BYPASS=1 BS_STATE_LOAD_FRAME=40 BS_STATE_LOAD_PATH="$run/state.bin" \
+    play BS_STATE_PROBE_BYPASS=1 BS_STATE_LOAD_FRAME="$load" BS_STATE_LOAD_PATH="$run/state.bin" \
         BS_DUMP_FRAME="$compare" BS_DUMP_PATH="$run/restored.ppm"
+    if ! grep -q '^Save state load: ok ' last.log; then
+        echo "save $save -> compare $compare: load did not succeed"
+        tail -5 last.log >&2
+        status=1; continue
+    fi
     if [ -s restored.ppm ] && cmp -s ref.ppm restored.ppm; then
         echo "save $save -> compare $compare: identical ($size bytes)"
     else
