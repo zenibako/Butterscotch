@@ -48,8 +48,10 @@ static void patchInstructions(DataWin *dw) {
     }
 }
 
-/* Save states (of_state_requests.c) are taken in the overworld and the
- * game's own menus. Battles, dialogue and cutscenes are refused for now. */
+/* Save states (of_state_requests.c) are taken in the overworld, the game's
+ * own menus and its dialogue; Runner_snapshotCheck still refuses anything it
+ * cannot store. Battles and the player's cutscenes are refused for now: a
+ * battle makes the room it left persistent, which snapshots don't carry. */
 static const char *savestateReason(Runner *r) {
     if (r->dataWin->gen8.wadVersion != 16 || strcmp(r->dataWin->gen8.name, "UNDERTALE"))
         return "Unsupported game version";
@@ -61,15 +63,10 @@ static const char *savestateReason(Runner *r) {
         const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
         if (!strcmp(name, "obj_overworldcontroller")) overworld = true;
         if (strstr(name, "battle") || strstr(name, "battler")) return "Can't save during battles";
-        if (!strncmp(name, "obj_writer", 10) || strstr(name, "dialogue")) return "Can't save during dialogue";
         if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
             return "Can't save during cutscenes";
     }
     if (!overworld) return "Save in the overworld or menu";
-    /* The Undertale v1.08 overworld menu sets interact=5. Retain the writer,
-     * battle and player-cutscene checks even for that menu value. */
-    GMLReal interact = ofStateNumber(r, r->vmContext->globalScopeInstance, "interact");
-    if (interact != 0 && interact != 5) return "Can't save during dialogue";
     return NULL;
 }
 
