@@ -97,12 +97,16 @@ make copy       # copy the core to a mounted Pocket SD card
 ### Save states and sleep (experimental, Undertale only)
 
 The save-state build requires a matching os25 runtime with
-`INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build
-openfpgaOS revision `865d627` with
-`tools/openfpgaos/os25-savestates.patch` applied, then stage it into a separate SDK:
+`INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build the
+os25 variant from our openfpgaOS fork,
+[zenibako/openfpgaCore](https://github.com/zenibako/openfpgaCore), at commit
+`cf9e4cf` (branch `claude/project-thread-yoti6c`) or a later commit on that
+branch, then stage it into a separate SDK. The staging script refuses an OS
+checkout that does not contain `cf9e4cf`.
 
-The prototype patch uses the existing `INCLUDE_CLK90` option for os25. It
-runs the CPU and RAM at 90 MHz; its video and audio clocks are unchanged.
+At `cf9e4cf` the fork's os25 uses the existing `INCLUDE_CLK90` option: the
+CPU and RAM run at 90 MHz, and the video and audio clocks are unchanged. Later
+commits on the branch may change the clock; check its log before building.
 
 ```bash
 tools/stage-savestate-sdk.sh /path/to/built-openfpgaOS /path/to/base-SDK /path/to/new-SDK
@@ -114,7 +118,7 @@ source change, rebuild its firmware and patch the matching bootloader into
 the bitstream before staging. The output is
 `out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
 The base SDK is read-only. The standard build still uses its existing SDK.
-The patched runtime prioritizes a pending save over an unfinished asynchronous
+The fork's runtime prioritizes a pending save over an unfinished asynchronous
 read and provides a conservative heap-capacity query. Install the complete
 package when updating it: the app, OS, and bitstream must match.
 Native container builds use the firmware image built by openfpgaOS; the app
@@ -168,11 +172,11 @@ Save-state builds retain the raw ROOM chunk already read at startup, so lazy
 room reloads use memory during restoration. Room parsing and unloading remain
 lazy. The cache uses additional heap space and is released with the game data.
 
-The runtime fault tests use the patched OS checkout:
+The runtime fault tests use a checkout of the fork:
 
 ```bash
-OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_async_save_abort.py
-OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_heap_reserve.py
+OPENFPGAOS_SOURCE=/path/to/openfpgaCore python3 tests/test_async_save_abort.py
+OPENFPGAOS_SOURCE=/path/to/openfpgaCore python3 tests/test_heap_reserve.py
 ```
 
 Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with

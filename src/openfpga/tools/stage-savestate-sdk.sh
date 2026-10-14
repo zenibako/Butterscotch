@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Copy a built, matching os25 save-state runtime into an isolated SDK.
+# The runtime comes from our openfpgaOS fork, zenibako/openfpgaCore.
 set -euo pipefail
+os_required=cf9e4cfb4677e8eacde067aa9a63d196c602f362
 if [ "$#" != 3 ]; then
     echo "Usage: $0 <built openfpgaOS checkout> <base SDK> <new staged SDK>" >&2
     exit 1
@@ -8,6 +10,10 @@ fi
 os=$(cd "$1" && pwd)
 base=$(cd "$2" && pwd)
 dest="$3"
+git -C "$os" merge-base --is-ancestor "$os_required" HEAD 2>/dev/null || {
+    echo "Build zenibako/openfpgaCore at $os_required or later; $os does not contain it" >&2
+    exit 1
+}
 [ ! -e "$dest" ] || { echo "Use a new destination; the base SDK stays read-only" >&2; exit 1; }
 build="$os/src/fpga/targets/pocket/bld/os25"
 python3 - "$build" <<'PY'
