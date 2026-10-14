@@ -31,22 +31,49 @@ jobs:
     name: Build (${{ matrix.name }})
     runs-on: ubuntu-24.04
     steps:
+      # The Woody packages come from archive.debian.org, which now and then
+      # refuses a download, sometimes on every attempt from one runner. They
+      # never change, so download them once into a tarball and cache it;
+      # later runs build the chroot without touching the archive. Bump the
+      # key's version when the package list below changes.
+      - name: Restore Woody packages
+        id: woody-debs
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/woody-debs.tgz
+          key: woody-debs-${{ matrix.compiler }}-v1
+
+      - name: Download Woody packages
+        if: steps.woody-debs.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install --no-install-recommends -y debootstrap
+          # Retry with a fresh target, switching between archive.debian.org
+          # and a mirror of it; the package cache keeps what already arrived,
+          # so a retry only fetches what is missing. base-config (the
+          # installer's first-boot setup) is left out: the build doesn't need
+          # it, and its download has started failing on every attempt.
+          mkdir -p ~/woody-debs
+          for attempt in 1 2 3 4; do
+            if [ $((attempt % 2)) = 1 ]; then mirror=http://archive.debian.org/debian; else mirror=http://archive.kernel.org/debian-archive/debian; fi
+            sudo rm -rf ~/woody
+            sudo debootstrap --arch=i386 --cache-dir="$HOME/woody-debs" --exclude=base-config --include='${{ matrix.compiler }},make,libsdl1.2-dev,ccache' --make-tarball="$HOME/woody-debs.tgz" woody ~/woody "$mirror" && break
+            [ "$attempt" = 4 ] && exit 1
+            echo "debootstrap attempt $attempt ($mirror) failed; retrying in $((attempt * 15)) s"
+            sleep $((attempt * 15))
+          done
+
+      - name: Save Woody packages
+        if: steps.woody-debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/woody-debs.tgz
+          key: woody-debs-${{ matrix.compiler }}-v1
+
       - name: Create Debian Woody chroot
         run: |
           sudo apt-get install --no-install-recommends -y debootstrap
-          # archive.debian.org drops single package downloads now and then.
-          # Retry with a fresh target; the package cache keeps what already
-          # arrived, so a retry only fetches what is missing. base-config
-          # (the installer's first-boot setup) is left out: the build doesn't
-          # need it, and its download has started failing on every attempt.
-          mkdir -p ~/woody-debs
-          for attempt in 1 2 3 4; do
-            sudo rm -rf ~/woody
-            sudo debootstrap --arch=i386 --cache-dir="$HOME/woody-debs" --exclude=base-config --include='${{ matrix.compiler }},make,libsdl1.2-dev,ccache' woody ~/woody http://archive.debian.org/debian && break
-            [ "$attempt" = 4 ] && exit 1
-            echo "debootstrap attempt $attempt failed; retrying in $((attempt * 15)) s"
-            sleep $((attempt * 15))
-          done
+          sudo rm -rf ~/woody
+          sudo debootstrap --arch=i386 --exclude=base-config --include='${{ matrix.compiler }},make,libsdl1.2-dev,ccache' --unpack-tarball="$HOME/woody-debs.tgz" woody ~/woody http://archive.debian.org/debian
 
       - name: Checkout repo
         uses: actions/checkout@v7
