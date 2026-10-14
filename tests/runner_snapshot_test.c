@@ -292,6 +292,91 @@ static void testRejectsBadInputAndLiveResources(void) {
     destroyFixture(&r);
 }
 
+static bool listed(const char **list, int count, const char *text) {
+    for (int i = 0; i < count; i++) if (list[i] && !strcmp(list[i], text)) return true;
+    return false;
+}
+
+static void testBlockersListsEveryRefusal(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    const char *why[8] = {0};
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    assert(why[0] == NULL);
+
+    r.openTextFiles[0].isOpen = true;
+    r.paused = true;
+    /* The preflight stops at its first refusal; the list has both. */
+    const char *first = Runner_snapshotCheck(&r);
+    assert(first != NULL);
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Open text file"));
+    assert(listed(why, 2, "Paused runner is unsupported for capture"));
+    assert(listed(why, 2, first));
+    assert(why[2] == NULL);
+
+    /* A repeated refusal is listed once, and the count is the total even
+     * when the caller's array is shorter. */
+    r.openTextFiles[1].isOpen = true;
+    const char *one[1] = {0};
+    assert(Runner_snapshotBlockers(&r, one, 1) == 2);
+    assert(one[0] != NULL);
+    assert(Runner_snapshotBlockers(&r, NULL, 0) == 2);
+
+    /* Listing changes nothing: the runner captures again once it is clear. */
+    r.openTextFiles[0].isOpen = false;
+    r.openTextFiles[1].isOpen = false;
+    r.paused = false;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    assert(Runner_snapshotCheck(&r) == NULL);
+
+    /* The vertex buffer table is a plain array sized by vertexBufferCount,
+     * not an stb_ds array: the preflight must bound it by that count. */
+    r.vertexBufferCount = 4;
+    r.vertexBuffers = calloc(4, sizeof(*r.vertexBuffers));
+    assert(r.vertexBuffers);
+    assert(Runner_snapshotBlockers(&r, why, 8) == 1);
+    assert(listed(why, 1, "Vertex buffer count is unsupported"));
+    r.vertexBuffers[3] = (Buffer_Vertex *)&r;   /* any non-null entry is a live buffer */
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Live vertex buffer is unsupported"));
+    assert(Runner_snapshotCheck(&r) != NULL);
+    free(r.vertexBuffers);
+    r.vertexBuffers = NULL;
+    r.vertexBufferCount = 0;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+
+    const char *none[2] = {0};
+    assert(Runner_snapshotBlockers(NULL, none, 2) == 1);
+    assert(none[0] && !strcmp(none[0], "Runner is not ready"));
+    destroyFixture(&r);
+}
+
+static void testBlockersWithInvalidSpriteRegistry(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    const char *why[8] = {0};
+    r.paused = true;
+    dw.sprt.count = 1;
+    assert(dw.sprt.sprites == NULL);
+    assert(!strcmp(Runner_snapshotCheck(&r), "Invalid sprite registry"));
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Invalid sprite registry"));
+    assert(listed(why, 2, "Paused runner is unsupported for capture"));
+    assert(Runner_snapshotBlockers(&r, NULL, 0) == 2);
+
+    dw.sprt.count = 0;
+    dw.sprt.parsedCount = 1;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Invalid sprite registry"));
+    dw.sprt.parsedCount = 0;
+    r.paused = false;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    destroyFixture(&r);
+}
+
 static void testDynamicSpriteCaptureEligibility(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -1001,6 +1086,8 @@ int main(void) {
     testRejectsBadInputAndLiveResources();
     testPausedCaptureEligibility();
     testDynamicSpriteCaptureEligibility();
+    testBlockersListsEveryRefusal();
+    testBlockersWithInvalidSpriteRegistry();
     testAllLoadedRoomsAndDefinitions();
     testDormantPoolHoleRefuses();
     testMalformedRoomCleanupAndDimensions();

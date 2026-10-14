@@ -367,20 +367,44 @@ static bool hasLiveDynamicSprite(const DataWin *dw) {
     return false;
 }
 
-static bool eligible(Runner *r, const char **reason, bool forCapture) {
-#define REFUSE(msg) do { if (reason) *reason = msg; return false; } while (0)
-    if (!r || !r->dataWin || !r->vmContext || !r->renderer || !r->currentRoom)
-        REFUSE("Runner is not ready");
+/* Every refusal the preflight finds, for the desktop coverage probe. The
+ * count is the total; only the first max are stored for the caller. */
+#define SNAP_MAX_BLOCKERS 64   /* more distinct refusals than the preflight has */
+typedef struct {
+    const char **out; int max; int count;
+    const char *seen[SNAP_MAX_BLOCKERS];
+} BlockerList;
+
+static void noteBlocker(BlockerList *list, const char *msg) {
+    for (int i = 0; i < list->count && i < SNAP_MAX_BLOCKERS; i++)
+        if (list->seen[i] == msg) return;
+    if (list->count < SNAP_MAX_BLOCKERS) list->seen[list->count] = msg;
+    if (list->count < list->max) list->out[list->count] = msg;
+    list->count++;
+}
+
+/* With a list, every check runs and each distinct refusal is noted; without
+ * one, the first refusal is returned through reason, as capture needs. */
+static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerList *all) {
+#define REFUSE(msg) do { if (all) noteBlocker(all, msg); \
+        else { if (reason) *reason = msg; return false; } } while (0)
+    if (!r || !r->dataWin || !r->vmContext || !r->renderer || !r->currentRoom) {
+        /* Nothing below can be examined without these. */
+        if (all) noteBlocker(all, "Runner is not ready");
+        else if (reason) *reason = "Runner is not ready";
+        return false;
+    }
     if (r->dataWin->gen8.wadVersion != 16) REFUSE("Only WAD16 Undertale state is supported");
-    if (r->dataWin->sprt.parsedCount > r->dataWin->sprt.count ||
-        (r->dataWin->sprt.count && !r->dataWin->sprt.sprites))
+    bool spritesValid = r->dataWin->sprt.parsedCount <= r->dataWin->sprt.count &&
+        (!r->dataWin->sprt.count || r->dataWin->sprt.sprites);
+    if (!spritesValid)
         REFUSE("Invalid sprite registry");
     if (r->currentRoomIndex < 0 || (uint32_t)r->currentRoomIndex >= r->dataWin->room.count)
         REFUSE("Invalid room");
     if (forCapture && r->currentRoom->persistent) REFUSE("Persistent room is unsupported");
     if (forCapture && !r->currentRoom->payloadLoaded) REFUSE("Current room payload is unavailable");
     if (forCapture && r->paused) REFUSE("Paused runner is unsupported for capture");
-    if (hasLiveDynamicSprite(r->dataWin))
+    if (spritesValid && hasLiveDynamicSprite(r->dataWin))
         REFUSE("Dynamic sprite is unsupported");
     if (forCapture && !SpatialGrid_dimensionsValid(r->currentRoom->width,
                                                     r->currentRoom->height))
@@ -437,7 +461,11 @@ static bool eligible(Runner *r, const char **reason, bool forCapture) {
         arrlen(r->dsPriorityPool) + arrlen(r->dsGridPool) + arrlen(r->gmlBufferPool) +
         arrlen(r->mpGridPool) + arrlen(r->particleSystemPool) +
         arrlen(r->particleTypePool) + arrlen(r->audioEmitters) +
-        arrlen(r->vertexFormats) + arrlen(r->vertexBuffers);
+        arrlen(r->vertexFormats);
+    /* vertexBuffers is a plain array of vertexBufferCount slots (see
+     * allocBufferVertex), not an stb_ds array: arrlen() on it reads outside
+     * the allocation. Capture refuses any nonzero count just below. */
+    if (r->vertexBuffers && r->vertexBufferCount > 0) dormantSlots += (size_t)r->vertexBufferCount;
     if (dormantSlots > SNAP_DORMANT_SLOT_LIMIT) REFUSE("Dormant pool history is too large");
     for (ptrdiff_t i = 0; i < arrlen(r->dsQueuePool); i++)
         if (!r->dsQueuePool[i].freed || arrlen(r->dsQueuePool[i].items)) REFUSE("Live DS queue is unsupported");
@@ -462,7 +490,7 @@ static bool eligible(Runner *r, const char **reason, bool forCapture) {
             REFUSE("Live audio emitter is unsupported");
     for (ptrdiff_t i = 0; i < arrlen(r->vertexFormats); i++)
         if (r->vertexFormats[i]) REFUSE("Live vertex format is unsupported");
-    for (ptrdiff_t i = 0; i < arrlen(r->vertexBuffers); i++)
+    for (int32_t i = 0; r->vertexBuffers && i < r->vertexBufferCount; i++)
         if (r->vertexBuffers[i]) REFUSE("Live vertex buffer is unsupported");
     if (r->vertexBufferCount) REFUSE("Vertex buffer count is unsupported");
     if (r->newVertexFormat) REFUSE("Vertex format construction is active");
@@ -482,12 +510,18 @@ static bool eligible(Runner *r, const char **reason, bool forCapture) {
             (uint32_t)inst->objectIndex >= r->dataWin->objt.count || inst->physicsBody)
             REFUSE("Unsupported live instance");
     }
-    return true;
+    return !all || all->count == 0;
 #undef REFUSE
 }
 const char *Runner_snapshotCheck(Runner *r) {
     const char *reason = NULL;
-    return eligible(r, &reason, true) ? NULL : reason;
+    return eligible(r, &reason, true, NULL) ? NULL : reason;
+}
+int Runner_snapshotBlockers(Runner *r, const char **out, int max) {
+    BlockerList all = { out, out && max > 0 ? max : 0, 0, {0} };
+    for (int i = 0; i < all.max; i++) out[i] = NULL;
+    (void)eligible(r, NULL, true, &all);
+    return all.count;
 }
 
 typedef struct { RValue **slots; GMLArray **arrays; } Graph;
@@ -656,7 +690,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 #ifdef PLATFORM_BUSY_TICK
     uint64_t phase[6]; phase[0] = nowNanos();
 #endif
-    if (!eligible(r, reason, true)) return false;
+    if (!eligible(r, reason, true, NULL)) return false;
     Graph g = {0};
     if (!collectGraph(r, &g)) {
         if (reason) *reason = "Unsupported value graph";
@@ -1018,7 +1052,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         if (reason) *reason = "Invalid runner snapshot";
         return NULL;
     }
-    if (!eligible(r, reason, false)) return NULL;
+    if (!eligible(r, reason, false, NULL)) return NULL;
     Reader hdr = {.p = data, .n = size, .pos = 0, .ok = true};
     uint32_t magic = get32(&hdr), version = get32(&hdr);
     uint64_t id = get64(&hdr);

@@ -114,7 +114,19 @@ GMLReal ofStateNumber(Runner *r, Instance *instance, const char *name) {
     return v.type == RVALUE_REAL || v.type == RVALUE_INT32 || v.type == RVALUE_BOOL ? RValue_toReal(v) : 0;
 }
 
-const char *ofSavestateReason(Runner *r) {
+#ifdef OF_PC
+/* Desktop coverage probe (BS_STATE_PROBE, BS_STATE_PROBE_BYPASS): looks past
+ * the game gate and the scene policy to what the serializer itself refuses,
+ * so a scene the policy turns away can still be captured and compared. */
+static bool g_probeCapture;
+static bool policyBypassed(void) {
+    const char *env = getenv("BS_STATE_PROBE_BYPASS");
+    return g_probeCapture || (env && !strcmp(env, "1"));
+}
+#endif
+
+/* Only the game gate and scene policy; serializer refusals are separate. */
+static const char *policyReason(Runner *r) {
 #if !defined(OF_PC) && !defined(GAME_DELTARUNE)
 #ifdef OF_NATIVE_SAVESTATES
     if (!g_service) return "Save-state service is unavailable";
@@ -126,9 +138,55 @@ const char *ofSavestateReason(Runner *r) {
     /* Which scenes a game can save in is the game's own rule (of_game.h);
      * the runner's resource check below applies to every game. */
     if (!ofGame.savestateReason) return "Save states aren't ready for this game";
-    const char *why = ofGame.savestateReason(r);
+    return ofGame.savestateReason(r);
+}
+
+const char *ofSavestateReason(Runner *r) {
+#ifdef OF_PC
+    if (policyBypassed())
+        return (!r || !r->currentRoom) ? "The game is still loading" : Runner_snapshotCheck(r);
+#endif
+    const char *why = policyReason(r);
     return why ? why : Runner_snapshotCheck(r);
 }
+
+#ifdef OF_PC
+/* One tab-separated line on stderr every BS_STATE_PROBE frames: frame, room index
+ * and name, the policy's verdict, whether a capture works with the policy
+ * set aside, its size, and every serializer refusal (tools/state-coverage.sh
+ * turns a run of these into a table). The game's state is left as it was. */
+static void stateProbe(Runner *r) {
+    static int every = -1;
+    if (every < 0) { const char *env = getenv("BS_STATE_PROBE"); every = env ? atoi(env) : 0; }
+    /* "At least every": this is not reached on every frame number (a
+     * skipped or fast-forwarded frame passes it by). */
+    static int next = 0;
+    if (every <= 0 || !r || !r->currentRoom || r->frameCount <= 0 || r->frameCount < next) return;
+    next = r->frameCount - r->frameCount % every + every;
+    const char *policy = policyReason(r);
+    const char *room = r->currentRoomIndex >= 0 && (uint32_t)r->currentRoomIndex < r->dataWin->room.count
+        ? r->dataWin->room.rooms[r->currentRoomIndex].name : "?";
+    const char *why[64];
+    int capacity = (int)(sizeof(why) / sizeof(why[0]));
+    int blockers = Runner_snapshotBlockers(r, why, capacity);
+    uint8_t *data = NULL; size_t size = 0; const char *failed = NULL; bool ok = false;
+    if (!blockers) {
+        g_probeCapture = true;
+        ok = ofSavestateCapture(r, &data, &size, &failed);
+        g_probeCapture = false;
+        free(data);
+    }
+    /* Straight to stderr: the benchmark switches the log off after its
+     * first frame, and these lines are the tool's data. */
+    fprintf(stderr, "State probe\t%d\t%d\t%s\t%s\t%s\t%zu\t", r->frameCount, r->currentRoomIndex,
+        room ? room : "?", policy ? policy : "allowed", ok ? "ok" : "refused", size);
+    for (int i = 0; i < blockers && i < capacity; i++)
+        fprintf(stderr, "%s%s", i ? " | " : "", why[i]);
+    if (blockers > capacity) fprintf(stderr, " | %d more refusals omitted", blockers - capacity);
+    if (!blockers && !ok) fputs(failed ? failed : "?", stderr);
+    fputc('\n', stderr);
+}
+#endif
 
 bool ofSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **reason) {
     *data = NULL; *size = 0;
@@ -254,7 +312,8 @@ static bool hostRequest(Runner *r, bool load, const char *path) {
         ok = f && fwrite(data, 1, size, f) == size;
         if (f && fclose(f) != 0) ok = false;
     }
-    logInfo("Save state %s: %s (%zu bytes)%s%s\n", load ? "load" : "save", ok ? "ok" : "refused",
+    /* Keep the desktop tool's completion evidence even when --bench mutes logs. */
+    fprintf(stderr, "Save state %s: %s (%zu bytes)%s%s\n", load ? "load" : "save", ok ? "ok" : "refused",
         size, reason ? ": " : "", reason ? reason : "");
     if (!ok) ofPlatformSnapshotNotice(reason ? reason : "State request failed");
     free(data); return ok;
@@ -332,6 +391,7 @@ bool platformSnapshotBoundary(Runner *r) {
 #elif defined(OF_PC)
     static bool saved = false, loaded = false;
     bool worked = false;
+    stateProbe(r);
     const char *at = getenv("BS_STATE_SAVE_FRAME");
     if (!saved && at && r->frameCount == atoi(at)) {
         saved = true; const char *path = getenv("BS_STATE_SAVE_PATH");
