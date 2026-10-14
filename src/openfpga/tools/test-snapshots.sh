@@ -43,6 +43,6 @@ echo "runner snapshot: passed"
 "$out/pc-audio"
 export SDK_ROOT
 for test in test_game_fingerprint test_snapshot_notice test_save_fs_native_close \
-    test_snapshot_completion test_restore_commit; do
+    test_snapshot_completion test_restore_commit test_state_coverage test_state_probe; do
     python3 "$port/tests/$test.py"
 done

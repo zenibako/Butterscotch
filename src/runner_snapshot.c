@@ -395,15 +395,16 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         return false;
     }
     if (r->dataWin->gen8.wadVersion != 16) REFUSE("Only WAD16 Undertale state is supported");
-    if (r->dataWin->sprt.parsedCount > r->dataWin->sprt.count ||
-        (r->dataWin->sprt.count && !r->dataWin->sprt.sprites))
+    bool spritesValid = r->dataWin->sprt.parsedCount <= r->dataWin->sprt.count &&
+        (!r->dataWin->sprt.count || r->dataWin->sprt.sprites);
+    if (!spritesValid)
         REFUSE("Invalid sprite registry");
     if (r->currentRoomIndex < 0 || (uint32_t)r->currentRoomIndex >= r->dataWin->room.count)
         REFUSE("Invalid room");
     if (forCapture && r->currentRoom->persistent) REFUSE("Persistent room is unsupported");
     if (forCapture && !r->currentRoom->payloadLoaded) REFUSE("Current room payload is unavailable");
     if (forCapture && r->paused) REFUSE("Paused runner is unsupported for capture");
-    if (hasLiveDynamicSprite(r->dataWin))
+    if (spritesValid && hasLiveDynamicSprite(r->dataWin))
         REFUSE("Dynamic sprite is unsupported");
     if (forCapture && !SpatialGrid_dimensionsValid(r->currentRoom->width,
                                                     r->currentRoom->height))

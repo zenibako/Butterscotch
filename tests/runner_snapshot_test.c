@@ -353,6 +353,30 @@ static void testBlockersListsEveryRefusal(void) {
     destroyFixture(&r);
 }
 
+static void testBlockersWithInvalidSpriteRegistry(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    const char *why[8] = {0};
+    r.paused = true;
+    dw.sprt.count = 1;
+    assert(dw.sprt.sprites == NULL);
+    assert(!strcmp(Runner_snapshotCheck(&r), "Invalid sprite registry"));
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Invalid sprite registry"));
+    assert(listed(why, 2, "Paused runner is unsupported for capture"));
+    assert(Runner_snapshotBlockers(&r, NULL, 0) == 2);
+
+    dw.sprt.count = 0;
+    dw.sprt.parsedCount = 1;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
+    assert(listed(why, 2, "Invalid sprite registry"));
+    dw.sprt.parsedCount = 0;
+    r.paused = false;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    destroyFixture(&r);
+}
+
 static void testDynamicSpriteCaptureEligibility(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -1063,6 +1087,7 @@ int main(void) {
     testPausedCaptureEligibility();
     testDynamicSpriteCaptureEligibility();
     testBlockersListsEveryRefusal();
+    testBlockersWithInvalidSpriteRegistry();
     testAllLoadedRoomsAndDefinitions();
     testDormantPoolHoleRefuses();
     testMalformedRoomCleanupAndDimensions();
