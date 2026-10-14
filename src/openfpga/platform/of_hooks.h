@@ -11,9 +11,16 @@
 #include "log.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 
+struct Runner;
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+/* Positive proves the reserve now; zero requires the usual malloc probe. */
+int platformHeapCanReserve(size_t bytes);
+#endif
+bool platformSnapshotBoundary(struct Runner *runner);
 AudioSystem *platformCreateAudioSystem(void);
 FileSystem *platformCreateFileSystem(void);
 void platformDestroyFileSystem(FileSystem *base);

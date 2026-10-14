@@ -26,6 +26,13 @@ void BinaryReader_clearBuffer(BinaryReader* reader) {
     reader->bufferPos = 0;
 }
 
+static void requireFile(BinaryReader* reader) {
+    if (reader->file == nullptr) {
+        logError("BinaryReader: missing file and no active memory buffer\n");
+        abort();
+    }
+}
+
 static void readCheck(BinaryReader* reader, void* dest, size_t bytes) {
     if (reader->buffer != nullptr) {
         if (reader->bufferPos + bytes > reader->bufferSize) {
@@ -38,6 +45,7 @@ static void readCheck(BinaryReader* reader, void* dest, size_t bytes) {
         return;
     }
 
+    requireFile(reader);
     size_t read = fread(dest, 1, bytes, reader->file);
     if (read != bytes) {
         long pos = ftell(reader->file) - (long) read;
@@ -119,6 +127,7 @@ uint8_t* BinaryReader_readBytesAt(BinaryReader* reader, size_t offset, size_t co
         return buf;
     }
 
+    requireFile(reader);
     long savedPos = ftell(reader->file);
     fseek(reader->file, (long) offset, SEEK_SET);
     readCheck(reader, buf, count);
@@ -131,6 +140,7 @@ void BinaryReader_skip(BinaryReader* reader, size_t bytes) {
         reader->bufferPos += bytes;
         return;
     }
+    requireFile(reader);
     fseek(reader->file, (long) bytes, SEEK_CUR);
 }
 
@@ -144,6 +154,7 @@ void BinaryReader_seek(BinaryReader* reader, size_t position) {
         return;
     }
 
+    requireFile(reader);
     if (position > reader->fileSize) {
         logError("BinaryReader: seek to 0x%zX out of bounds (file size 0x%zX)\n", position, reader->fileSize);
         abort();
@@ -155,5 +166,6 @@ size_t BinaryReader_getPosition(BinaryReader* reader) {
     if (reader->buffer != nullptr) {
         return reader->bufferBase + reader->bufferPos;
     }
+    requireFile(reader);
     return (size_t) ftell(reader->file);
 }

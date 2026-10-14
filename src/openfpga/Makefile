@@ -86,14 +86,16 @@ BS_STB_SRCS    = $(BS_SRC)/embedded/stb_impl.c
 BS_VENDOR_SRCS = $(wildcard $(BS_VENDOR)/bzip2/*.c) \
                  $(BS_VENDOR)/sha1/sha1.c $(BS_VENDOR)/md5/md5.c \
                  $(BS_VENDOR)/base64/base64.c \
-                 $(BS_VENDOR)/miniz/miniz.c $(BS_VENDOR)/miniz/miniz_tdef.c $(BS_VENDOR)/miniz/miniz_tinfl.c
+                 $(BS_VENDOR)/miniz/miniz.c $(BS_VENDOR)/miniz/miniz_tdef.c $(BS_VENDOR)/miniz/miniz_tinfl.c \
+                 $(BS_VENDOR)/zstd/zstd.c
 # Box2D physics is left out (ENABLE_PHYSICS off): Undertale does not use it.
 BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics_disabled.c
 
 SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
        platform/of_strings.c platform/of_save_fs.c platform/of_native.c \
-       platform/of_font.c platform/of_menu.c \
+       platform/of_font.c platform/of_menu.c platform/of_state_requests.c \
+       platform/of_snapshot_envelope.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
        $(BS_VIDEO_SRCS) $(BS_STB_SRCS) $(BS_VENDOR_SRCS) $(BS_PHYSICS_SRCS)
 SRCS_CXX =
@@ -102,7 +104,7 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
               -I$(BS_SRC)/debug_font \
               -I$(BS_VENDOR)/stb/ds -I$(BS_VENDOR)/stb/image -I$(BS_VENDOR)/stb/vorbis \
               -I$(BS_VENDOR)/bzip2 -I$(BS_VENDOR)/sha1 -I$(BS_VENDOR)/md5 \
-              -I$(BS_VENDOR)/base64 -I$(BS_VENDOR)/miniz
+              -I$(BS_VENDOR)/base64 -I$(BS_VENDOR)/miniz -I$(BS_VENDOR)/zstd
 
 # Undertale v1.08 is WAD 16; building only that version shrinks the
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
@@ -123,6 +125,32 @@ BS_DEFS += -DTEXTURE_CACHE_BYTES='($(TEXTURE_CACHE_MB)u*1024u*1024u)' \
 
 ifeq ($(TRACE),1)
 BS_DEFS += -DOF_TRACE_FRAMES
+endif
+
+ifeq ($(SAVESTATES),1)
+ifneq ($(GAME),undertale)
+$(error Native save-state builds support Undertale only)
+endif
+ifneq ($(TARGET),pocket)
+$(error Native save-state builds support Pocket only)
+endif
+BS_DEFS += -DOF_NATIVE_SAVESTATES
+SDK_CONTAINER = $(CURDIR)/tools/native-sdk-container.sh
+export SDK_ROOT
+endif
+
+# Bind snapshots to the user's complete game file as well as loaded bytecode.
+# Recomputed once per make invocation; changes also invalidate cached objects.
+ifneq ($(wildcard $(G)data.win),)
+ifndef STATE_GAME_ID
+STATE_GAME_ID := $(shell python3 -c 'import hashlib; h=hashlib.sha256(); f=open("$(G)data.win", "rb"); [h.update(b) for b in iter(lambda:f.read(1048576), b"")]; print(h.hexdigest()[:16])')
+endif
+ifeq ($(STATE_GAME_ID),)
+$(error Could not fingerprint data.win; when compiling in a container pass STATE_GAME_ID=<host SHA256 prefix>)
+endif
+endif
+ifneq ($(STATE_GAME_ID),)
+BS_DEFS += -DOF_STATE_GAME_ID=0x$(STATE_GAME_ID)ULL
 endif
 
 BS_WARN = -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
@@ -157,13 +185,20 @@ MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
 # device build did, twice). So a change to any header empties the object
 # directories this run builds into. (Before sdk.mk, which looks at what is
 # in them; PC_OBJ_DIR is only set this early when a sub-make passes it.)
-HEADER_SUM := $(shell cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null | cksum | cut -d' ' -f1)
+HEADER_SUM := $(shell { cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null; printf '%s' '$(STATE_GAME_ID) $(SAVESTATES) $(GAME) $(WADS)'; } | cksum | cut -d' ' -f1)
 $(foreach d,$(OBJ_DIR) $(or $(PC_OBJ_DIR),$(ROOT)/.obj/$(APP)-pc),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
 
 # Declare default target before sdk.mk's rules
 .DEFAULT_GOAL := all
 
 include $(SDK_DIR)/sdk.mk
+
+APP_SIZE = $(SIZE) $(OBJ_DIR)/app.elf
+ifeq ($(SAVESTATES)-$(SDK_DELEGATE),1-1)
+APP_SIZE = bash $(SDK_CONTAINER) make -f $(firstword $(MAKEFILE_LIST)) native-size
+endif
+native-size:
+	@$(SIZE) $(OBJ_DIR)/app.elf
 
 # Host tool: converts data.win's texture pages to the renderer's 16-bit
 # format so the device does not have to decode PNGs.
@@ -220,11 +255,11 @@ export-save: $(MKSAVE)
 # The program alone. It needs no game data, so it is what a machine without
 # any (the CI) can build: `make elf && make GAME=deltarune elf`.
 elf: $(OBJ_DIR)/app.elf
-	@$(SIZE) $<
+	@$(APP_SIZE)
 
 # Build ELF, then assemble SD card image in build/<app>/
 all: $(OBJ_DIR)/app.elf $(GAME_PACKS) release
-	@$(SIZE) $<
+	@$(APP_SIZE)
 
 # Assemble the per-target deliverable.  Each platform owns its layout
 # (pocket = APF tree, mister = disk image); the rule names no target —
@@ -235,7 +270,7 @@ $(ROOT)/runtime:
 
 ifeq ($(TARGET),pocket)
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
-	@tools/mkcard.sh "$(SDK_DIR)/platforms/pocket/image.sh" "$(ROOT)" "$(DIST)" "$(CURDIR)"
+	@SAVESTATES=$(SAVESTATES) tools/mkcard.sh "$(SDK_DIR)/platforms/pocket/image.sh" "$(ROOT)" "$(DIST)" "$(CURDIR)"
 else
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
 	@$(SDK_DIR)/platforms/$(TARGET)/image.sh "$(APP)" "$(OBJ_DIR)/app.elf" "$(ROOT)" "$(DIST)" $(MISTER_ASSETS)
@@ -283,9 +318,15 @@ package: all
 # works on macOS too. of_init.c only fetches the kernel's caps/services
 # tables, which the PC shim does not use.
 PC_OBJ_DIR = $(ROOT)/.obj/$(APP)-pc
+ifeq ($(OF_SDK_IN_CONTAINER),1)
+PC_SDL_CFLAGS =
+PC_SDL_LIBS =
+else
 PC_SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null || sdl2-config --cflags)
 PC_SDL_LIBS   := $(shell pkg-config --libs sdl2 2>/dev/null || sdl2-config --libs)
-PC_SRCS = $(SRCS) $(SDK_DIR)/pc/of_sdl2.c
+endif
+PC_SRCS = $(SRCS) platform/of_pc_audio.c
+PC_SDL_CFLAGS += -isystem $(SDK_DIR)/pc -DOF_PC_SDL_SOURCE='"of_sdl2.c"'
 PC_OBJS = $(patsubst %.c,$(PC_OBJ_DIR)/%.o,$(subst ../,up/,$(PC_SRCS)))
 
 $(PC_OBJ_DIR)/up/%.o: ../%.c
@@ -312,6 +353,15 @@ sprite-clipping-fixture: $(PC_OBJS)
 .PHONY: profiler-fixture
 profiler-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/profiler.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_profiler_fixture
+# Requires an SDK staged with the matching save-state-enabled os25 runtime.
+# Keep this output separate from the ordinary two-game core.
+native-saves:
+	$(MAKE) GAME=undertale SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all
+
+save-states: native-saves
+
+snapshot-tests:
+	@SDK_ROOT="$(SDK_ROOT)" tools/test-snapshots.sh
 
 # The desktop build again, with AddressSanitizer and UndefinedBehaviorSanitizer,
 # as <game>_pc_asan. Run it through the same frame scripts as <game>_pc:
@@ -354,4 +404,4 @@ clean: sdk-clean
 	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops $(APP)_pc $(APP)_pc_asan $(APP)_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean
+.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves save-states native-size snapshot-tests
