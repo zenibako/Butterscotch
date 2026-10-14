@@ -496,7 +496,7 @@ static int arrayIndex(const Graph *g, GMLArray *array) {
     return -1;
 }
 static bool collect(Graph *g, RValue *slot) {
-    if (arrlen(g->slots) >= SNAP_MAX_ITEMS) return false;
+    if ((size_t)arrlen(g->slots) >= SNAP_MAX_ITEMS) return false;
     arrput(g->slots, slot);
     switch (slot->type) {
         case RVALUE_UNDEFINED: case RVALUE_REAL: case RVALUE_INT32:
@@ -508,7 +508,7 @@ static bool collect(Graph *g, RValue *slot) {
         case RVALUE_ARRAY:
             if (!slot->array || slot->array->type != GML_LEGACY_ARRAY) return false;
             if (arrayIndex(g, slot->array) < 0) {
-                if (arrlen(g->arrays) >= SNAP_MAX_ITEMS) return false;
+                if ((size_t)arrlen(g->arrays) >= SNAP_MAX_ITEMS) return false;
                 arrput(g->arrays, slot->array);
             }
             return true;
@@ -649,7 +649,8 @@ static void putMap(Writer *w, const Graph *g, IntRValueHashMap *map) {
 
 bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
                             size_t *size, const char **reason) {
-    if (data) *data = NULL; if (size) *size = 0;
+    if (data) *data = NULL;
+    if (size) *size = 0;
     if (reason) *reason = NULL;
     if (!data || !size) { if (reason) *reason = "Invalid output"; return false; }
 #ifdef PLATFORM_BUSY_TICK
@@ -909,7 +910,7 @@ static RValue *slotPointer(RunnerSnapshot *s, SlotRef ref) {
     return NULL;
 }
 static void getValue(Reader *rd, RunnerSnapshot *s, RValue *out, SlotRef ref) {
-    if (arrlen(s->slots) >= SNAP_MAX_ITEMS) { rd->ok = false; return; }
+    if ((size_t)arrlen(s->slots) >= SNAP_MAX_ITEMS) { rd->ok = false; return; }
     uint32_t tag = get32(rd), type = tag & 255u;
     if (!rd->ok) return;
     RValue value = RValue_makeUndefined();
@@ -1014,10 +1015,11 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
 #endif
     if (reason) *reason = NULL;
     if (!r || !r->dataWin || !r->vmContext || !data || size < 32 || size > SNAP_OUTPUT_LIMIT) {
-        if (reason) *reason = "Invalid runner snapshot"; return NULL;
+        if (reason) *reason = "Invalid runner snapshot";
+        return NULL;
     }
     if (!eligible(r, reason, false)) return NULL;
-    Reader hdr = {data, size, 0, true};
+    Reader hdr = {.p = data, .n = size, .pos = 0, .ok = true};
     uint32_t magic = get32(&hdr), version = get32(&hdr);
     uint64_t id = get64(&hdr);
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
@@ -1027,7 +1029,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
         rawLen < sizeof(RunnerPlain) || rawLen > SNAP_LIMIT - 24) {
-        if (reason) *reason = "Runner snapshot header or checksum mismatch"; return NULL;
+        if (reason) *reason = "Runner snapshot header or checksum mismatch";
+        return NULL;
     }
     uint8_t *raw = (uint8_t *)malloc(rawLen);
     bool decoded = false;
@@ -1061,7 +1064,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
 #ifdef PLATFORM_BUSY_TICK
     prep[1] = nowNanos();
 #endif
-    Reader rd = {raw, rawLen, 0, true};
+    Reader rd = {.p = raw, .n = rawLen, .pos = 0, .ok = true};
     rd.strg = &r->dataWin->strg;
     rd.stringRefs = version == SNAP_VERSION;
     if (rd.stringRefs && rd.strg->count > SNAP_STATIC_STRING_LIMIT) {
