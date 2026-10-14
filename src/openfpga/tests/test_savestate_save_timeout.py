@@ -40,7 +40,7 @@ static uint32_t mie = 8u;
 static int completions, hold_count, initial_hold;
 static int ss_present(void) { return 1; }
 static void fence(void) {}
-static void ss_quiesce_files(void) {}
+static int ss_quiesce_files(void) { return 1; }
 static uint32_t ss_irq_save(void) { uint32_t p = mie; mie = 0; return p; }
 static void ss_irq_restore(uint32_t p) { mie = p; }
 static void of_save_begin_cpu(void) { ++hold_count; CRAM0_MODE = CRAM0_MODE_CPU; }
