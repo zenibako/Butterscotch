@@ -3,11 +3,11 @@ from pathlib import Path
 import subprocess
 import tempfile
 import re
-source=(Path(__file__).resolve().parents[3]/'src/openfpga/platform/ut_savestate.c').read_text()
+source=(Path(__file__).resolve().parents[3]/'src/openfpga/platform/of_state_requests.c').read_text()
 a=source.index('bool platformSnapshotBoundary(')
 b=source.index('#elif defined(OF_PC)',a)
 function=source[a:b]+'}\n'
-function=re.sub(r'^#if defined\(UT_NATIVE_SAVESTATES\).*\n','',function,flags=re.M)
+function=re.sub(r'^#if defined\(OF_NATIVE_SAVESTATES\).*\n','',function,flags=re.M)
 function=re.sub(r'\*\(volatile const uint32_t \*\)\(uintptr_t\)0x4e00000(?:4|c)u','status',function)
 pre=r'''
 #include <assert.h>
@@ -19,7 +19,7 @@ pre=r'''
 #define OF_SAVESTATE_NONE 0
 #define OF_SAVESTATE_SAVE 1
 #define OF_SAVESTATE_LOAD 2
-#define UT_SNAPSHOT_LIMIT 1024u
+#define OF_SNAPSHOT_LIMIT 1024u
 static bool g_service=true;
 typedef struct{int currentRoomIndex;}Runner;
 static int scenario,pending,finishes,dumps,notices;
@@ -32,13 +32,13 @@ static uint64_t nowNanos(void){return 0;}
 static void logInfo(const char*s,...){(void)s;}
 static void stateServiceTrace(const char*s){(void)s;}
 static uint32_t stateEnvelopeId(const uint8_t*d,size_t n){(void)d;(void)n;return 0;}
-static bool utLogDump(void){dumps++;return false;}
-static void utPlatformSnapshotNotice(const char*s){(void)s;notices++;}
+static bool ofLogDump(void){dumps++;return false;}
+static void ofPlatformSnapshotNotice(const char*s){(void)s;notices++;}
 static int of_savestate_poll(void){return pending;}
 static void of_savestate_finish(int ok){(void)ok;assert(pending);pending=0;finishes++;}
 static void finishLoadedState(void){of_savestate_finish(1);}
 static int of_savestate_enable(uint32_t n){(void)n;return 0;}
-static bool utSavestateCapture(Runner*r,uint8_t**d,size_t*n,const char**reason){
+static bool ofSavestateCapture(Runner*r,uint8_t**d,size_t*n,const char**reason){
  (void)r;if(scenario==5){*reason="capture refusal";return false;}*d=arena;*n=4;return true;
 }
 static int of_savestate_save(const void*d,uint32_t n){

@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 struct Runner;
-#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 /* Positive proves the reserve now; zero requires the usual malloc probe. */
 int platformHeapCanReserve(size_t bytes);
 #endif

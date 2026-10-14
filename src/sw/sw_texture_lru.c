@@ -5,7 +5,7 @@
 #include "image/image_decoder.h"
 #include "gettime.h"
 
-#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 /* Only native save-state builds link this port hook. */
 extern int platformHeapCanReserve(size_t bytes);
 #endif
@@ -218,7 +218,7 @@ static SWTexture* loadFromDataWin(SWRenderer* swr, uint32_t pageId)
 static void keepHeapReserve(SWRenderer* swr)
 {
     for (;;) {
-#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
         if (platformHeapCanReserve(TEXTURE_CACHE_RESERVE_BYTES) > 0) return;
 #endif
         void* probe = malloc(TEXTURE_CACHE_RESERVE_BYTES);

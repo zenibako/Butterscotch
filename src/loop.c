@@ -594,7 +594,7 @@ int loop(CommandLineArgs args, const char *argv0) {
         options.lazyLoadRooms = args.lazyRooms;
         options.lazyLoadTextures = args.lazyTextures;
         options.lazyLoadAudio = args.lazyAudio;
-#if defined(UT_NATIVE_SAVESTATES) && !defined(UT_GAME_DELTARUNE)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(GAME_DELTARUNE)
         options.cacheRawRoomChunk = true;
 #endif
         options.eagerlyLoadedRooms = args.eagerRooms;

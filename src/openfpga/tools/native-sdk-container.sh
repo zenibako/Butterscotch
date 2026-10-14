@@ -4,7 +4,7 @@ set -euo pipefail
 port=$(cd "$(dirname "$0")/.." && pwd)
 repo=$(cd "$port/../.." && pwd)
 source "${SDK_ROOT:?Set SDK_ROOT}/tools/oci.sh"
-fingerprint=$(python3 - "$port/data.win" <<'PY'
+fingerprint=$(python3 - "$port/games/undertale/data.win" <<'PY'
 import hashlib, sys
 h = hashlib.sha256()
 with open(sys.argv[1], 'rb') as f:
