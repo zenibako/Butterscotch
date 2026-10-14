@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include "log.h"
+#include "of_state_requests.h"
+#include "stb_ds.h"
 
 /* Prompts beyond the ones of_strings.c renames for every game. */
 static const OfStringPatch g_strings[] = {
@@ -46,6 +48,28 @@ static void patchInstructions(DataWin *dw) {
     }
 }
 
+/* Save states (of_state_requests.c) are taken in the overworld, the game's
+ * own menus and its dialogue; Runner_snapshotCheck still refuses anything it
+ * cannot store. Battles and the player's cutscenes are refused for now: a
+ * battle makes the room it left persistent, which snapshots don't carry. */
+static const char *savestateReason(Runner *r) {
+    if (r->dataWin->gen8.wadVersion != 16 || strcmp(r->dataWin->gen8.name, "UNDERTALE"))
+        return "Unsupported game version";
+    bool overworld = false;
+    for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
+        Instance *inst = r->instances[i];
+        if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
+            (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
+        const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
+        if (!strcmp(name, "obj_overworldcontroller")) overworld = true;
+        if (strstr(name, "battle") || strstr(name, "battler")) return "Can't save during battles";
+        if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
+            return "Can't save during cutscenes";
+    }
+    if (!overworld) return "Save in the overworld or menu";
+    return NULL;
+}
+
 /* Key presses that walk from boot to the first battle; see runInputScript()
  * in of_platform.c for the syntax. Frame numbers assume a fresh save state. */
 static const char g_script[] =
@@ -70,4 +94,5 @@ const OfGame ofGame = {
     .ioDivisor = 1u,
     .ioAsyncBase = 110u,
     .ioAsyncStep = 2u,
+    .savestateReason = savestateReason,
 };
