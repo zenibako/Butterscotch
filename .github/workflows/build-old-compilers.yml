@@ -34,7 +34,17 @@ jobs:
       - name: Create Debian Woody chroot
         run: |
           sudo apt-get install --no-install-recommends -y debootstrap
-          sudo debootstrap --arch=i386 --include='${{ matrix.compiler }},make,libsdl1.2-dev,ccache' woody ~/woody http://archive.debian.org/debian
+          # archive.debian.org drops single package downloads now and then.
+          # Retry with a fresh target; the package cache keeps what already
+          # arrived, so a retry only fetches what is missing.
+          mkdir -p ~/woody-debs
+          for attempt in 1 2 3 4; do
+            sudo rm -rf ~/woody
+            sudo debootstrap --arch=i386 --cache-dir="$HOME/woody-debs" --include='${{ matrix.compiler }},make,libsdl1.2-dev,ccache' woody ~/woody http://archive.debian.org/debian && break
+            [ "$attempt" = 4 ] && exit 1
+            echo "debootstrap attempt $attempt failed; retrying in $((attempt * 15)) s"
+            sleep $((attempt * 15))
+          done
 
       - name: Checkout repo
         uses: actions/checkout@v7
