@@ -114,7 +114,18 @@ GMLReal ofStateNumber(Runner *r, Instance *instance, const char *name) {
     return v.type == RVALUE_REAL || v.type == RVALUE_INT32 || v.type == RVALUE_BOOL ? RValue_toReal(v) : 0;
 }
 
-const char *ofSavestateReason(Runner *r) {
+#ifdef OF_PC
+/* Desktop coverage probe (BS_STATE_PROBE, BS_STATE_PROBE_BYPASS): looks past
+ * the game gate and the scene policy to what the serializer itself refuses,
+ * so a scene the policy turns away can still be captured and compared. */
+static bool g_probeCapture;
+static bool policyBypassed(void) {
+    return g_probeCapture || getenv("BS_STATE_PROBE_BYPASS") != NULL;
+}
+#endif
+
+/* The game gate and scene policy, then the serializer's own preflight. */
+static const char *policyReason(Runner *r) {
 #if !defined(OF_PC) && !defined(GAME_DELTARUNE)
 #ifdef OF_NATIVE_SAVESTATES
     if (!g_service) return "Save-state service is unavailable";
@@ -129,6 +140,49 @@ const char *ofSavestateReason(Runner *r) {
     const char *why = ofGame.savestateReason(r);
     return why ? why : Runner_snapshotCheck(r);
 }
+
+const char *ofSavestateReason(Runner *r) {
+#ifdef OF_PC
+    if (policyBypassed())
+        return (!r || !r->currentRoom) ? "The game is still loading" : Runner_snapshotCheck(r);
+#endif
+    return policyReason(r);
+}
+
+#ifdef OF_PC
+/* One tab-separated line on stderr every BS_STATE_PROBE frames: frame, room index
+ * and name, the policy's verdict, whether a capture works with the policy
+ * set aside, its size, and every serializer refusal (tools/state-coverage.sh
+ * turns a run of these into a table). The game's state is left as it was. */
+static void stateProbe(Runner *r) {
+    static int every = -1;
+    if (every < 0) { const char *env = getenv("BS_STATE_PROBE"); every = env ? atoi(env) : 0; }
+    /* "At least every": this is not reached on every frame number (a
+     * skipped or fast-forwarded frame passes it by). */
+    static int next = 0;
+    if (every <= 0 || !r || !r->currentRoom || r->frameCount <= 0 || r->frameCount < next) return;
+    next = r->frameCount - r->frameCount % every + every;
+    const char *policy = policyReason(r);
+    const char *room = r->currentRoomIndex >= 0 && (uint32_t)r->currentRoomIndex < r->dataWin->room.count
+        ? r->dataWin->room.rooms[r->currentRoomIndex].name : "?";
+    const char *why[16]; char all[768] = "";
+    int blockers = Runner_snapshotBlockers(r, why, 16);
+    for (int i = 0; i < blockers && i < 16; i++)
+        snprintf(all + strlen(all), sizeof(all) - strlen(all), "%s%s", i ? " | " : "", why[i]);
+    uint8_t *data = NULL; size_t size = 0; const char *failed = NULL; bool ok = false;
+    if (!blockers) {
+        g_probeCapture = true;
+        ok = ofSavestateCapture(r, &data, &size, &failed);
+        g_probeCapture = false;
+        free(data);
+    }
+    /* Straight to stderr: the benchmark switches the log off after its
+     * first frame, and these lines are the tool's data. */
+    fprintf(stderr, "State probe\t%d\t%d\t%s\t%s\t%s\t%zu\t%s\n", r->frameCount, r->currentRoomIndex,
+        room ? room : "?", policy ? policy : "allowed", ok ? "ok" : "refused", size,
+        blockers ? all : (ok ? "" : (failed ? failed : "?")));
+}
+#endif
 
 bool ofSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **reason) {
     *data = NULL; *size = 0;
@@ -332,6 +386,7 @@ bool platformSnapshotBoundary(Runner *r) {
 #elif defined(OF_PC)
     static bool saved = false, loaded = false;
     bool worked = false;
+    stateProbe(r);
     const char *at = getenv("BS_STATE_SAVE_FRAME");
     if (!saved && at && r->frameCount == atoi(at)) {
         saved = true; const char *path = getenv("BS_STATE_SAVE_PATH");
