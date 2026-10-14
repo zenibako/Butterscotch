@@ -405,3 +405,8 @@ clean: sdk-clean
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
 .PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves save-states native-size snapshot-tests
+
+# Asset-free translated tile picture reuse, composition and allocation regression.
+.PHONY: tile-motion-fixture
+tile-motion-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/tile-motion.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/sw/sw_renderer.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_motion_fixture
