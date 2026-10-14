@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 repo = Path(__file__).resolve().parents[3]
-source = (repo / "src/openfpga/platform/ut_save_fs.c").read_text()
+source = (repo / "src/openfpga/platform/of_save_fs.c").read_text()
 
 
 def function(name):
@@ -23,8 +23,8 @@ def function(name):
 
 types = source[source.index("typedef struct {"):source.index("/* When set")]
 snapshot_start = source.index("typedef struct {", source.index("/* Native states"))
-snapshot_type = source[snapshot_start:source.index("} UtSaveSnapshot;", snapshot_start)
-                       + len("} UtSaveSnapshot;")]
+snapshot_type = source[snapshot_start:source.index("} OfSaveSnapshot;", snapshot_start)
+                       + len("} OfSaveSnapshot;")]
 pre = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -32,8 +32,9 @@ pre = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ut_save_format.h"
-#define UT_NATIVE_SAVESTATES 1
+#include "of_save_format.h"
+#define OF_NATIVE_SAVESTATES 1
+#define OF_SAVE_SLOT_FILE "undertale_0.sav"
 /* OF_PC intentionally undefined: compile the native lookup/r+b branch. */
 typedef struct { int marker; } FileSystem;
 static bool g_volatile;
@@ -42,11 +43,11 @@ static size_t written_bytes;
 static uint64_t nowNanos(void) { static uint64_t n; return ++n; }
 static void logInfo(const char *fmt, ...) { (void)fmt; }
 static int of_file_slot_find(const char *name, uint32_t *slot) {
-    assert(strcmp(name, UT_SAVE_SLOT_FILE) == 0);
+    assert(strcmp(name, OF_SAVE_SLOT_FILE) == 0);
     lookups++; *slot = 10; return 0;
 }
 static FILE *test_fopen(const char *name, const char *mode) {
-    assert(strcmp(name, UT_SAVE_SLOT_FILE) == 0);
+    assert(strcmp(name, OF_SAVE_SLOT_FILE) == 0);
     assert(strcmp(mode, "r+b") == 0);
     return tmpfile();
 }
@@ -67,8 +68,8 @@ static int test_fclose(FILE *f) {
 '''
 post = r'''
 int main(void) {
-    UtSaveFs live = {0};
-    UtSaveSnapshot prepared = {0};
+    OfSaveFs live = {0};
+    OfSaveSnapshot prepared = {0};
     live.fileCount = prepared.files.fileCount = 1;
     strcpy(live.files[0].name, "file0");
     live.files[0].data = malloc(4);
@@ -84,7 +85,7 @@ int main(void) {
     uint8_t *replacement = prepared.files.files[0].data;
 
     fail_close = 1;
-    bool ok = utSaveFsApplySnapshot(&live.base, &prepared);
+    bool ok = ofSaveFsApplySnapshot(&live.base, &prepared);
     assert(written_bytes == sizeof(archive) && closes == 1 && lookups == 1);
     assert(!ok && "native close failure must reject snapshot apply");
     assert(live.fileCount == 1 && live.files[0].data == old);
@@ -94,7 +95,7 @@ int main(void) {
     assert(prepared.files.files[0].data == replacement);
 
     fail_close = 0;
-    assert(utSaveFsApplySnapshot(&live.base, &prepared));
+    assert(ofSaveFsApplySnapshot(&live.base, &prepared));
     assert(closes == 2 && lookups == 2 && written_bytes == 2 * sizeof(archive));
     assert(live.fileCount == 1 && live.files[0].data == replacement);
     assert(strcmp(live.files[0].name, "file9") == 0);
@@ -107,7 +108,7 @@ int main(void) {
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory)
     (path / "test.c").write_text(pre + types + snapshot_type
-                                 + function("utSaveFsApplySnapshot") + post)
+                                 + function("ofSaveFsApplySnapshot") + post)
     subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
                     "-fsanitize=address,undefined", "-I" + str(repo / "src/openfpga/platform"),
                     str(path / "test.c"), "-o", str(path / "test")], check=True)

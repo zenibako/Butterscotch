@@ -6,6 +6,7 @@ out=$(mktemp -d "${TMPDIR:-/tmp}/ut-snapshot-tests.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 cc=${CC:-clang}
 flags=(-std=c11 -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DENABLE_WAD16
+    '-DOF_SAVE_SLOT_FILE="undertale_0.sav"'
     -ffunction-sections -fsanitize=address,undefined -fno-sanitize=alignment,function
     -I"$repo/src" -I"$repo/src/video" -I"$port/platform" -I"$repo/vendor/stb/ds")
 if [ "$(uname -s)" = Darwin ]; then
@@ -28,17 +29,17 @@ echo "runner snapshot: passed"
     "$repo/src/data_win.c" "$repo/src/binary_reader.c" \
     "$repo/src/log.c" "$repo/src/stb_ds.c" -lm -o "$out/room-cache"
 "$out/room-cache" "$repo/tests/try-catch-finally-test/data.win"
-"$cc" "${flags[@]}" "$repo/tests/ut_snapshot_envelope_test.c" \
-    "$port/platform/ut_snapshot_envelope.c" -o "$out/envelope"
+"$cc" "${flags[@]}" "$repo/tests/of_snapshot_envelope_test.c" \
+    "$port/platform/of_snapshot_envelope.c" -o "$out/envelope"
 "$out/envelope"
-"$cc" "${flags[@]}" "$repo/tests/ut_save_snapshot_test.c" -o "$out/files"
+"$cc" "${flags[@]}" "$repo/tests/of_save_snapshot_test.c" -o "$out/files"
 "$out/files"
 "$cc" "${flags[@]}" -I"${SDK_ROOT:?Set SDK_ROOT}/src/sdk/include" \
-    "$repo/tests/ut_audio_snapshot_test.c" "$repo/src/stb_ds.c" -o "$out/audio"
+    "$repo/tests/of_audio_snapshot_test.c" "$repo/src/stb_ds.c" -o "$out/audio"
 "$out/audio"
 "$cc" "${flags[@]}" -I"$SDK_ROOT/src/sdk/include" -isystem "$SDK_ROOT/src/sdk/pc" \
-    -DUT_PC_SDL_SOURCE='"of_sdl2.c"' $(pkg-config --cflags sdl2) \
-    "$repo/tests/ut_pc_audio_snapshot_test.c" $(pkg-config --libs sdl2) -lm -o "$out/pc-audio"
+    -DOF_PC_SDL_SOURCE='"of_sdl2.c"' $(pkg-config --cflags sdl2) \
+    "$repo/tests/of_pc_audio_snapshot_test.c" $(pkg-config --libs sdl2) -lm -o "$out/pc-audio"
 "$out/pc-audio"
 export SDK_ROOT
 for test in test_game_fingerprint test_snapshot_notice test_save_fs_native_close \

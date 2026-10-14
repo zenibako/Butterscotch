@@ -610,3 +610,22 @@ implementation for the audio fixture, and supplies explicit archive-pack and
 profiler test stubs. CI installs the sanitizer runtime explicitly. The entire
 suite passes on Ubuntu 24.04 with ASan/UBSan; these corrections do not change
 the app. The hosted rerun remains the final verification.
+
+### October 13: rebase onto merged PR #17
+
+Rebased the save-state commits onto main `2eb1066` after PR #17's shared-port
+rename and per-game split. Ran its rename tool with SDK collision checking.
+The app's request header is `of_state_requests.h`, keeping it distinct from
+the SDK's existing `of_savestate.h`. A repeat tool run changes nothing. Kept
+the per-game sources and removed implicit Undertale defaults; fixtures now
+supply their save slot explicitly. Moved the local game assets into
+`games/undertale/` and updated the native wrapper's host fingerprint lookup.
+The wrapper regression exercises that moved path before forwarding the game ID.
+
+Snapshot suites pass on macOS and Ubuntu 24.04; Pocket lint, desktop sanitizer
+build and native RISC-V build pass. Restored frames 1100 and 1200 are byte-
+identical to the pre-rebase references using the renamed BS_STATE_* settings.
+Independent comparison with the pre-rebase renamed tree found the save-state
+implementation and review fixes preserved. The runtime patch and snapshot
+format are unchanged; this app rebuild has not been retested on the Pocket.
+The pre-rebase published history is saved in out/rebase-pr17/pre-rebase.bundle.

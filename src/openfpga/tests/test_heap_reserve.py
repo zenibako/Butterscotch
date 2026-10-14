@@ -111,7 +111,7 @@ int main(void) {
 #define TEXTURE_CACHE_RESERVE_BYTES 4194304u
 typedef struct { int unused; } SWRenderer;
 static int answer, probes, releases, failures, evictions, queries;
-#if defined(UT_NATIVE_SAVESTATES) && !defined(OF_PC)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 static int platformHeapCanReserve(size_t bytes) {
     assert(bytes == 4194304u); ++queries; return answer;
 }
@@ -131,7 +131,7 @@ static bool evictLeastRecentlyUsed(SWRenderer *swr, bool current) {
 int main(void) {
     SWRenderer swr = {0};
     answer = 1; keepHeapReserve(&swr);
-#ifdef UT_NATIVE_SAVESTATES
+#ifdef OF_NATIVE_SAVESTATES
 #ifndef OF_PC
     assert(probes == 0 && queries == 1 && evictions == 0);
 #else
@@ -149,7 +149,7 @@ int main(void) {
     return 0;
 }
 '''
-        for defines in (['-DUT_NATIVE_SAVESTATES'], ['-DUT_NATIVE_SAVESTATES', '-DOF_PC'], []):
+        for defines in (['-DOF_NATIVE_SAVESTATES'], ['-DOF_NATIVE_SAVESTATES', '-DOF_PC'], []):
             with self.subTest(defines=defines):
                 run_c(harness, defines)
 
@@ -222,7 +222,7 @@ int main(int argc, char **argv) {
     assert(platformHeapCanReserve(0) == 0 && queries == queried);
     return 0;
 }
-''', ['-DUT_NATIVE_SAVESTATES'], [[], ['fail-original-probe'], ['old', 'firmware']])
+''', ['-DOF_NATIVE_SAVESTATES'], [[], ['fail-original-probe'], ['old', 'firmware']])
 
 
 if __name__ == '__main__':
