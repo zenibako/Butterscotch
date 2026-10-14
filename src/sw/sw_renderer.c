@@ -1605,6 +1605,30 @@ static int32_t SWRenderer_ensureApplicationSurface(Renderer* renderer, int32_t w
 
 static RendererVtable swrVtable;
 
+bool SWRenderer_snapshotGetState(Renderer* renderer, SWRendererSnapshotState* state)
+{
+    memset(state, 0, sizeof(*state));
+    if (renderer->vtable != &swrVtable) return true;
+    SWRenderer* swr = (SWRenderer*)renderer;
+    if (swrPendingCount || swr->viewActive || swr->primitiveBegun || swr->vertexCount || swr->overlayCount ||
+        swr->mirrorLayers || swr->mirrorStage || swr->tiledHeldCount ||
+        swr->pendingClear || swr->clearHeld || swr->drawingToSurface)
+        return false;
+    state->blendMode = swr->blendMode;
+    state->writeMask = swr->writeMask;
+    state->usingAlphaBlendState = swr->usingAlphaBlendState;
+    return true;
+}
+
+void SWRenderer_snapshotApplyState(Renderer* renderer, const SWRendererSnapshotState* state)
+{
+    if (renderer->vtable != &swrVtable) return;
+    SWRenderer* swr = (SWRenderer*)renderer;
+    swr->blendMode = state->blendMode;
+    swr->writeMask = state->writeMask;
+    swr->usingAlphaBlendState = state->usingAlphaBlendState;
+}
+
 void SWRenderer_clearFrameBuffer(Renderer* renderer, uint32_t color)
 {
     swrOverlayFlush((SWRenderer*) renderer);

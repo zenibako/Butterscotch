@@ -669,6 +669,7 @@ typedef struct {
 
 typedef struct { char* key; int32_t value; } AssetsByNameEntry;
 typedef struct { char* key; int value; } DisabledObjEntry;
+typedef struct { int key; Instance* value; } InstanceIdEntry;
 
 struct Runner {
     DataWin* dataWin;
@@ -772,7 +773,7 @@ struct Runner {
     int32_t viewportW;   // Scaled game width in window
     int32_t viewportH;   // Scaled game height in window
     DisabledObjEntry* disabledObjects; // stb_ds string hashmap, nullptr = no filtering
-    struct { int key; Instance* value; }* instancesById;
+    InstanceIdEntry* instancesById;
     bool drawEnabled;
     bool forceDrawDepth;
     bool applyOffsetForPrimitives;
@@ -1004,6 +1005,7 @@ void Runner_moveInstanceToDepthLayer(Runner* runner, Instance* inst, int32_t dep
 void Runner_removeInstanceLayerElement(Runner* runner, int32_t instanceId);
 uint32_t Runner_getNextLayerId(Runner* runner);
 void Runner_freeRuntimeLayer(RuntimeLayer* runtimeLayer);
+void Runner_freeSavedRoomStateResources(SavedRoomState* state);
 // Sets the active state of the instance
 static inline void Runner_setActiveState(Runner* runner, Instance* instance, bool active) {
 #ifdef ENABLE_VM_TRACING

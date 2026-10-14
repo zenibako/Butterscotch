@@ -161,6 +161,9 @@ if(ENABLE_PHYSICS)
 endif()
 
 file(GLOB SOURCES src/*.c)
+# Pocket snapshots and Zstandard are built by the port and its dedicated tests.
+# Generic frontends do not use the codec, including the legacy compiler targets.
+list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/runner_snapshot.c")
 if(ENABLE_PHYSICS)
     file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS src/physics/*.c)
 else()

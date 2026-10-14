@@ -94,6 +94,95 @@ make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
 make copy       # copy the core to a mounted Pocket SD card
 ```
 
+### Save states and sleep (experimental, Undertale only)
+
+The save-state build requires a matching os25 runtime with
+`INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build
+openfpgaOS revision `865d627` with
+`tools/openfpgaos/os25-savestates.patch` applied, then stage it into a separate SDK:
+
+The prototype patch uses the existing `INCLUDE_CLK90` option for os25. It
+runs the CPU and RAM at 90 MHz; its video and audio clocks are unchanged.
+
+```bash
+tools/stage-savestate-sdk.sh /path/to/built-openfpgaOS /path/to/base-SDK /path/to/new-SDK
+make SDK_ROOT=/path/to/new-SDK save-states
+```
+
+The staging tool requires passing setup and hold timing reports. After an OS
+source change, rebuild its firmware and patch the matching bootloader into
+the bitstream before staging. The output is
+`out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
+The base SDK is read-only. The standard build still uses its existing SDK.
+The patched runtime prioritizes a pending save over an unfinished asynchronous
+read and provides a conservative heap-capacity query. Install the complete
+package when updating it: the app, OS, and bitstream must match.
+Native container builds use the firmware image built by openfpgaOS; the app
+wrapper mounts both the SDK and this repository. Packaging needs Bash 4 or later
+on the host (Homebrew's Bash on macOS).
+
+Use the Pocket's Memories controls to save or load, or its power button to
+sleep. Exact snapshots are accepted in supported overworld scenes and the
+game's own menus. Battles, dialogue, cutscenes, the port's Select menu, and
+unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+produce an on-screen refusal. Select → Save states
+checks the current scene's eligibility; the Pocket's controls perform the save
+or load. A refusal stays visible until a
+fresh game-button press, including after the Pocket menu closes. A snapshot that exceeds the
+Pocket's blob limit is also refused. Ordinary game progress saves remain
+separate; loading a save state rewinds its captured progress files.
+
+The Pocket can still power off after a refused save. In the hardware test, wake
+then replayed an older sleep payload. A refusal therefore means the current
+position will not be restored; check eligibility before sleeping.
+
+Routine saves and loads use the Pocket's normal interface; the app shows
+refusals and failures without extra stage overlays. For troubleshooting,
+Select → Save log writes the log to the spare save slot; leave through the
+Analogue menu to keep it. The log records capture sizes, elapsed time,
+transfer return codes, core capture phases, and the Pocket's read-word count.
+Optional streamed-music refills are deferred while the Pocket menu or a state
+request is active, preserving buffered audio until normal reads can resume.
+Core format revision 5 uses lossless Zstandard compression and references strings
+already present in the matching game data; states from revisions 3 and 4
+remain readable. Native builds avoid the renderer's large allocation probe
+when the OS can prove the reserve fits, otherwise retaining the original probe.
+The first reserve check logs the allocation and query timings for comparison.
+State-request logs include refusal reasons and separate load receive,
+preparation, application and cleanup times. Successful loads notify the Pocket
+after committing restored state, before freeing the state they replace.
+Native builds automatically write the log to the existing spare log slot before
+publishing a captured or refused save. This records sleep
+capture attempts before power-down; a failed diagnostic write does not change
+save completion. `State service` records the live CPU clock, registration and
+request registers, and `State save audit` reports the diagnostic write time.
+Capture and receive logs include the envelope checksum as an ID to match blobs
+across repeated sleep/wake cycles.
+`State apply phases` separates progress-archive writes, runner replacement,
+audio restoration and input/clock reset.
+`State prepare phases` separates decode, rooms, values, indexes and temporary
+buffer cleanup. Individual `State room payload` lines time asset reads for
+missing room definitions.
+Save-state builds retain the raw ROOM chunk already read at startup, so lazy
+room reloads use memory during restoration. Room parsing and unloading remain
+lazy. The cache uses additional heap space and is released with the game data.
+
+The runtime fault tests use the patched OS checkout:
+
+```bash
+OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_async_save_abort.py
+OPENFPGAOS_SOURCE=/path/to/patched-openfpgaOS python3 tests/test_heap_reserve.py
+```
+
+Desktop verification uses `BS_STATE_SAVE_FRAME=<n>` with
+`BS_STATE_SAVE_PATH=<file>`, and `BS_STATE_LOAD_FRAME=<n>` with
+`BS_STATE_LOAD_PATH=<file>`. These run the same serializer at completed frame
+boundaries. `make snapshot-tests` checks the runner, audio, archive and envelope
+code with sanitizers, including the desktop SDK's audio queue, native close
+failure handling, notice bounds, and request completion. It also checks
+container-supplied game fingerprints. Native hardware
+behavior still requires Pocket tests.
+
 Put your `data.win` in `games/undertale/` (on macOS it is `game.ios` inside
 `UNDERTALE.app/Contents/Resources/`, renamed), and link the folder with the
 game's `.ogg` files there as `music/`. (Until 2026-10-13 they went in this
@@ -187,6 +276,7 @@ hardware gives a core no menu variables of its own.
 |---|---|
 | Resume | closes the menu |
 | Performance Mode | Speed or Accuracy, as L sets it |
+| Save states | shows whether the current scene is eligible, and displays a refusal reason when selected |
 | Debug | opens the rows below |
 | Audio mode | Normal, Disabled, Music only or Sound only, to see what sound costs. Music is what the game streams or keeps in a file of its own, and sound is the effects embedded in its data, however long either is. What is muted is not decoded, mixed or read from the card, and still runs its course so that the game is not left waiting for it. Something that was playing unheard is rough until it next starts. `--mute` in `ARGS=` starts with Disabled |
 | Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
@@ -374,6 +464,11 @@ is hidden by then and writing to it is slow.
   reboot-looped before the OS banner appeared.
 - Music, sound effects and saves work on hardware, including a save
   imported from the desktop game.
+- Undertale save-state test builds passed Pocket save/load and repeated
+  sleep/wake checks in supported overworld scenes, including the quieter UI.
+  The final integration with main passed desktop restore checks and native
+  compilation; it has not had a separate Pocket run. Build prerequisites and
+  supported scenes are listed under “Save states and sleep” above.
 - Not everything runs at full speed. Which scenes do, and by how much the
   others miss, is what the benchmark is for.
 - Deltarune Chapter 1 plays on the desktop build through the opening and a

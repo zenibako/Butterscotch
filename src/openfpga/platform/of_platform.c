@@ -23,12 +23,45 @@
 #include "of_menu.h"
 #include "of_strings.h"
 #include "of_native.h"
+#include "of_state_requests.h"
 #include "sw_call_notes.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+#include "of_heap.h"
+
+int platformHeapCanReserve(size_t bytes)
+{
+    /* Large musl mallocs need metadata/alignment in addition to the payload.
+     * Refuse overflow rather than querying a smaller reserve. */
+    if (!bytes || bytes > UINT32_MAX - 65536u) return 0;
+    uint32_t request = (uint32_t)bytes + 65536u;
+    static bool measured;
+    if (!measured) {
+        measured = true;
+        uint64_t start = nowNanos();
+        void *probe = malloc(bytes);
+        int allocated = probe != NULL;
+        if (probe) free(probe);
+        uint64_t probeUs = (nowNanos() - start) / 1000u;
+        start = nowNanos();
+        int confirmed = of_heap_can_reserve(request) > 0;
+        uint64_t queryUs = (nowNanos() - start) / 1000u;
+        /* Separate short lines fit the on-device log. No ongoing timing. */
+        logInfo("heap %uK malloc/free %uus ok=%d\n",
+                (unsigned)(bytes / 1024u), (unsigned)probeUs, allocated);
+        logInfo("heap query +64K %uus ok=%d\n", (unsigned)queryUs, confirmed);
+        /* This first check retains the original allocation policy even if
+         * the query disagrees. A failed probe still reaches the fallback. */
+        return allocated;
+    }
+    return of_heap_can_reserve(request) > 0;
+}
+#endif
 
 #define OF_HIRES_W 640
 #define OF_HIRES_H 480
@@ -122,12 +155,29 @@ static bool g_menuClosed = false;
 /* A few words in the top right corner for two seconds: what a button that
  * changes nothing else on screen just did. */
 #define OF_NOTICE_NANOS 2000000000ull
-static char g_notice[32];
+static char g_notice[128];
 static uint64_t g_noticeUntil = 0;
+static bool g_snapshotNotice;
 
 static void showNotice(const char *text) {
+    g_snapshotNotice = false;
     snprintf(g_notice, sizeof(g_notice), "%s", text);
     g_noticeUntil = nowNanos() + OF_NOTICE_NANOS;
+}
+
+static void drawSnapshotNotice(uint16_t *fb, int width, int height) {
+    if (width <= OF_LOG_CELL_W) return;
+    const char *text = g_notice;
+    size_t columns = (size_t)(width / OF_LOG_CELL_W - 1);
+    char line[128];
+    if (!columns) return;
+    if (columns >= sizeof(line)) columns = sizeof(line) - 1;
+    for (int y = 2; *text && y + OF_LOG_CELL_H <= height; y += OF_LOG_CELL_H) {
+        size_t count = strlen(text); if (count > columns) count = columns;
+        memcpy(line, text, count); line[count] = 0;
+        ofPerfDrawLogText(fb, width, height, 2, y, line, 0x7FFF);
+        text += count;
+    }
 }
 
 void ofPlatformSetDebugMode(bool enabled) {
@@ -320,6 +370,7 @@ void platformInitFunctions(Runner *runner) {
     ofFontSetRunner(runner);
     ofPatchStrings(runner->dataWin);
     ofNativeInstall(runner);
+    ofSavestateInit(runner);
     runner->setCursor = NULL;
     runner->currentCursor = GML_CR_DEFAULT;
 }
@@ -532,7 +583,9 @@ void platformSwapBuffers(void) {
     bool paused = g_runner != NULL && g_runner->paused;
     if (wasPaused && !paused) showNotice("Resumed");
     wasPaused = paused;
-    if (paused) {
+    if (g_snapshotNotice) {
+        drawSnapshotNotice(g_nextFb, g_nextW, g_nextH);
+    } else if (paused) {
         /* A paused game presents this frame and then no more until it is
          * stepped or resumed, so the words stay up with it. That is also
          * why this comes before a notice: one caught here would stay up
@@ -661,10 +714,10 @@ static void setGlobals(const char *spec) {
  * presses a key on the given frame and releases it two frames later, or
  * after N frames with "*N".
  * Keys: U D L R (arrows), Z X C, E (Enter). */
+static int g_scriptFrame = 0;
 static void runInputScript(void) {
-    static int frame = 0;
+    int frame = ++g_scriptFrame;
     const char *script = g_inputScript;
-    frame++;
     if (g_runner != NULL) {
         for (int i = 0; i < g_jumpCount; i++) {
             if (g_jumps[i].frame != frame) continue;
@@ -854,14 +907,28 @@ static const OfMenuRow g_debugRows[] = {
 
 static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
 
+static const char *menuSnapshotValue(void) {
+    return ofSavestateReason(g_runner) ? "Unavailable" : "Ready in game";
+}
+static bool menuSnapshotReason(int direction) {
+    (void)direction;
+    const char *why = ofSavestateReason(g_runner);
+    showNotice(why ? why : "Use Pocket controls to save");
+    return true;
+}
 static const OfMenuRow g_menuRows[] = {
     { "Resume",                    NULL,                 menuResume,       NULL },
     { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
+    { "Save states",              menuSnapshotValue,    menuSnapshotReason, NULL },
     { "Debug",                     NULL,                 NULL,             &g_debugPage },
 };
 
 /* The frame-time overlay's numbers, in words. */
 static void menuStatus(char *out, size_t size) {
+    if (nowNanos() < g_noticeUntil) {
+        snprintf(out, size, "%s", g_notice);
+        return;
+    }
     unsigned average, worstWork, worstPeriod, skipped;
     ofPerfShown(&average, &worstWork, &worstPeriod, &skipped);
     (void) worstPeriod;
@@ -890,11 +957,15 @@ static void menuPresent(const uint16_t *fb) {
     of_video_flip();
 }
 
+static void menuIdle(void) {
+    platformBusyTick();
+    ofSavestateMenuPoll();
+}
 static void runMenu(void) {
     /* Over the picture last shown, at the size it was shown. */
     if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
     static const OfMenu menu = {
-        { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuStatus, menuPresent, platformBusyTick,
+        { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuStatus, menuPresent, menuIdle,
     };
     AudioSystem *audio = g_runner->audioSystem;
     bool wasPaused = g_runner->paused;
@@ -915,6 +986,14 @@ static void runMenu(void) {
 bool platformHandleEvents(void) {
     ofPerfPhase(OF_PHASE_STEP);
     of_input_poll();
+
+    /* A Pocket menu can hide the game longer than a timed toast lasts.
+     * Keep rejection visible until a fresh game-button press. */
+    if (g_snapshotNotice) for (size_t i = 0; i < OF_KEYMAP_COUNT; i++) {
+        if (of_btn_pressed(g_keymap[i].button)) {
+            g_snapshotNotice = false; g_noticeUntil = 0; break;
+        }
+    }
 
     static bool chordUsed = false;
     static int32_t keyToRelease = 0;
@@ -1030,4 +1109,51 @@ void platformSleepUntil(uint64_t time) {
     while (nowNanos() < time) {
     }
     ofPerfAddSleep(nowNanos() - start);
+}
+
+void ofPlatformSnapshotNotice(const char *text) {
+    showNotice(text);
+    g_snapshotNotice = true; g_noticeUntil = UINT64_MAX;
+    if (!g_nextFb || g_nextW <= 0 || g_nextH <= 0 || !g_showingFramebuffer ||
+        g_nextW != g_modeW || g_nextH != g_modeH) return;
+    drawSnapshotNotice(g_nextFb, g_nextW, g_nextH);
+    uint8_t *surface = of_video_surface();
+    if ((uint8_t *)g_nextFb != surface) {
+        for (int y = 0; y < g_nextH; y++)
+            memcpy(surface + (size_t)y * (size_t)g_modeStride, g_nextFb + (size_t)y * (size_t)g_nextW,
+                   (size_t)g_nextW * sizeof(uint16_t));
+    }
+    of_video_flip();
+}
+
+void ofPlatformSnapshotGet(uint32_t values[3]) {
+    values[0] = (uint32_t)g_scriptFrame;
+#ifdef OF_PC
+    values[1] = (uint32_t)g_dumpFrame;
+#else
+    values[1] = 0;
+#endif
+    values[2] = g_smoothLowres ? 1u : 0u;
+}
+
+void ofPlatformSnapshotResumed(Runner *runner, const uint32_t values[3]) {
+    g_snapshotNotice = false; g_noticeUntil = 0;
+    g_scriptFrame = (int)values[0];
+    g_smoothLowres = values[2] != 0;
+#ifdef OF_PC
+    g_dumpFrame = (int)values[1];
+    (void)runner;
+#else
+    /* The device's input edge history is new on wake; a key held in the old
+     * state must not remain stuck waiting for a release that will never come. */
+    memset(runner->keyboard->keyDown, 0, sizeof(runner->keyboard->keyDown));
+    memset(runner->keyboard->keyPressed, 0, sizeof(runner->keyboard->keyPressed));
+    memset(runner->keyboard->keyReleased, 0, sizeof(runner->keyboard->keyReleased));
+    of_input_poll();
+    for (size_t i = 0; i < OF_KEYMAP_COUNT; i++)
+        runner->keyboard->keyDown[g_keymap[i].key] |= of_btn(g_keymap[i].button) != 0;
+#endif
+    /* Old presentation timing must not cause frame skips after restore. */
+    g_debtNanos = 0; g_skipThisFrame = false;
+    ofPerfRestartClock();
 }

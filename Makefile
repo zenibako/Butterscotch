@@ -62,7 +62,9 @@ SRCS += src/physics/disabled/physics_disabled.c
 endif
 
 HEADERS += $(wildcard src/physics/*.h) $(wildcard src/*.h) $(shell find vendor -name '*.h')
-SRCS += $(wildcard src/*.c) $(wildcard src/debug_font/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) $(wildcard vendor/miniz/*.c) src/physics/physics.c vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
+# The Pocket snapshot codec is compiled by src/openfpga/Makefile and its
+# dedicated tests; generic backends do not use its API or Zstandard.
+SRCS += $(filter-out src/runner_snapshot.c,$(wildcard src/*.c)) $(wildcard src/debug_font/*.c) $(wildcard src/image/*.c) $(wildcard vendor/bzip2/*.c) $(wildcard vendor/miniz/*.c) src/physics/physics.c vendor/md5/md5.c vendor/sha1/sha1.c vendor/base64/base64.c
 
 PLATFORM := cli
 BACKEND := glfw3

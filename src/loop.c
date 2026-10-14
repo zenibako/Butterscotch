@@ -594,6 +594,9 @@ int loop(CommandLineArgs args, const char *argv0) {
         options.lazyLoadRooms = args.lazyRooms;
         options.lazyLoadTextures = args.lazyTextures;
         options.lazyLoadAudio = args.lazyAudio;
+#if defined(OF_NATIVE_SAVESTATES) && !defined(GAME_DELTARUNE)
+        options.cacheRawRoomChunk = true;
+#endif
         options.eagerlyLoadedRooms = args.eagerRooms;
         DataWin* dataWin = DataWin_parse(currentDataWinPath, options);
 
@@ -1464,6 +1467,17 @@ int loop(CommandLineArgs args, const char *argv0) {
             if (shouldStep) {
                 Runner_handlePendingRoomChange(runner);
             }
+
+#ifdef PLATFORM_BUSY_TICK
+            /* Native snapshots are taken after Draw/GUI and room transitions,
+             * while no game event is executing and before the next input. */
+            extern bool platformSnapshotBoundary(Runner *runner);
+            if (platformSnapshotBoundary(runner)) {
+                lastFrameStartTime = nowNanos();
+                lastFrameTime = lastFrameStartTime;
+                wasPaused = runner->paused;
+            }
+#endif
 
             if (RunnerKeyboard_checkPressed(runner->keyboard, VK_BACKSPACE)) {
                 size_t bytes_used = get_used_memory();

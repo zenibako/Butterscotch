@@ -25,11 +25,17 @@
 #ifndef OF_SAVE_SLOT_FILE
 #error "OF_SAVE_SLOT_FILE is not set; build with the Makefile"
 #endif
+#include "of_snapshot_parts.h"
+#include "of_snapshot_bytes.h"
 #include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+#include "of_file.h"
+#include "gettime.h"
+#endif
 
 typedef struct {
     char name[OF_SAVE_NAME_LEN];
@@ -340,4 +346,140 @@ void platformDestroyFileSystem(FileSystem *base) {
     OfSaveFs *fs = (OfSaveFs *) base;
     for (uint32_t i = 0; i < fs->fileCount; i++) free(fs->files[i].data);
     free(fs);
+}
+
+
+/* Native states include the virtual progress files. Preparing only allocates;
+ * committing writes the already prepared archive before swapping live files. */
+typedef struct {
+    OfSaveFs files;
+    uint8_t *archive;
+    size_t size;
+} OfSaveSnapshot;
+
+bool ofSaveFsSnapshot(FileSystem *base, uint8_t **data, size_t *size, const char **reason) {
+    OfSaveFs *fs = (OfSaveFs *)base;
+    OfSnapshotWriter w = {.ok = true};
+    *data = NULL; *size = 0;
+    if (!fs || fs->fileCount > OF_SAVE_MAX_FILES) {
+        *reason = "Unsupported save-file backend"; return false;
+    }
+    ofSnapU32(&w, OF_SAVE_MAGIC); ofSnapU32(&w, fs->fileCount);
+    ofSnapU32(&w, 0); ofSnapU32(&w, 0);
+    size_t off = sizeof(OfSaveHeader) + fs->fileCount * sizeof(OfSaveEntry);
+    for (uint32_t i = 0; i < fs->fileCount; i++) {
+        ofSnapWrite(&w, fs->files[i].name, OF_SAVE_NAME_LEN);
+        ofSnapU32(&w, fs->files[i].size); ofSnapU32(&w, (uint32_t)off);
+        off += fs->files[i].size;
+    }
+    for (uint32_t i = 0; i < fs->fileCount; i++)
+        ofSnapWrite(&w, fs->files[i].data, fs->files[i].size);
+    if (!w.ok || w.size > OF_SAVE_MAX_BYTES) {
+        free(w.data); *reason = "Progress files are too large"; return false;
+    }
+    uint32_t total = (uint32_t)w.size;
+    for (unsigned i = 0; i < 4; i++) w.data[8 + i] = (uint8_t)(total >> (i * 8));
+    *data = w.data; *size = w.size; return true;
+}
+
+void ofSaveFsFreeSnapshot(void *ptr) {
+    OfSaveSnapshot *p = ptr;
+    if (!p) return;
+    for (uint32_t i = 0; i < p->files.fileCount; i++) free(p->files.files[i].data);
+    free(p->archive); free(p);
+}
+
+void *ofSaveFsPrepareSnapshot(FileSystem *base, const uint8_t *data, size_t size, const char **reason) {
+    (void)base;
+    OfSnapshotReader r = {data, size, 0, true};
+    if (size < sizeof(OfSaveHeader) || size > OF_SAVE_MAX_BYTES ||
+        ofSnapGetU32(&r) != OF_SAVE_MAGIC) goto bad;
+    uint32_t count = ofSnapGetU32(&r), total = ofSnapGetU32(&r);
+    if (ofSnapGetU32(&r) != 0 || count > OF_SAVE_MAX_FILES || total != size ||
+        sizeof(OfSaveHeader) + count * sizeof(OfSaveEntry) > size) goto bad;
+    OfSaveSnapshot *p = calloc(1, sizeof(*p));
+    if (!p) goto bad;
+    p->archive = malloc(size); p->size = size;
+    if (!p->archive) { ofSaveFsFreeSnapshot(p); goto bad; }
+    memcpy(p->archive, data, size);
+    size_t next = sizeof(OfSaveHeader) + count * sizeof(OfSaveEntry);
+    for (uint32_t i = 0; i < count; i++) {
+        OfSaveFile *f = &p->files.files[i];
+        ofSnapRead(&r, f->name, OF_SAVE_NAME_LEN);
+        f->size = ofSnapGetU32(&r); uint32_t off = ofSnapGetU32(&r);
+        if (!r.ok || !f->name[0] || !memchr(f->name, 0, OF_SAVE_NAME_LEN) ||
+            strchr(f->name, '/') || strchr(f->name, '\\') || off != next ||
+            f->size > size - next) { ofSaveFsFreeSnapshot(p); goto bad; }
+        for (uint32_t j = 0; j < i; j++)
+            if (strcmp(f->name, p->files.files[j].name) == 0) {
+                ofSaveFsFreeSnapshot(p); goto bad;
+            }
+        f->data = malloc((size_t)f->size + 1);
+        if (!f->data) { ofSaveFsFreeSnapshot(p); goto bad; }
+        memcpy(f->data, data + off, f->size); f->data[f->size] = 0;
+        p->files.fileCount++;
+        next += f->size;
+    }
+    if (next != size) { ofSaveFsFreeSnapshot(p); goto bad; }
+    return p;
+bad:
+    *reason = "Invalid progress files in state"; return NULL;
+}
+
+bool ofSaveFsApplySnapshot(FileSystem *base, void *ptr) {
+    OfSaveFs *fs = (OfSaveFs *)base;
+    OfSaveSnapshot *p = ptr;
+    if (!g_volatile) {
+#ifdef OF_PC
+        /* Only rename after the entire temporary archive has closed. */
+        const char *temporary = OF_SAVE_SLOT_FILE ".snapshot-tmp";
+        FILE *slot = fopen(temporary, "wb");
+        bool ok = slot && fwrite(p->archive, 1, p->size, slot) == p->size;
+        if (slot && fclose(slot) != 0) ok = false;
+        if (ok) ok = rename(temporary, OF_SAVE_SLOT_FILE) == 0;
+        if (!ok) remove(temporary);
+#else
+        /* Reject the kernel's save-name fallback: the slot must have been
+         * discovered from the Pocket instance, so close can publish its size. */
+#ifdef OF_NATIVE_SAVESTATES
+        uint64_t timings[6] = {nowNanos(), 0, 0, 0, 0, 0};
+        uint32_t slotId = 0;
+        if (of_file_slot_find(OF_SAVE_SLOT_FILE, &slotId) != 0 || slotId != 10) return false;
+        timings[1] = nowNanos();
+#endif
+        /* The pinned Pocket kernel validates a whole CRAM write before its
+         * memcpy. One unbuffered write fits the 256 KiB slot; r+b avoids
+         * O_TRUNC before that validation. Header.totalBytes ignores old tail
+         * bytes when the restored archive is shorter. */
+        FILE *slot = fopen(OF_SAVE_SLOT_FILE, "r+b");
+#ifdef OF_NATIVE_SAVESTATES
+        timings[2] = nowNanos();
+#endif
+        bool ok = slot && setvbuf(slot, NULL, _IONBF, 0) == 0;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[3] = nowNanos();
+#endif
+        if (ok) ok = fwrite(p->archive, 1, p->size, slot) == p->size;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[4] = nowNanos();
+#endif
+        if (slot && fclose(slot) != 0) ok = false;
+#ifdef OF_NATIVE_SAVESTATES
+        timings[5] = nowNanos();
+        logInfo("State archive phases: lookup %llu open %llu buffer %llu write %llu close %llu ms; %zu bytes, %s\n",
+            (unsigned long long)((timings[1] - timings[0]) / 1000000),
+            (unsigned long long)((timings[2] - timings[1]) / 1000000),
+            (unsigned long long)((timings[3] - timings[2]) / 1000000),
+            (unsigned long long)((timings[4] - timings[3]) / 1000000),
+            (unsigned long long)((timings[5] - timings[4]) / 1000000),
+            p->size, ok ? "ok" : "failed");
+#endif
+#endif
+        if (!ok) return false;
+    }
+    for (uint32_t i = 0; i < fs->fileCount; i++) free(fs->files[i].data);
+    memcpy(fs->files, p->files.files, sizeof(fs->files));
+    fs->fileCount = p->files.fileCount;
+    memset(p->files.files, 0, sizeof(p->files.files)); p->files.fileCount = 0;
+    return true;
 }
