@@ -134,7 +134,7 @@ on the host (Homebrew's Bash on macOS).
 
 Use the Pocket's Memories controls to save or load, or its power button to
 sleep. Exact snapshots are accepted in supported overworld scenes, the
-game's own menus and its dialogue. Battles (including the room a battle was
+game's own menus, its dialogue, and the intro, title and naming screens. Battles (including the room a battle was
 entered from, which the game keeps as persistent), the player's cutscenes, the
 port's Select menu, and unsupported runtime resources, live dynamic sprites, and a debug-paused runner
 produce an on-screen refusal. Select → Save states
