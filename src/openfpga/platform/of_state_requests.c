@@ -1,4 +1,5 @@
 #include "of_state_requests.h"
+#include "of_game.h"
 #include "of_snapshot_parts.h"
 #include "of_snapshot_envelope.h"
 #include "of_snapshot_bytes.h"
@@ -106,7 +107,7 @@ static int32_t variableId(Runner *r, const char *name) {
     return -1;
 }
 
-static GMLReal number(Runner *r, Instance *instance, const char *name) {
+GMLReal ofStateNumber(Runner *r, Instance *instance, const char *name) {
     int32_t id = variableId(r, name);
     if (id < 0) return 0;
     RValue v = Instance_getSelfVar(instance, id);
@@ -121,31 +122,12 @@ const char *ofSavestateReason(Runner *r) {
     return "This build has no save states";
 #endif
 #endif
-#ifdef GAME_DELTARUNE
-    (void)r; return "Deltarune saves aren't ready";
-#else
     if (!r || !r->currentRoom) return "The game is still loading";
-    if (r->dataWin->gen8.wadVersion != 16 || strcmp(r->dataWin->gen8.name, "UNDERTALE"))
-        return "Unsupported game version";
-    bool overworld = false;
-    for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
-        Instance *inst = r->instances[i];
-        if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
-            (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
-        const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
-        if (!strcmp(name, "obj_overworldcontroller")) overworld = true;
-        if (strstr(name, "battle") || strstr(name, "battler")) return "Can't save during battles";
-        if (!strncmp(name, "obj_writer", 10) || strstr(name, "dialogue")) return "Can't save during dialogue";
-        if (!strcmp(name, "obj_mainchara") && number(r, inst, "cutscene") != 0)
-            return "Can't save during cutscenes";
-    }
-    if (!overworld) return "Save in the overworld or menu";
-    /* The Undertale v1.08 overworld menu sets interact=5. Retain the writer,
-     * battle and player-cutscene checks even for that menu value. */
-    GMLReal interact = number(r, r->vmContext->globalScopeInstance, "interact");
-    if (interact != 0 && interact != 5) return "Can't save during dialogue";
-    return Runner_snapshotCheck(r);
-#endif
+    /* Which scenes a game can save in is the game's own rule (of_game.h);
+     * the runner's resource check below applies to every game. */
+    if (!ofGame.savestateReason) return "Save states aren't ready for this game";
+    const char *why = ofGame.savestateReason(r);
+    return why ? why : Runner_snapshotCheck(r);
 }
 
 bool ofSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **reason) {
@@ -153,7 +135,7 @@ bool ofSavestateCapture(Runner *r, uint8_t **data, size_t *size, const char **re
     const char *why = ofSavestateReason(r);
 #ifdef OF_PC
     if (r && r->vmContext && r->vmContext->globalScopeInstance)
-        logInfo("Save-state profile: interact %.0f\n", (double)number(r, r->vmContext->globalScopeInstance, "interact"));
+        logInfo("Save-state profile: interact %.0f\n", (double)ofStateNumber(r, r->vmContext->globalScopeInstance, "interact"));
 #endif
     if (why) { *reason = why; return false; }
     uint8_t *parts[3] = {0}; size_t sizes[3] = {0};

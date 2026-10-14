@@ -8,6 +8,9 @@ void ofSavestateInit(Runner *runner);
 /* Optional streaming reads must not compete with the Pocket state command. */
 bool ofSavestateDeferFileReads(void);
 const char *ofSavestateReason(Runner *runner);
+/* An instance's (or the global scope's) numeric variable by name, 0 if unset
+ * or not a number. For the games' save-state rules. */
+GMLReal ofStateNumber(Runner *runner, Instance *instance, const char *name);
 bool ofSavestateCapture(Runner *runner, uint8_t **data, size_t *size, const char **reason);
 bool ofSavestateRestore(Runner *runner, const uint8_t *data, size_t size, const char **reason);
 /* True after a save/load pause: the loop must rebase its pacing clock. */
