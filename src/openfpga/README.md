@@ -89,10 +89,14 @@ export USE_SDK_CONTAINER=0
 make            # RISC-V ELF + Pocket SD tree in out/build/pocket/butterscotch/
 make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
+make tile-motion-fixture  # builds the asset-free translated tile-cache regression
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
 ```
+
+The translated tile-cache fixture and its recorded harness/Pocket comparisons
+are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
 
 ### Save states and sleep (experimental, Undertale only)
 

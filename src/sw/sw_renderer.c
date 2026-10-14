@@ -2079,8 +2079,8 @@ static bool SWRenderer_drawSpriteGrid(Renderer* renderer, int32_t spriteIndex, c
 // frame. A run of them that nothing else is drawn between is composed once
 // into a picture the size of the run's bounding box, in room coordinates, and
 // that picture is drawn in their place for as long as the run stays the same.
-// The key is a hash of everything that decides what the tiles look like, so a
-// game that moves, adds, hides or recolours tiles just gets a new picture.
+// The key describes tile appearance and relative positions. Moving a whole
+// run reuses its picture; changing its contents or arrangement makes a new one.
 #define SWR_TILE_RUN_ENTRIES 4
 #define SWR_TILE_RUN_MIN_TILES 16
 #define SWR_TILE_RUN_MAX_PIXELS (2 * 1024 * 1024)
@@ -2095,12 +2095,14 @@ enum { SWR_BLOCK_EMPTY, SWR_BLOCK_SOLID, SWR_BLOCK_MIXED };
 
 // A picture is in the pixels the room is drawn in: room pixels, or every
 // second one (shift 1) when the room is drawn at half size. Its place and
-// size are in those units, and it starts on a block boundary of them.
+// size are in those units. Storage starts on a block boundary when built;
+// a queued placement can translate that storage to any whole-pixel position.
 typedef struct {
     uint64_t key;
     uintpixel_t* pixels;    // NULL when the entry is free
     uint8_t* blocks;        // one SWR_BLOCK_* per block, row by row; lives in the same allocation as pixels
     int x, y, width, height;
+    int anchorX, anchorY;   // first tile's origin when built, in picture units
     int shift;
     uint32_t lastUsedFrame;
 } SWTileRun;
@@ -2114,7 +2116,9 @@ static SWTileRun swrTileRuns[SWR_TILE_RUN_ENTRIES];
 // screen, drawing starts at the topmost picture that is solid there, since
 // nothing under it can show.
 static SWTileRun* swrPendingRuns[SWR_TILE_RUN_ENTRIES]; // swrPendingCount, at the top of the file, counts them
+MAYBE_UNUSED static SWTileRun swrPendingPlacements[SWR_TILE_RUN_ENTRIES]; // immutable placement per queued draw
 static SWRenderer* swrPendingOwner = NULL;
+static unsigned swrTileRunReaders; // grid replay can request texture-memory eviction
 
 // The same pictures held together frame after frame are flattened into one,
 // so that the screen is gone over once and not once per layer. An entry with
@@ -2131,9 +2135,29 @@ static int swrFloorToStep(int v, int step)
 
 static uint8_t swrRunBlockKind(const SWTileRun* run, int unitX, int unitY)
 {
-    int bx = (unitX - run->x) / SWR_TILE_RUN_BLOCK, by = (unitY - run->y) / SWR_TILE_RUN_BLOCK;
-    if (unitX < run->x || unitY < run->y || unitX >= run->x + run->width || unitY >= run->y + run->height) return SWR_BLOCK_EMPTY;
-    return run->blocks[by * ((run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK) + bx];
+    int x0 = unitX - run->x, y0 = unitY - run->y;
+    int x1 = x0 + SWR_TILE_RUN_BLOCK, y1 = y0 + SWR_TILE_RUN_BLOCK;
+    if (x1 <= 0 || y1 <= 0 || x0 >= run->width || y0 >= run->height) return SWR_BLOCK_EMPTY;
+    int columns = (run->width + SWR_TILE_RUN_BLOCK - 1) / SWR_TILE_RUN_BLOCK;
+    if (x0 >= 0 && y0 >= 0 && ((x0 | y0) & (SWR_TILE_RUN_BLOCK - 1)) == 0)
+        return run->blocks[(y0 / SWR_TILE_RUN_BLOCK) * columns + x0 / SWR_TILE_RUN_BLOCK];
+
+    // A translated destination block can touch four storage blocks. Only a
+    // wholly covered rectangle of solid blocks may hide the pictures below.
+    bool solid = x0 >= 0 && y0 >= 0 && x1 <= run->width && y1 <= run->height;
+    bool empty = true;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > run->width) x1 = run->width;
+    if (y1 > run->height) y1 = run->height;
+    for (int by = y0 / SWR_TILE_RUN_BLOCK; by <= (y1 - 1) / SWR_TILE_RUN_BLOCK; by++) {
+        for (int bx = x0 / SWR_TILE_RUN_BLOCK; bx <= (x1 - 1) / SWR_TILE_RUN_BLOCK; bx++) {
+            uint8_t kind = run->blocks[by * columns + bx];
+            if (kind != SWR_BLOCK_EMPTY) empty = false;
+            if (kind != SWR_BLOCK_SOLID) solid = false;
+        }
+    }
+    return empty ? SWR_BLOCK_EMPTY : solid ? SWR_BLOCK_SOLID : SWR_BLOCK_MIXED;
 }
 
 static uint64_t swrTileRunHash(uint64_t hash, const void* data, size_t bytes)
@@ -2209,6 +2233,8 @@ static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixe
                 
                 // And to the picture.
                 int x0 = tx0, x1 = tx1, y0 = ty0, y1 = ty1;
+                if (x0 < run->x) x0 = run->x;
+                if (y0 < run->y) y0 = run->y;
                 if (x1 > run->x + run->width) x1 = run->x + run->width;
                 if (y1 > run->y + run->height) y1 = run->y + run->height;
                 if (x0 >= x1 || y0 >= y1) continue;
@@ -2238,6 +2264,8 @@ static SWTileRun* swrPendingFlattened(SWRenderer* swr)
     for (int i = 0; i < swrPendingCount; i++) {
         const SWTileRun* run = swrPendingRuns[i];
         key = swrTileRunHash(key, &run->key, sizeof(run->key));
+        int32_t placement[4] = { run->x, run->y, run->anchorX, run->anchorY };
+        key = swrTileRunHash(key, placement, sizeof(placement));
         if (run->x < left) left = run->x;
         if (run->y < top) top = run->y;
         if (run->x + run->width > right) right = run->x + run->width;
@@ -2333,7 +2361,9 @@ void swrTileRunsFlush(SWRenderer* swr)
 {
     if (swrPendingCount == 0) return;
     if (swr == NULL) swr = swrPendingOwner;
+    ++swrTileRunReaders;
     SWR_PROFILED(SWR_PROF_PART, swrTileRunsDrawPending(swr));
+    --swrTileRunReaders;
     swrPendingCount = 0;
 }
 
@@ -2355,6 +2385,9 @@ void swrHeldUnderDiscard(SWRenderer* swr)
 
 bool swrTileRunsFree(void)
 {
+    // Below-grid replay temporarily hides the queue to avoid recursive draws.
+    // Its sprite loads may request memory, but the hidden pictures are in use.
+    if (swrTileRunReaders != 0) return false;
     swrTileRunsFlush(NULL); // a held picture must be drawn before it goes
     swrGridFlush(NULL);
     bool freed = false;
@@ -2389,6 +2422,8 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     uint64_t key = BS_FNV64_OFFSET;
     int32_t mode[2] = { shift, swrFavorSpeed ? 1 : 0 };
     key = swrTileRunHash(key, mode, sizeof(mode));
+    int anchorX = swrFloor((float) tiles[0]->x + offsets[0]);
+    int anchorY = swrFloor((float) tiles[0]->y + offsets[1]);
     int left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
     for (int32_t t = 0; t < count; t++)
     {
@@ -2408,12 +2443,13 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         
         // Everything that decides what the tile looks like, a word at a time:
         // this runs for every tile of the layer on every frame.
-        uint32_t words[11] = {
-            (uint32_t) tile->x, (uint32_t) tile->y, (uint32_t) tile->useSpriteDefinition, (uint32_t) tile->backgroundDefinition,
-            (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height, 0, 0,
+        uint32_t words[9] = {
+            0, 0, (uint32_t) tile->useSpriteDefinition, (uint32_t) tile->backgroundDefinition,
+            (uint32_t) tile->sourceX, (uint32_t) tile->sourceY, (uint32_t) tile->color, tile->width, tile->height,
         };
-        memcpy(&words[9], &offsets[t * 2], 2 * sizeof(float));
-        for (int w = 0; w < 11; w++) key = (key ^ words[w]) * BS_FNV64_PRIME;
+        float relative[2] = { exactLeft - (float) anchorX, exactTop - (float) anchorY };
+        memcpy(words, relative, sizeof(relative));
+        for (int w = 0; w < 9; w++) key = (key ^ words[w]) * BS_FNV64_PRIME;
     }
     
     // The picture starts on a block boundary, so that the pictures of a room share one grid of blocks.
@@ -2464,6 +2500,7 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
         run = spare;
         run->key = key;
         run->x = left >> shift; run->y = top >> shift;
+        run->anchorX = anchorX >> shift; run->anchorY = anchorY >> shift;
         run->shift = shift;
         
         // Point the renderer at the picture, with a view that maps the run's
@@ -2491,7 +2528,14 @@ static bool swrDrawTileRunCached(Renderer* renderer, RoomTile** tiles, const flo
     
     // Held, to be drawn together with the pictures that follow it directly.
     if (swrPendingCount == SWR_TILE_RUN_ENTRIES || (swrPendingCount > 0 && swrPendingRuns[0]->shift != shift)) swrTileRunsFlush(swr);
-    swrPendingRuns[swrPendingCount++] = run;
+    // One image may be queued more than once, at different positions. Its
+    // cache entry and each earlier placement must remain unchanged.
+    SWTileRun* placed = &swrPendingPlacements[swrPendingCount];
+    *placed = *run;
+    placed->x += (anchorX >> shift) - run->anchorX;
+    placed->y += (anchorY >> shift) - run->anchorY;
+    placed->anchorX = anchorX >> shift; placed->anchorY = anchorY >> shift;
+    swrPendingRuns[swrPendingCount++] = placed;
     swrPendingOwner = swr;
     return true;
 #endif
