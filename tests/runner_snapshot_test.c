@@ -113,6 +113,20 @@ static void invalidIniMagic(uint8_t *raw, size_t n) {
         }
     assert(false);
 }
+/* Revision 6 added the saved persistent rooms after the live instances.
+ * Older revisions lack that count; drop it from a body with no instances. */
+static void dropSavedRooms(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
+    size_t at = roomBlock(raw, *rawLen, rooms) + 4 + rooms;
+    for (uint32_t i = 0; i < rooms; i++)
+        at += 12 + 2 + 4 + (size_t)le32(raw + at + 14) * sizeof(RoomTile);
+    uint32_t arrays = le32(raw + at); at += 4;
+    for (uint32_t i = 0; i < arrays; i++) at += 8 + 4 * (size_t)le32(raw + at + 4);
+    at += 4 + (size_t)le32(raw + at) * sizeof(TileLayerMapEntry);
+    assert(le32(raw + at) == 0); at += 4;   /* live instances */
+    assert(le32(raw + at) == 0);            /* saved rooms */
+    memmove(raw + at, raw + at + 4, *rawLen - at - 4);
+    *rawLen -= 4;
+}
 static void removeIniAndMaybeDormantTail(uint8_t **bytes, size_t *size,
                                          size_t drop) {
     uint32_t rawLen;
@@ -529,11 +543,96 @@ static void testRestoreDiscardsLiveSavedRoomResources(void) {
     assert(hmgeti(r.instancesById, savedId) < 0);
     int battleId = 100005;
     assert(hmgeti(r.instancesById, battleId) < 0);
+    /* A persistent room's saved state is captured since revision 6. */
     state->initialized = true;
-    assert(Runner_snapshotCheck(&r) != NULL);
-    uint8_t *invalid = NULL; size_t invalidSize = 0;
-    assert(!Runner_snapshotCapture(&r, 96, &invalid, &invalidSize, &reason));
+    assert(Runner_snapshotCheck(&r) == NULL);
     state->initialized = false;
+    free(bytes); free(r.savedRoomStates);
+    destroyFixture(&r);
+}
+
+/* A battle leaves the overworld room persistent: its instances, tile layers
+ * and views wait in savedRoomStates until the player returns. */
+static void testPersistentSavedRoomRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[3]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    memset(&rooms[1], 0, sizeof(rooms[1]));
+    memset(&rooms[2], 0, sizeof(rooms[2]));
+    dw.room.count = 3;
+    rooms[1].width = 640; rooms[1].height = 480;
+    rooms[1].payloadLoaded = true; rooms[1].persistent = true;
+    rooms[2].width = 320; rooms[2].height = 240; rooms[2].payloadLoaded = true;
+    r.savedRoomStates = calloc(3, sizeof(SavedRoomState));
+    assert(r.savedRoomStates);
+    r.currentRoom = &rooms[2]; r.currentRoomIndex = 2;
+    SpatialGrid_free(r.spatialGrid);
+    r.spatialGrid = SpatialGrid_create(rooms[2].width, rooms[2].height);
+
+    Instance *battle = Instance_create(100005, 0, 2, 3);
+    arrput(r.instances, battle);
+    hmput(r.instancesById, battle->instanceId, battle);
+    SavedRoomState *state = &r.savedRoomStates[1];
+    state->initialized = true;
+    state->backgroundColor = 0xabcdefu;
+    state->viewsEnabled = true;
+    state->views[0].portX = 12;
+    state->defaultCameras[0].viewWidth = 320;
+    Instance *saved = Instance_create(100004, 0, 7, 8);
+    saved->alarm[1] = 6;
+    arrput(state->instances, saved);
+    hmput(r.instancesById, saved->instanceId, saved);
+    TileLayerState tileLayer = {0};
+    tileLayer.visible = true; tileLayer.offsetX = 4;
+    int tileDepth = 100;
+    hmput(state->tileLayerMap, tileDepth, tileLayer);
+    GMLArray *shared = GMLArray_create(&dw, 1);
+    GMLArray_set(shared, 0, RValue_makeReal(31));
+    Instance_setSelfVar(saved, 20, RValue_makeArray(shared));
+    Instance_setSelfVar(battle, 22, RValue_makeArray(shared));
+    Instance_setSelfVar(saved, 21, RValue_makeReal(5));
+    shared->owner = IntRValueHashMap_findSlot(&saved->selfVars, 20);
+    GMLArray_decRef(shared);
+
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    assert(Runner_snapshotCapture(&r, 97, &bytes, &size, &reason));
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 97, bytes, size, &reason);
+    assert(prepared);
+    saved->x = 900; state->backgroundColor = 0; state->views[0].portX = 0;
+    Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
+
+    assert(r.currentRoom == &rooms[2] && arrlen(r.instances) == 1);
+    assert(state->initialized && arrlen(state->instances) == 1);
+    Instance *restored = state->instances[0];
+    assert(restored != saved && restored->instanceId == 100004);
+    assert(restored->x == 7 && restored->y == 8 && restored->alarm[1] == 6);
+    assert(Instance_getSelfVar(restored, 21).real == 5);
+    RValue a = Instance_getSelfVar(restored, 20);
+    RValue b = Instance_getSelfVar(r.instances[0], 22);
+    assert(a.type == RVALUE_ARRAY && b.type == RVALUE_ARRAY && a.array == b.array);
+    assert(a.array->owner == IntRValueHashMap_findSlot(&restored->selfVars, 20));
+    assert(GMLArray_get(a.array, 0).real == 31);
+    assert(state->backgroundColor == 0xabcdefu && state->viewsEnabled);
+    assert(state->views[0].portX == 12 && state->defaultCameras[0].viewWidth == 320);
+    assert(hmlen(state->tileLayerMap) == 1);
+    assert(hmget(state->tileLayerMap, tileDepth).visible);
+    assert(hmget(state->tileLayerMap, tileDepth).offsetX == 4);
+    int savedId = 100004;
+    assert(hmget(r.instancesById, savedId) == restored);
+    /* Not live in the battle room: no object list or grid entry. */
+    assert(arrlen(r.instancesByExactObject[0]) == 1 && r.instancesByExactObject[0][0] == r.instances[0]);
+
+    /* A snapshot with a duplicate id across live and saved rooms is refused. */
+    restored->instanceId = 100005;
+    uint8_t *dup = NULL; size_t dupSize = 0;
+    assert(Runner_snapshotCapture(&r, 98, &dup, &dupSize, &reason));
+    assert(Runner_snapshotPrepare(&r, 98, dup, dupSize, &reason) == NULL);
+    restored->instanceId = 100004;
+    free(dup);
+
+    hmdel(r.instancesById, savedId);
+    Runner_freeSavedRoomStateResources(state);
     free(bytes); free(r.savedRoomStates);
     destroyFixture(&r);
 }
@@ -755,6 +854,7 @@ static void testOlderCoreV3Trailers(void) {
     assert(Runner_snapshotCapture(&r, 56, &bytes, &size, &reason));
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 3);
     free(raw);
     removeIniAndMaybeDormantTail(&bytes, &size, 8);
@@ -763,6 +863,24 @@ static void testOlderCoreV3Trailers(void) {
     removeIniAndMaybeDormantTail(&bytes, &size, 44);
     s = Runner_snapshotPrepare(&r, 56, bytes, size, &reason);
     assert(s); Runner_snapshotFree(s);
+    free(bytes); destroyFixture(&r);
+}
+
+static void testRevision5WithoutSavedRooms(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 59, &bytes, &size, &reason));
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    dropSavedRooms(raw, &rawLen, 1);
+    encodeRaw(&bytes, &size, raw, rawLen, 5);
+    free(raw);
+    assert(le32(bytes + 4) == 5);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 59, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
     free(bytes); destroyFixture(&r);
 }
 
@@ -776,9 +894,10 @@ static void testZstdV4FrameValidation(void) {
     memcpy(&r.lives, &livesBits, sizeof(livesBits));
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 58, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 5);
+    assert(le32(bytes + 4) == 6);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 4);
     assert(le32(bytes + 4) == 4);
     assert(ZSTD_getFrameContentSize(bytes + 32, size - 32) == le32(bytes + 24));
@@ -955,7 +1074,7 @@ static void testStaticStringReferences(void) {
     arrput(r.dsListPool, list);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 91, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 5);
+    assert(le32(bytes + 4) == 6);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
     dw.strg.count = 0;
@@ -1000,7 +1119,7 @@ static void testStaticStringReferences(void) {
     uint8_t *bad = malloc(size); assert(bad); memcpy(bad, bytes, size);
     write32(raw + ref, 0x80000002u);
     size_t badSize = size;
-    encodeRaw(&bad, &badSize, raw, rawLen, 5);
+    encodeRaw(&bad, &badSize, raw, rawLen, 6);
     assert(Runner_snapshotPrepare(&r, 91, bad, badSize, &reason) == NULL);
     free(bad); free(raw); free(bytes);
     destroyFixture(&r);
@@ -1059,7 +1178,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
     assert(runs == 1); /* Exactly the 64 consecutive list values. */
     for (int j = 0; j < 64; j++)
         write32(raw + run + (size_t)j * 8u + 4u, 0x80000001u);
-    encodeRaw(&bytes, &size, raw, rawLen, 5);
+    encodeRaw(&bytes, &size, raw, rawLen, 6);
     assert(size < 1024u * 1024u);
     assert(Runner_snapshotPrepare(&r, 93, bytes, size, &reason) == NULL);
     assert(r.frameCount == 42 && arrlen(r.dsListPool[0].items) == 64);
@@ -1078,10 +1197,12 @@ static void testDecoderStaticStringExpansionBudget(void) {
 
 int main(void) {
     testRestoreDiscardsLiveSavedRoomResources();
+    testPersistentSavedRoomRoundTrip();
     testStaticStringReferences();
     testStaticStringExpansionBudget();
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
+    testRevision5WithoutSavedRooms();
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
     testPausedCaptureEligibility();

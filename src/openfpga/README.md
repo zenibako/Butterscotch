@@ -134,9 +134,10 @@ on the host (Homebrew's Bash on macOS).
 
 Use the Pocket's Memories controls to save or load, or its power button to
 sleep. Exact snapshots are accepted in supported overworld scenes, the
-game's own menus, its dialogue, and the intro, title and naming screens. Battles (including the room a battle was
-entered from, which the game keeps as persistent), the player's cutscenes, the
-port's Select menu, and unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+game's own menus, its dialogue, battles, and the intro, title and naming
+screens. A battle state also carries the room the battle was entered from,
+which the game keeps as persistent, so finishing the battle returns there.
+The player's cutscenes, the port's Select menu, and unsupported runtime resources, live dynamic sprites, and a debug-paused runner
 produce an on-screen refusal. Select → Save states
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
@@ -155,9 +156,9 @@ Analogue menu to keep it. The log records capture sizes, elapsed time,
 transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
-Core format revision 5 uses lossless Zstandard compression and references strings
-already present in the matching game data; states from revisions 3 and 4
-remain readable. Native builds avoid the renderer's large allocation probe
+Core format revision 6 uses lossless Zstandard compression, references strings
+already present in the matching game data, and carries persistent rooms' saved
+state; states from revisions 3 through 5 remain readable. Native builds avoid the renderer's large allocation probe
 when the OS can prove the reserve fits, otherwise retaining the original probe.
 The first reserve check logs the allocation and query timings for comparison.
 State-request logs include refusal reasons and separate load receive,

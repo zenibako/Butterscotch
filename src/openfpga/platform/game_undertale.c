@@ -48,11 +48,11 @@ static void patchInstructions(DataWin *dw) {
     }
 }
 
-/* Save states (of_state_requests.c) are taken anywhere except battles and
- * the player's cutscenes: the overworld, the game's own menus, dialogue, and
- * the intro, title and naming screens. Runner_snapshotCheck still refuses
- * anything it cannot store. Battles are refused for now because a battle
- * makes the room it left persistent, which snapshots don't carry; cutscenes
+/* Save states (of_state_requests.c) are taken anywhere except the player's
+ * cutscenes: the overworld, the game's own menus, dialogue, battles, and the
+ * intro, title and naming screens. Runner_snapshotCheck still refuses
+ * anything it cannot store. A battle keeps the room it left as persistent
+ * saved state, which snapshots carry since revision 6. Cutscenes are refused
  * because no restore inside one has been checked yet. */
 static const char *savestateReason(Runner *r) {
     if (r->dataWin->gen8.wadVersion != 16 || strcmp(r->dataWin->gen8.name, "UNDERTALE"))
@@ -62,7 +62,6 @@ static const char *savestateReason(Runner *r) {
         if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
             (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
         const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
-        if (strstr(name, "battle") || strstr(name, "battler")) return "Can't save during battles";
         if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
             return "Can't save during cutscenes";
     }
