@@ -18,7 +18,8 @@
 
 /* This is a same-build, WAD16-only wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 5u
+#define SNAP_VERSION 6u
+#define SNAP_STRING_REF_VERSION 5u
 #define SNAP_ZSTD_LEGACY_VERSION 4u
 #define SNAP_LEGACY_VERSION 3u
 #define SNAP_OUTPUT_LIMIT (1024u * 1024u)
@@ -193,16 +194,30 @@ static RunnerPlain makePlain(const Runner *r) {
     return p;
 }
 
-typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY } SlotKind;
+typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY, SLOT_SAVED } SlotKind;
 typedef struct { SlotKind kind; uint32_t container, index; char *key; } SlotRef;
 typedef struct { GMLArray *array; uint32_t ownerSlot; } ArrayRef;
 typedef struct { char *key; int32_t value; } SnapshotVarName;
+/* The pointer-free part of SavedRoomState. */
+typedef struct {
+    RuntimeBackground backgrounds[8];
+    RuntimeView views[MAX_VIEWS];
+    GMLCamera defaultCameras[MAX_DEFAULT_ROOM_CAMERAS];
+    uint32_t backgroundColor;
+    bool drawBackgroundColor, viewsEnabled;
+} SavedRoomPlain;
+
 typedef struct {
     uint32_t width, height, speed, tileCount;
     bool persistent, payloadLoaded;
     RoomTile *tiles, *displacedTiles;
     Room stagedPayload;
     bool stagedLoaded;
+    /* What a persistent room left behind (SavedRoomState), revision 6. */
+    bool hasSaved;
+    SavedRoomPlain saved;
+    TileLayerMapEntry *savedTileLayers;
+    Instance **savedInstances;
 } SnapshotRoom;
 
 struct RunnerSnapshot {
@@ -211,6 +226,7 @@ struct RunnerSnapshot {
     Room *room;
     Instance *global;
     Instance **instances;
+    Instance **savedInstances; /* every room's, in order; owned by roomStates */
     DsMapEntry **maps;
     DsList *lists;
     IniFile *currentIni, *cachedIni;
@@ -348,6 +364,13 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
         if (s->cachedIni) Ini_free(s->cachedIni);
         free(s->cachedIniPath);
     }
+    if (s->roomStates) for (uint32_t i = 0; i < s->roomCount; i++) {
+        SnapshotRoom *state = &s->roomStates[i];
+        for (ptrdiff_t j = 0; j < arrlen(state->savedInstances); j++)
+            Instance_free(state->savedInstances[j]);
+        arrfree(state->savedInstances); hmfree(state->savedTileLayers);
+    }
+    arrfree(s->savedInstances);
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) GMLArray_decRef(s->arrays[i]);
     arrfree(s->arrays); arrfree(s->owners); arrfree(s->slots);
     if (s->roomStates) for (uint32_t i = 0; i < s->roomCount; i++) {
@@ -401,7 +424,6 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         REFUSE("Invalid sprite registry");
     if (r->currentRoomIndex < 0 || (uint32_t)r->currentRoomIndex >= r->dataWin->room.count)
         REFUSE("Invalid room");
-    if (forCapture && r->currentRoom->persistent) REFUSE("Persistent room is unsupported");
     if (forCapture && !r->currentRoom->payloadLoaded) REFUSE("Current room payload is unavailable");
     if (forCapture && r->paused) REFUSE("Paused runner is unsupported for capture");
     if (spritesValid && hasLiveDynamicSprite(r->dataWin))
@@ -434,11 +456,14 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
     for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
         SavedRoomState *st = r->savedRoomStates ? &r->savedRoomStates[i] : NULL;
         Room *room = &r->dataWin->room.rooms[i];
-        if (forCapture && st && (arrlen(st->instances) || arrlen(st->runtimeLayers) ||
-                                 hmlen(st->tileLayerMap)))
-            REFUSE("Saved room resources are unsupported");
-        if (forCapture && st && st->initialized && room->persistent)
-            REFUSE("Persistent saved room state is unsupported");
+        if (forCapture && st && arrlen(st->runtimeLayers))
+            REFUSE("Saved room layers are unsupported");
+        for (ptrdiff_t j = 0; forCapture && st && j < arrlen(st->instances); j++) {
+            Instance *inst = st->instances[j];
+            if (!inst || inst->destroyed || inst->objectIndex < 0 ||
+                (uint32_t)inst->objectIndex >= r->dataWin->objt.count || inst->physicsBody)
+                REFUSE("Unsupported saved room instance");
+        }
         if (forCapture && !SpatialGrid_dimensionsValid(room->width, room->height))
             REFUSE("Room dimensions exceed the collision grid limit");
         if (forCapture && room->payloadLoaded && room->tileCount && !room->tiles)
@@ -555,9 +580,17 @@ static bool collectMap(Graph *g, IntRValueHashMap *map) {
             !collect(g, &map->entries[i].value)) return false;
     return true;
 }
+static bool hasSavedRoom(const SavedRoomState *st) {
+    return st->initialized || arrlen(st->instances) || hmlen(st->tileLayerMap);
+}
 static bool collectGraph(Runner *r, Graph *g) {
     for (ptrdiff_t i = 0; i < arrlen(r->instances); i++)
         if (!collectMap(g, &r->instances[i]->selfVars)) return false;
+    for (uint32_t i = 0; r->savedRoomStates && i < r->dataWin->room.count; i++) {
+        SavedRoomState *st = &r->savedRoomStates[i];
+        for (ptrdiff_t j = 0; j < arrlen(st->instances); j++)
+            if (!collectMap(g, &st->instances[j]->selfVars)) return false;
+    }
     if (!collectMap(g, &r->vmContext->globalScopeInstance->selfVars)) return false;
     for (ptrdiff_t i = 0; i < arrlen(r->dsMapPool); i++)
         for (ptrdiff_t j = 0; j < shlen(r->dsMapPool[i]); j++)
@@ -744,6 +777,32 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         InstancePlain ip = instancePlain(r->instances[i]); put(&w, &ip, sizeof(ip));
         putMap(&w, &g, &r->instances[i]->selfVars);
     }
+    /* Revision 6: what each persistent room left behind when the player went
+     * elsewhere (persistRoomState), such as the overworld during a battle. */
+    uint32_t savedRooms = 0;
+    for (uint32_t i = 0; r->savedRoomStates && i < r->dataWin->room.count; i++)
+        if (hasSavedRoom(&r->savedRoomStates[i])) savedRooms++;
+    put32(&w, savedRooms);
+    for (uint32_t i = 0; savedRooms && i < r->dataWin->room.count; i++) {
+        SavedRoomState *st = &r->savedRoomStates[i];
+        if (!hasSavedRoom(st)) continue;
+        SavedRoomPlain sp; memset(&sp, 0, sizeof(sp));
+        memcpy(sp.backgrounds, st->backgrounds, sizeof(sp.backgrounds));
+        memcpy(sp.views, st->views, sizeof(sp.views));
+        memcpy(sp.defaultCameras, st->defaultCameras, sizeof(sp.defaultCameras));
+        sp.backgroundColor = st->backgroundColor;
+        sp.drawBackgroundColor = st->drawBackgroundColor;
+        sp.viewsEnabled = st->viewsEnabled;
+        put32(&w, i); put(&w, &sp, sizeof(sp));
+        put32(&w, (uint32_t)hmlen(st->tileLayerMap));
+        for (ptrdiff_t j = 0; j < hmlen(st->tileLayerMap); j++)
+            put(&w, &st->tileLayerMap[j], sizeof(TileLayerMapEntry));
+        put32(&w, (uint32_t)arrlen(st->instances));
+        for (ptrdiff_t j = 0; j < arrlen(st->instances); j++) {
+            InstancePlain ip = instancePlain(st->instances[j]); put(&w, &ip, sizeof(ip));
+            putMap(&w, &g, &st->instances[j]->selfVars);
+        }
+    }
     putMap(&w, &g, &r->vmContext->globalScopeInstance->selfVars);
     put32(&w, (uint32_t)shlen(r->vmContext->varNameMap));
     for (ptrdiff_t i = 0; i < shlen(r->vmContext->varNameMap); i++) {
@@ -927,6 +986,9 @@ static RValue *slotPointer(RunnerSnapshot *s, SlotRef ref) {
         case SLOT_INSTANCE:
             if (ref.container >= (uint32_t)arrlen(s->instances)) return NULL;
             return IntRValueHashMap_findSlot(&s->instances[ref.container]->selfVars, (int32_t)ref.index);
+        case SLOT_SAVED:
+            if (ref.container >= (uint32_t)arrlen(s->savedInstances)) return NULL;
+            return IntRValueHashMap_findSlot(&s->savedInstances[ref.container]->selfVars, (int32_t)ref.index);
         case SLOT_MAP: {
             if (ref.container >= (uint32_t)arrlen(s->maps)) return NULL;
             DsMapEntry *map = s->maps[ref.container];
@@ -1038,6 +1100,12 @@ static bool buildIndexes(RunnerSnapshot *s, Runner *r) {
         arrput(s->byExact[inst->objectIndex], inst);
         SpatialGrid_markInstanceAsDirty(s->grid, inst);
     }
+    for (ptrdiff_t i = 0; i < arrlen(s->savedInstances); i++) {
+        Instance *inst = s->savedInstances[i];
+        int id = (int)inst->instanceId;
+        if (hmgeti(s->byId, id) >= 0) return false;
+        hmput(s->byId, id, inst);
+    }
     return true;
 }
 
@@ -1100,7 +1168,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
 #endif
     Reader rd = {.p = raw, .n = rawLen, .pos = 0, .ok = true};
     rd.strg = &r->dataWin->strg;
-    rd.stringRefs = version == SNAP_VERSION;
+    rd.stringRefs = version >= SNAP_STRING_REF_VERSION;
     if (rd.stringRefs && rd.strg->count > SNAP_STATIC_STRING_LIMIT) {
         if (reason) *reason = "Runner snapshot string dictionary unavailable";
         free(raw); return NULL;
@@ -1138,7 +1206,6 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         if (!SpatialGrid_dimensionsValid(state->width, state->height)) goto bad;
         state->persistent = persistent != 0;
         state->payloadLoaded = loaded != 0;
-        if (s->roomInitialized[i] && state->persistent) goto bad;
         if (!state->payloadLoaded) continue;
         Room *room = &r->dataWin->room.rooms[i];
         if (!room->payloadLoaded && r->dataWin->lazyLoadRooms &&
@@ -1172,8 +1239,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
 #ifdef PLATFORM_BUSY_TICK
     prep[2] = nowNanos();
 #endif
-    if (!s->roomStates[s->plain.roomIndex].payloadLoaded ||
-        s->roomStates[s->plain.roomIndex].persistent) goto bad;
+    if (!s->roomStates[s->plain.roomIndex].payloadLoaded) goto bad;
     uint32_t arrayCount = get32(&rd);
     if (!rd.ok || !countOK(arrayCount)) goto bad;
     uint32_t arrayElements = 0;
@@ -1218,6 +1284,37 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         setInstancePlain(inst, &p);
         arrput(s->instances, inst);
         getMap(&rd, s, &inst->selfVars, SLOT_INSTANCE, i);
+    }
+    uint32_t savedRooms = version >= SNAP_VERSION ? get32(&rd) : 0;
+    if (!rd.ok || savedRooms > roomCount || (savedRooms && !r->savedRoomStates)) goto bad;
+    int64_t lastSaved = -1;
+    for (uint32_t n = 0; n < savedRooms && rd.ok; n++) {
+        uint32_t index = get32(&rd);
+        if (!rd.ok || index >= roomCount || (int64_t)index <= lastSaved) goto bad;
+        lastSaved = index;
+        SnapshotRoom *state = &s->roomStates[index];
+        state->hasSaved = true;
+        get(&rd, &state->saved, sizeof(state->saved));
+        uint32_t layers = get32(&rd);
+        if (!rd.ok || !countOK(layers)) goto bad;
+        for (uint32_t i = 0; i < layers && rd.ok; i++) {
+            TileLayerMapEntry item; get(&rd, &item, sizeof(item));
+            if (!rd.ok || hmgeti(state->savedTileLayers, item.key) >= 0) goto bad;
+            hmput(state->savedTileLayers, item.key, item.value);
+        }
+        uint32_t count = get32(&rd);
+        if (!rd.ok || !countOK(count) ||
+            count > SNAP_MAX_ITEMS - (uint32_t)arrlen(s->savedInstances)) goto bad;
+        for (uint32_t i = 0; i < count && rd.ok; i++) {
+            InstancePlain p; get(&rd, &p, sizeof(p));
+            if (!rd.ok || p.object < 0 || (uint32_t)p.object >= r->dataWin->objt.count ||
+                p.room < -1 || (p.room >= 0 && (uint32_t)p.room >= r->dataWin->room.count)) goto bad;
+            Instance *inst = Instance_create(p.id, p.object, 0, 0);
+            setInstancePlain(inst, &p);
+            arrput(state->savedInstances, inst);
+            arrput(s->savedInstances, inst);
+            getMap(&rd, s, &inst->selfVars, SLOT_SAVED, (uint32_t)arrlen(s->savedInstances) - 1);
+        }
     }
     s->global = Instance_create(0, STRUCT_OBJECT_INDEX, 0, 0);
     getMap(&rd, s, &s->global->selfVars, SLOT_GLOBAL, 0);
@@ -1487,8 +1584,21 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     r->currentIniDirty = s->currentIniDirty;
     r->cachedIni = s->cachedIni;
     r->cachedIniPath = s->cachedIniPath;
-    for (uint32_t i = 0; i < r->dataWin->room.count; i++)
-        if (r->savedRoomStates) r->savedRoomStates[i].initialized = s->roomInitialized[i];
+    for (uint32_t i = 0; r->savedRoomStates && i < s->roomCount; i++) {
+        SnapshotRoom *state = &s->roomStates[i];
+        SavedRoomState *st = &r->savedRoomStates[i];
+        if (state->hasSaved) {
+            memcpy(st->backgrounds, state->saved.backgrounds, sizeof(st->backgrounds));
+            memcpy(st->views, state->saved.views, sizeof(st->views));
+            memcpy(st->defaultCameras, state->saved.defaultCameras, sizeof(st->defaultCameras));
+            st->backgroundColor = state->saved.backgroundColor;
+            st->drawBackgroundColor = state->saved.drawBackgroundColor;
+            st->viewsEnabled = state->saved.viewsEnabled;
+            st->tileLayerMap = state->savedTileLayers; state->savedTileLayers = NULL;
+            st->instances = state->savedInstances; state->savedInstances = NULL;
+        }
+        st->initialized = s->roomInitialized[i];
+    }
     applyPlain(r, &s->plain);
     /* Capture refuses paused runners, so every supported snapshot resumes.
      * The caller restores audio after this core commit. */
