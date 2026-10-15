@@ -22,8 +22,9 @@ GAMES=(
     "deltarune|Deltarune.json|games/deltarune|deltarune.win|dr_textures.bin|dr_music.bin"
 )
 if [ "${SAVESTATES:-0}" = 1 ]; then
-    GAMES=("undertale|Undertale.json|games/undertale|data.win|textures.bin|music.bin")
-    [ -f "$ROOT/runtime/pocket/UNDERTALE_SAVESTATES" ] || {
+    # Staging writes SAVESTATES_RUNTIME; SDKs staged before 2026-10-15 have
+    # the old UNDERTALE_SAVESTATES name.
+    [ -f "$ROOT/runtime/pocket/SAVESTATES_RUNTIME" ] || [ -f "$ROOT/runtime/pocket/UNDERTALE_SAVESTATES" ] || {
         echo "mkcard: use an SDK staged with the save-state-enabled os25 runtime"; exit 1;
     }
 fi
@@ -47,12 +48,8 @@ root = pathlib.Path(sys.argv[1])
 for path in root.glob('Cores/*/core.json'):
     data = json.loads(path.read_text())
     data['core']['framework']['sleep_supported'] = True
-    data['core']['metadata']['description'] = 'Undertale with save states and sleep (experimental)'
+    data['core']['metadata']['description'] = 'Butterscotch with save states and sleep (experimental)'
     path.write_text(json.dumps(data, indent=4) + '\n')
-for path in root.glob('Assets/*/*/Deltarune.json'):
-    path.unlink()
-for path in root.glob('Assets/*/common/deltarune_os.ini'):
-    path.unlink()
 PY
 fi
 

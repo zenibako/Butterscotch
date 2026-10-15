@@ -128,15 +128,14 @@ BS_DEFS += -DOF_TRACE_FRAMES
 endif
 
 ifeq ($(SAVESTATES),1)
-ifneq ($(GAME),undertale)
-$(error Native save-state builds support Undertale only)
-endif
 ifneq ($(TARGET),pocket)
 $(error Native save-state builds support Pocket only)
 endif
 BS_DEFS += -DOF_NATIVE_SAVESTATES
 SDK_CONTAINER = $(CURDIR)/tools/native-sdk-container.sh
 export SDK_ROOT
+# The wrapper fingerprints this game's data on the host (see STATE_GAME_ID).
+export OF_STATE_DATA := $(abspath $(G)data.win)
 endif
 
 # Bind snapshots to the user's complete game file as well as loaded bytecode.
@@ -264,9 +263,13 @@ all: $(OBJ_DIR)/app.elf $(GAME_PACKS) release
 # Assemble the per-target deliverable.  Each platform owns its layout
 # (pocket = APF tree, mister = disk image); the rule names no target —
 # adding a target = add platforms/<target>/image.sh.
-$(ROOT)/runtime:
+# Re-pointed on every build: a link left by an earlier SDK_ROOT would put that
+# SDK's OS and bitstream on the card next to a program built against this one.
+$(ROOT)/runtime: FORCE
 	@mkdir -p $(ROOT)
-	ln -sfn $(SDK_ROOT)/runtime $@
+	@[ "$$(readlink $@)" = "$(SDK_ROOT)/runtime" ] || ln -sfn $(SDK_ROOT)/runtime $@
+
+FORCE:
 
 ifeq ($(TARGET),pocket)
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
@@ -359,9 +362,14 @@ profiler-fixture: $(PC_OBJS)
 builtin-compat-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/builtin-compat.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_builtin_compat_fixture
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
-# Keep this output separate from the ordinary two-game core.
+# Keep this output separate from the ordinary two-game core. Both games share
+# the one core, and the Pocket's sleep switch is per core, so every game built
+# here answers save and load requests (refusing what it cannot restore).
 native-saves:
 	$(MAKE) GAME=undertale SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all
+	@if [ -f games/deltarune/data.win ]; then \
+	    $(MAKE) GAME=deltarune SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all; \
+	else echo "native-saves: no games/deltarune/data.win, the card has Undertale only"; fi
 
 save-states: native-saves
 
@@ -409,7 +417,7 @@ clean: sdk-clean
 	rm -rf $(PC_OBJ_DIR) $(ROOT)/.obj/$(APP)-pc-asan $(ROOT)/.obj/$(APP)-pc-ops $(APP)_pc $(APP)_pc_asan $(APP)_pc_ops
 	rm -rf $(ROOT)/build/pocket/$(CARD) $(ROOT)/build/mister/$(APP)
 
-.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves save-states native-size snapshot-tests
+.PHONY: all elf release debug copy compare compare-copy package test asan ops lint clean native-saves save-states native-size snapshot-tests FORCE
 
 # Asset-free translated tile picture reuse, composition and allocation regression.
 .PHONY: tile-motion-fixture

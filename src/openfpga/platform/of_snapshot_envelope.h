@@ -6,4 +6,6 @@
 typedef struct { const uint8_t *data; size_t size; } OfSnapshotSection;
 bool ofSnapshotPack(uint64_t gameId, const OfSnapshotSection sections[4], uint8_t **data, size_t *size);
 bool ofSnapshotUnpack(uint64_t gameId, const uint8_t *data, size_t size, OfSnapshotSection sections[4]);
+/* Whether data is an intact state whose game id differs from gameId. */
+bool ofSnapshotFromOtherGame(uint64_t gameId, const uint8_t *data, size_t size);
 #endif

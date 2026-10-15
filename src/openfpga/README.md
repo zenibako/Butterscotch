@@ -99,7 +99,7 @@ make copy       # copy the core to a mounted Pocket SD card
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
 
-### Save states and sleep (experimental, Undertale only)
+### Save states and sleep (experimental; Undertale, with Deltarune to follow)
 
 The save-state build requires a matching os25 runtime with
 `INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build the
@@ -122,7 +122,8 @@ make SDK_ROOT=/path/to/new-SDK save-states
 
 After an OS source change, rebuild its firmware and patch the matching bootloader into
 the bitstream before staging. The output is
-`out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
+`out/native-saves/build/pocket/butterscotch/`, with an entry for each game
+whose data is in place (Deltarune's only when `games/deltarune/data.win` is).
 The base SDK is read-only. The standard build still uses its existing SDK.
 The fork's runtime prioritizes a pending save over an unfinished asynchronous
 read and provides a conservative heap-capacity query. Install the complete
@@ -143,6 +144,15 @@ or load. A refusal stays visible until a
 fresh game-button press, including after the Pocket menu closes. A snapshot that exceeds the
 Pocket's blob limit is also refused. Ordinary game progress saves remain
 separate; loading a save state rewinds its captured progress files.
+
+Both games run under the one core, and the Pocket's sleep and Memories
+switch (`sleep_supported` in `core.json`) belongs to the core, so each game's
+program answers every save and load request. Deltarune refuses every save
+for now, with "Save states aren't ready for Deltarune yet". A state is bound
+to the game and the exact `data.win` it was taken with. The Pocket lists
+every game's Memories together, so loading one into the other game, or after
+the game's data has changed, is refused with "This Memory is from another
+game or version".
 
 The Pocket can still power off after a refused save. In the hardware test, wake
 then replayed an older sleep payload. A refusal therefore means the current

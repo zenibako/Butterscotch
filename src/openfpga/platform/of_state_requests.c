@@ -43,7 +43,7 @@ static void finishLoadedState(void) { of_savestate_finish(1); }
 #endif
 
 void ofSavestateStartup(void) {
-#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC) && !defined(GAME_DELTARUNE)
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
     /* Mark support before the slow asset load, so a wake request survives the
      * OS pickup deadline. It remains pending until the completed first frame. */
     g_service = of_savestate_enable(OF_SNAPSHOT_LIMIT) == 0;
@@ -127,7 +127,7 @@ static bool policyBypassed(void) {
 
 /* Only the game gate and scene policy; serializer refusals are separate. */
 static const char *policyReason(Runner *r) {
-#if !defined(OF_PC) && !defined(GAME_DELTARUNE)
+#ifndef OF_PC
 #ifdef OF_NATIVE_SAVESTATES
     if (!g_service) return "Save-state service is unavailable";
 #else
@@ -231,8 +231,13 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
     uint64_t phases[6] = {nowNanos(), 0, 0, 0, 0, 0};
     OfSnapshotSection parts[4];
     if (!ofSnapshotUnpack(g_gameId, data, size, parts)) {
-        *reason = data && size >= 4 && memcmp(data, "UTS1", 4) != 0
-            ? "Not an Undertale save state" : "State is damaged or incompatible";
+        /* The Pocket lists every game's Memories under the one core, and a
+         * wake after a refused sleep save brings back the last state taken,
+         * whichever game it was. */
+        *reason = ofSnapshotFromOtherGame(g_gameId, data, size)
+            ? "This Memory is from another game or version"
+            : data && size >= 4 && memcmp(data, "UTS1", 4) != 0
+            ? "Not a Butterscotch save state" : "State is damaged or incompatible";
         return false;
     }
     OfSnapshotReader platform = {parts[3].data, parts[3].size, 0, true};
