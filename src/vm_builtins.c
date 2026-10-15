@@ -330,6 +330,8 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "depth", BUILTIN_VAR_DEPTH },
     { "direction", BUILTIN_VAR_DIRECTION },
     { "event_data", BUILTIN_VAR_EVENT_DATA },
+    { "event_number", BUILTIN_VAR_EVENT_NUMBER },
+    { "event_type", BUILTIN_VAR_EVENT_TYPE },
     { "false", BUILTIN_VAR_FALSE },
     { "fps", BUILTIN_VAR_FPS },
     { "fps_real", BUILTIN_VAR_FPS_REAL },
@@ -921,6 +923,10 @@ RValue VMBuiltins_getVariable(VMContext* ctx, Instance* inst, int16_t builtinVar
             return RValue_makeBool(inst->timelineLoop);
 
         // Room properties
+        case BUILTIN_VAR_EVENT_TYPE:
+            return RValue_makeReal((GMLReal) ctx->currentEventType);
+        case BUILTIN_VAR_EVENT_NUMBER:
+            return RValue_makeReal((GMLReal) ctx->currentEventSubtype);
         case BUILTIN_VAR_ROOM:
             return RValue_makeReal((GMLReal) runner->currentRoomIndex);
         case BUILTIN_VAR_ROOM_FIRST:
@@ -3551,8 +3557,9 @@ static RValue builtin_randomize(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE
      * is used as the source. we divide by 1000 to improve entropy on such systems.
      * 2654435761u = Knuth's multiplier.
      */
-    Random_setSeed(&ctx->runner->random, (uint32_t)(nowNanos() / 1000) * 2654435761u);
-    return RValue_makeUndefined();
+    uint32_t seed = (uint32_t)(nowNanos() / 1000) * 2654435761u;
+    Random_setSeed(&ctx->runner->random, seed);
+    return RValue_makeReal((GMLReal) seed);
 }
 
 // ===[ ROOM FUNCTIONS ]===
@@ -7092,7 +7099,8 @@ static bool resolveFunctionRef(VMContext* ctx, RValue funcRef, int32_t* outCodeI
         return *outCodeIndex >= 0 || *outBuiltin != nullptr;
     }
 #endif
-    if (funcRef.type != RVALUE_INT32 && funcRef.type != RVALUE_INT64 && funcRef.type != RVALUE_REAL) return false;
+    if (funcRef.type != RVALUE_INT32 && funcRef.type != RVALUE_INT64 && funcRef.type != RVALUE_REAL &&
+        !(funcRef.type == RVALUE_ASSETREF && funcRef.assetRefType == ASSET_TYPE_SCRIPT)) return false;
     int32_t rawArg = RValue_toInt32(funcRef);
     if (rawArg >= 0 && ctx->dataWin->func.functionCount > (uint32_t) rawArg) {
         const char* funcName = ctx->dataWin->func.functions[rawArg].name;
@@ -7656,6 +7664,7 @@ static void audioEmitterUpdateVoices(Runner* runner, AudioEmitter* emitter) {
     if (audio == nullptr) return;
     repeat(arrlen(emitter->voices), i) {
         audio->vtable->setSoundSpatial(audio, emitter->voices[i], (float)emitter->x, (float)emitter->y, (float)emitter->z,
+                                        (float)emitter->vx, (float)emitter->vy, (float)emitter->vz, 
                                         (float)emitter->falloffRef, (float)emitter->falloffMax, (float)emitter->falloffFactor);
     }
 }
@@ -7669,6 +7678,26 @@ static RValue builtin_audio_emitter_falloff(VMContext* ctx, RValue* args, int32_
     emitter->falloffRef = GMLReal_fmax(0, RValue_toReal(args[1]));
     emitter->falloffMax = GMLReal_fmax(audioPositiveMinimum(), RValue_toReal(args[2]));
     emitter->falloffFactor = GMLReal_fmax(0, RValue_toReal(args[3]));
+    audioEmitterUpdateVoices(ctx->runner, emitter);
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_audio_emitter_gain(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("audio_emitter_gain", 2, RValue_makeUndefined());
+    if (args[0].type == RVALUE_UNDEFINED) return RValue_makeUndefined();
+    AudioEmitter* emitter = audioEmitterGet(ctx->runner, RValue_toInt32(args[0]));
+    if (emitter == nullptr) return RValue_makeUndefined();
+    emitter->gain = RValue_toReal(args[1]);
+    audioEmitterUpdateVoices(ctx->runner, emitter);
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_audio_emitter_pitch(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("audio_emitter_pitch", 2, RValue_makeUndefined());
+    if (args[0].type == RVALUE_UNDEFINED) return RValue_makeUndefined();
+    AudioEmitter* emitter = audioEmitterGet(ctx->runner, RValue_toInt32(args[0]));
+    if (emitter == nullptr) return RValue_makeUndefined();
+    emitter->pitch = RValue_toReal(args[1]);
     audioEmitterUpdateVoices(ctx->runner, emitter);
     return RValue_makeUndefined();
 }
@@ -7697,6 +7726,18 @@ static RValue builtin_audio_listener_position(VMContext* ctx, RValue* args, int3
     return RValue_makeUndefined();
 }
 
+static RValue builtin_audio_emitter_velocity(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("audio_emitter_velocity", 4, RValue_makeUndefined());
+    if (args[0].type == RVALUE_UNDEFINED) return RValue_makeUndefined();
+    AudioEmitter* emitter = audioEmitterGet(ctx->runner, RValue_toInt32(args[0]));
+    if (emitter == nullptr) return RValue_makeUndefined();
+    emitter->vx = RValue_toReal(args[1]);
+    emitter->vy = RValue_toReal(args[2]);
+    emitter->vz = RValue_toReal(args[3]);
+    audioEmitterUpdateVoices(ctx->runner, emitter);
+    return RValue_makeUndefined();
+}
+
 static RValue builtin_audio_emitter_exists(VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("audio_emitter_exists", 1, RValue_makeBool(false));
     if (args[0].type == RVALUE_UNDEFINED) return RValue_makeBool(false);
@@ -7719,6 +7760,47 @@ static RValue builtin_audio_emitter_free(VMContext* ctx, RValue* args, int32_t a
     return RValue_makeUndefined();
 }
 
+static RValue builtin_audio_play_sound_at(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("audio_play_sound_at", 9, RValue_makeReal(-1));
+    AudioSystem* audio = ctx->runner->audioSystem;
+    if (audio == nullptr || args[0].type == RVALUE_UNDEFINED) return RValue_makeReal(-1);
+
+    int32_t soundIndex = RValue_toInt32(args[0]);
+    int32_t priority = args[8].type != RVALUE_UNDEFINED ? RValue_toInt32(args[8]) : 0;
+    bool loop = args[7].type != RVALUE_UNDEFINED && RValue_toBool(args[7]);
+    int32_t instanceId = audio->vtable->playSound(audio, soundIndex, priority, loop);
+    if (instanceId < 0) return RValue_makeReal(-1);
+
+    GMLReal x = args[1].type != RVALUE_UNDEFINED ? RValue_toReal(args[1]) : 0;
+    GMLReal y = args[2].type != RVALUE_UNDEFINED ? RValue_toReal(args[2]) : 0;
+    GMLReal z = args[3].type != RVALUE_UNDEFINED ? RValue_toReal(args[3]) : 0;
+    GMLReal ref = args[4].type != RVALUE_UNDEFINED ? RValue_toReal(args[4]) : 0;
+    GMLReal max = args[5].type != RVALUE_UNDEFINED ? RValue_toReal(args[5]) : 1;
+    GMLReal factor = args[6].type != RVALUE_UNDEFINED ? RValue_toReal(args[6]) : 1;
+
+    audio->vtable->setSoundSpatial(audio, instanceId, (float)x, (float)y, (float)z,
+                                    0.0f, 0.0f, 0.0f,
+                                  (float)GMLReal_fmax(0, ref), (float)GMLReal_fmax(audioPositiveMinimum(), max),
+                                  (float)GMLReal_fmax(0, factor));
+
+    if (argCount > 9 && args[9].type != RVALUE_UNDEFINED) {
+        GMLReal gain = GMLReal_fmax(0, RValue_toReal(args[9]));
+        audio->vtable->setSoundGain(audio, instanceId, (float)(audio->vtable->getSoundGain(audio, instanceId) * gain), 0);
+    }
+    if (argCount > 10 && args[10].type != RVALUE_UNDEFINED) {
+        GMLReal offset = GMLReal_fmax(0, RValue_toReal(args[10]));
+        audio->vtable->setTrackPosition(audio, instanceId, (float)offset);
+    }
+
+    GMLReal pitch = 1;
+    if (argCount > 11 && args[11].type != RVALUE_UNDEFINED)
+        pitch = GMLReal_fmax(audioPositiveMinimum(), RValue_toReal(args[11]));
+    pitch *= audio->vtable->getSoundPitch(audio, instanceId);
+    pitch = GMLReal_fmin(256, GMLReal_fmax((GMLReal)(1.0 / 256.0), pitch));
+    audio->vtable->setSoundPitch(audio, instanceId, (float)pitch);
+    return RValue_makeReal((GMLReal)instanceId);
+}
+
 static RValue builtin_audio_play_sound_on(VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("audio_play_sound_on", 4, RValue_makeReal(-1));
     if (args[0].type == RVALUE_UNDEFINED) return RValue_makeReal(-1);
@@ -7732,6 +7814,7 @@ static RValue builtin_audio_play_sound_on(VMContext* ctx, RValue* args, int32_t 
 
     arrput(emitter->voices, instanceId);
     audio->vtable->setSoundSpatial(audio, instanceId, (float)emitter->x, (float)emitter->y, (float)emitter->z,
+                                    (float)emitter->vx, (float)emitter->vy, (float)emitter->z,
                                     (float)emitter->falloffRef, (float)emitter->falloffMax, (float)emitter->falloffFactor);
     if (argCount > 4 && args[4].type != RVALUE_UNDEFINED) {
         float gain = (float)GMLReal_fmax(0, RValue_toReal(args[4]));
@@ -14479,6 +14562,28 @@ static bool dateGetParts(VMContext* ctx, RValue datetime, struct tm* parts) {
     return true;
 }
 
+static RValue builtin_date_create_datetime(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("date_create_datetime", 6, RValue_makeReal((GMLReal)0));
+    int32_t year = RValue_toInt32(args[0]);
+    int32_t month = RValue_toInt32(args[1]);
+    int32_t day = RValue_toInt32(args[2]);
+    int32_t hour = RValue_toInt32(args[3]);
+    int32_t minute = RValue_toInt32(args[4]);
+    int32_t second = RValue_toInt32(args[5]);
+
+    struct tm parts = {0};
+    parts.tm_year = year - 1900;
+    parts.tm_mon = month - 1;
+    parts.tm_mday = day;
+    parts.tm_hour = hour;
+    parts.tm_min = minute;
+    parts.tm_sec = second;
+        
+    time_t timestamp = mktime(&parts);
+    if (timestamp == -1) return RValue_makeReal((GMLReal)0);
+    return RValue_makeReal((double) timestamp / (double) 86400 + (double) 25569);
+}
+
 static RValue builtin_date_current_datetime(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
     return RValue_makeReal((double) time(NULL) / (double) 86400 + (double) 25569);
 }
@@ -14547,7 +14652,22 @@ static const char* dateOrdinalSuffix(int day) {
     }
 }
 
+static RValue builtin_date_date_string(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("date_date_string", 1, RValue_makeUndefined());
+    struct tm parts;
+    
+    if (!dateGetParts(ctx, args[0], &parts)) return RValue_makeString("");
+        
+    char fullDate[11];
+    int written = snprintf(fullDate, sizeof(fullDate), "%02d/%02d/%04d", parts.tm_mon + 1, parts.tm_mday, parts.tm_year + 1900);
+    
+    if (written < 0 || (size_t)written >= sizeof(fullDate)) return RValue_makeString("");
+    
+    return RValue_makeOwnedString(fullDate);
+}
+
 static RValue builtin_date_datetime_string(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("date_datetime_string", 1, RValue_makeUndefined());
     struct tm parts;
     
     if (!dateGetParts(ctx, args[0], &parts)) return RValue_makeString("");
@@ -15694,24 +15814,28 @@ static RValue builtin_layer_destroy(VMContext* ctx, RValue* args, MAYBE_UNUSED i
 
 static RValue builtin_layer_script_begin(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     int32_t layerId = resolveLayerIdArg(ctx->runner, args[0]);
-    int32_t scriptIndex = RValue_toInt32(args[1]);
+    int32_t codeIndex;
+    BuiltinFunc builtin;
+    resolveFunctionRef(ctx, args[1], &codeIndex, &builtin);
 
     RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(ctx->runner, layerId);
     if (runtimeLayer == nullptr) return RValue_makeUndefined();
 
-    runtimeLayer->beginScript = scriptIndex;
+    runtimeLayer->beginScript = codeIndex;
 
     return RValue_makeUndefined();
 }
 
 static RValue builtin_layer_script_end(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     int32_t layerId = resolveLayerIdArg(ctx->runner, args[0]);
-    int32_t scriptIndex = RValue_toInt32(args[1]);
+    int32_t codeIndex;
+    BuiltinFunc builtin;
+    resolveFunctionRef(ctx, args[1], &codeIndex, &builtin);
 
     RuntimeLayer* runtimeLayer = Runner_findRuntimeLayerById(ctx->runner, layerId);
     if (runtimeLayer == nullptr) return RValue_makeUndefined();
 
-    runtimeLayer->endScript = scriptIndex;
+    runtimeLayer->endScript = codeIndex;
 
     return RValue_makeUndefined();
 }
@@ -23042,7 +23166,6 @@ static RValue builtin_physics_raycast(VMContext* ctx, RValue* args, int32_t coun
 void VMBuiltins_registerAll(VMContext* ctx) {
     requireMessage(!ctx->registeredBuiltinFunctions, "Attempting to register all VMBuiltins, but it was already registered!");
     ctx->registeredBuiltinFunctions = true;
-
     // Physics
 #define PHYSICS_FUNCTION(name, scope, minimum, returnsReal) VM_registerBuiltin(ctx, #name, builtin_##name);
     PHYSICS_FUNCTIONS(PHYSICS_FUNCTION)
@@ -23443,9 +23566,13 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "audio_channel_num", builtin_audio_channel_num);
     VM_registerBuiltin(ctx, "audio_emitter_create", builtin_audio_emitter_create);
     VM_registerBuiltin(ctx, "audio_emitter_falloff", builtin_audio_emitter_falloff);
+    VM_registerBuiltin(ctx, "audio_emitter_gain", builtin_audio_emitter_gain);
+    VM_registerBuiltin(ctx, "audio_emitter_pitch", builtin_audio_emitter_pitch);
     VM_registerBuiltin(ctx, "audio_emitter_position", builtin_audio_emitter_position);
+    VM_registerBuiltin(ctx, "audio_emitter_velocity", builtin_audio_emitter_velocity);
     VM_registerBuiltin(ctx, "audio_listener_position", builtin_audio_listener_position);
     VM_registerBuiltin(ctx, "audio_play_sound_on", builtin_audio_play_sound_on);
+    VM_registerBuiltin(ctx, "audio_play_sound_at", builtin_audio_play_sound_at);
     VM_registerBuiltin(ctx, "audio_emitter_exists", builtin_audio_emitter_exists);
     VM_registerBuiltin(ctx, "audio_emitter_free", builtin_audio_emitter_free);
     VM_registerBuiltin(ctx, "audio_play_sound", builtin_audio_play_sound);
@@ -24246,6 +24373,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 
     // Misc
     VM_registerBuiltin(ctx, "get_timer", builtin_get_timer);
+    VM_registerBuiltin(ctx, "date_create_datetime", builtin_date_create_datetime);
     VM_registerBuiltin(ctx, "date_current_datetime", builtin_date_current_datetime);
     VM_registerBuiltin(ctx, "date_get_year", builtin_date_get_year);
     VM_registerBuiltin(ctx, "date_get_month", builtin_date_get_month);
@@ -24255,6 +24383,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "date_get_second", builtin_date_get_second);
     VM_registerBuiltin(ctx, "date_set_timezone", builtin_date_set_timezone);
     VM_registerBuiltin(ctx, "date_get_timezone", builtin_date_get_timezone);
+    VM_registerBuiltin(ctx, "date_date_string", builtin_date_date_string);    
     VM_registerBuiltin(ctx, "date_datetime_string", builtin_date_datetime_string);    
     if (!isGMS2) {
         VM_registerBuiltin(ctx, "action_if_variable", builtin_action_if_variable);
