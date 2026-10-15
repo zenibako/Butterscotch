@@ -102,14 +102,14 @@ are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md
 
 The save-state build requires a matching os25 runtime with
 `INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build the
-os25 variant from our openfpgaOS fork,
-[zenibako/openfpgaCore](https://github.com/zenibako/openfpgaCore), at commit
-`e5d44ba` (branch `claude/project-thread-yoti6c`), then stage it into a
-separate SDK. The staging script refuses an OS checkout that does not contain
-`cf9e4cf`, the first commit with every save-state fix.
+os25 variant from `main` of our openfpgaOS fork,
+[zenibako/openfpgaCore](https://github.com/zenibako/openfpgaCore) (`6a9594f`,
+where the save-state work merged, or later), then stage it into a separate
+SDK. The staging script refuses an OS checkout that does not contain
+`6a9594f`.
 
-At `e5d44ba` os25 runs the CPU and RAM at 100 MHz with the save-state
-controller. That build misses setup timing at the slow 85C corner (WNS
+There os25 runs the CPU and RAM at 100 MHz with the save-state controller
+(seed 1). That build misses setup timing at the slow 85C corner (WNS
 -0.777 ns, about 92.8 MHz) but has been verified on a Pocket. Staging refuses
 a build with negative slack unless you pass `--allow-timing-miss`, and prints
 the worst slack either way:
@@ -119,9 +119,7 @@ tools/stage-savestate-sdk.sh --allow-timing-miss /path/to/built-openfpgaCore /pa
 make SDK_ROOT=/path/to/new-SDK save-states
 ```
 
-`cf9e4cf` runs os25 at 90 MHz (`INCLUDE_CLK90`) and meets timing, so it
-stages without the flag. After an OS
-source change, rebuild its firmware and patch the matching bootloader into
+After an OS source change, rebuild its firmware and patch the matching bootloader into
 the bitstream before staging. The output is
 `out/native-saves/build/pocket/butterscotch/`, with the Undertale entry only.
 The base SDK is read-only. The standard build still uses its existing SDK.

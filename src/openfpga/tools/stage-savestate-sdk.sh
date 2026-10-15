@@ -2,7 +2,7 @@
 # Copy a built, matching os25 save-state runtime into an isolated SDK.
 # The runtime comes from our openfpgaOS fork, zenibako/openfpgaCore.
 set -euo pipefail
-os_required=cf9e4cfb4677e8eacde067aa9a63d196c602f362
+os_required=6a9594f4c6add2cb33034b08cf4d18df684f11e2
 # --allow-timing-miss packages a build whose setup or hold slack is negative,
 # such as the fork's os25 at 100 MHz. Without it, such a build is refused.
 allow_miss=0
