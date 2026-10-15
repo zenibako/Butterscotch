@@ -248,6 +248,14 @@ static void destroyFixture(Runner *r) {
     SpatialGrid_free(r->spatialGrid);
     Ini_free(r->currentIni); free(r->currentIniPath);
     Ini_free(r->cachedIni); free(r->cachedIniPath);
+    /* Registry-owned structs can form cycles through arrays. Release all
+     * contents before their shells, as in the runner's teardown. */
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        r->structInstances[i]->structRegistryIndex = -1;
+        Instance_freeContents(r->structInstances[i]);
+    }
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) free(r->structInstances[i]);
+    arrfree(r->structInstances);
     arrfree(r->eventDispatchInstances);
     arrfree(r->cachedDrawables);
 }
@@ -1007,7 +1015,10 @@ static void testGms2ValuesRoundTrip(void) {
     assert(!vm.staticInitialized[0] && vm.staticInitialized[1]);
 
     /* A method that points at no code is not saved. */
-    Instance_setSelfVar(vm.globalScopeInstance, 4, RValue_makeMethod(GMLMethod_create(7, -1)));
+    free(bytes); bytes = NULL;
+    RValue invalidMethod = RValue_makeMethod(GMLMethod_create(7, -1));
+    Instance_setSelfVar(vm.globalScopeInstance, 4, invalidMethod);
+    RValue_free(&invalidMethod);
     assert(!Runner_snapshotCapture(&r, 77, &bytes, &size, &reason));
     free(bytes); free(vm.staticInitialized);
     destroyFixture(&r);
@@ -1174,6 +1185,41 @@ static void testTilemapCellsColdRestore(void) {
     maps[1].tilesY = 2;
     free(rooms[1].tiles); rooms[1].tiles = NULL;
     free(bytes); destroyFixture(&r);
+}
+
+/* Legacy formats describe no live vertex resources. Never displace a plain
+ * buffer pool with their dormant stb arrays, or free it as an stb array. */
+static void testLegacyLoadRefusesLiveVertexResources(void) {
+    for (uint32_t version = 3; version <= 6; version++) {
+        Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+        Room room; GameObject object;
+        fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+        uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+        assert(Runner_snapshotCapture(&r, 70, &bytes, &size, &reason));
+        uint32_t rawLen;
+        uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+        toRevision6(raw, &rawLen, 1);
+        if (version < 6) dropSavedRooms(raw, &rawLen, 1);
+        encodeRaw(&bytes, &size, raw, rawLen, version); free(raw);
+
+        r.vertexBufferCount = 4;
+        r.vertexBuffers = calloc(4, sizeof(*r.vertexBuffers));
+        assert(r.vertexBuffers);
+        Buffer_Vertex **buffers = r.vertexBuffers;
+        assert(Runner_snapshotPrepare(&r, 70, bytes, size, &reason) == NULL);
+        assert(reason && !strcmp(reason, "The game's vertex resources differ from the state's"));
+        assert(r.vertexBuffers == buffers && r.vertexBufferCount == 4 && r.frameCount == 42);
+        free(buffers); r.vertexBuffers = NULL; r.vertexBufferCount = 0;
+
+        VmVertexFormat format = {0}; format.id = 7;
+        arrput(r.vertexFormats, &format);
+        assert(Runner_snapshotPrepare(&r, 70, bytes, size, &reason) == NULL);
+        assert(r.vertexFormats[0] == &format && format.id == 7);
+        r.vertexFormats[0] = NULL; /* Dormant slots remain compatible. */
+        RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 70, bytes, size, &reason);
+        assert(snap); Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+        free(bytes); destroyFixture(&r);
+    }
 }
 
 static void testRevisions6And7StillLoad(void) {
@@ -1520,6 +1566,7 @@ int main(void) {
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
     testRevision5WithoutSavedRooms();
+    testLegacyLoadRefusesLiveVertexResources();
     testRevisions6And7StillLoad();
     testTilemapCellsColdRestore();
     testRuntimeLayersRoundTrip();
