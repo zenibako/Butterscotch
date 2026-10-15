@@ -58,6 +58,29 @@ verification, and unmount steps. Do not substitute the ordinary tree.
 
 ## Package evidence
 
+Package the already-built native card tree explicitly. A bare `make package`
+does not select it: its `all` prerequisite can rebuild ordinary outputs, and
+the SDK dispatcher may resolve paths relative to the SDK instead of the port.
+Do not rely on a `ROOT` override alone. From the checkout, with `CHECKOUT` set
+to its absolute path:
+
+```bash
+(
+set -eu
+native_tree="$CHECKOUT/src/openfpga/out/native-saves/build/pocket/butterscotch"
+package_dir=$(mktemp -d "$CHECKOUT/src/openfpga/out/native-saves/package.XXXXXX")
+archive="$package_dir/butterscotch-native-saves.zip"
+(cd "$native_tree" && zip -r "$archive" Cores Assets Platforms \
+  -x '*.DS_Store' '*/._*')
+unzip -t "$archive"
+shasum -a 256 "$archive"
+)
+```
+
+The fresh ZIP path prevents entries from an older archive surviving an update.
+This reads the completed tree without rebuilding it; copying to a card still
+follows the parent skill's no-rebuild-during-copy rule.
+
 Verify packaged game ELFs against built ELFs, every instance's slot paths
 against actual files, runtime checksums, and `sleep_supported`. Record the
 application commit, game/chapter data hash, runtime source/release, and final
