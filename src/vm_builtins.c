@@ -7682,7 +7682,7 @@ static uint64_t audioEmitterFadeElapsed(Runner* runner, AudioEmitterVoice* voice
 static float audioEmitterCurrentGain(Runner* runner, AudioEmitterVoice* voice) {
     uint64_t elapsed = audioEmitterFadeElapsed(runner, voice);
     if (!voice->gainFadeNanos || elapsed >= voice->gainFadeNanos) return voice->gain;
-    float t = (float)elapsed / (float)voice->gainFadeNanos;
+    float t = (float)(int64_t)elapsed / (float)(int64_t)voice->gainFadeNanos;
     return voice->gainFrom + (voice->gain - voice->gainFrom) * t;
 }
 
