@@ -292,6 +292,16 @@ layer reads it from there (`ofAudioReadPackFile`).
 entries to the card (`tools/mkcompare.sh` names them; the route they play is
 in `platform/of_bench.c`).
 
+**Deltarune Sleep Test** is an interactive benchmark for Chapter 1, started
+with `--bench-sleep` (its own entry on save-state cards). It keeps progress in memory,
+leaving the game's save archive alone. Checkpoint A waits in the yard with
+saving allowed: sleep, wake, then press Start. The yard reloads into Toriel's
+real cutscene and waits at its dialogue. At checkpoint B, Select → Save states
+reports "Can't save during cutscenes". Close Select, sleep again, and record
+where wake lands; it may restore the older A state. Don't press confirm in
+the cutscene until this test is complete. The benchmark keeps running so
+Memories and sleep requests can be serviced at both checkpoints.
+
 What the software renderer does for Deltarune's rooms and screens (tile
 layers, stacks of mirrored translucent layers, the battle background) is
 described where it is done, in the comments of `../sw/sw_renderer.c` and
