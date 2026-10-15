@@ -98,6 +98,10 @@ second nothing.
 
 ## Two games, one core
 
+For Memories or sleep/wake cards, read
+[Native save-state builds](references/native-save-state-builds.md). The ordinary
+build commands above do not select the save-state runtime or output tree.
+
 The core is `zenibako.Butterscotch`, platform `butterscotch`, with one
 entry per game on the Pocket. `GAME=deltarune` on any make target builds
 Deltarune's program instead of Undertale's (WAD 17, data in
@@ -269,7 +273,11 @@ git add -A src .claude && git ... commit      # a branch off main
   - a platform hook the Web build does not provide.
   Reproduce with the desktop CMake build and `-DWERROR=ON` before pushing.
 - CodeRabbit reviews PRs and is rate-limited. Check each finding against
-  the code, fix the real ones, and reply on the thread for the rest.
+  the code and fix confirmed problems. Post thread replies only when authorized.
+- A PR creation tool may display a form without creating a PR. Confirm a real
+  PR URL and head SHA before reporting success. If the user reports that no form
+  appeared, use an available authorized CLI route with the prepared description
+  in `--body-file`, check for an existing PR first, then verify the result.
 
 ## Syncing with upstream
 

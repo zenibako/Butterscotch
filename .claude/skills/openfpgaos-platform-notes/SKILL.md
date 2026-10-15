@@ -98,6 +98,23 @@ with the SDK's v0.7 runtime unless marked otherwise. Items marked
 
 ## Saves
 
+### Native Memories and sleep (observed 2026-10-15)
+
+- On the save-state runtime, `core.json`'s `sleep_supported` is one per-core
+  switch for both Memories and sleep, shared by Undertale and Deltarune. It
+  needs the matching runtime service; there is no extra Deltarune sleep flag.
+- A refused sleep capture does **not** keep Pocket awake. Hardware testing
+  showed power-off followed by wake loading the previous successful sleep
+  payload. Match capture and receive IDs before diagnosing a cold restart.
+- Games launched under the same core can share a Memories list. Bind each
+  payload to the game/chapter's exact data hash and show a game-font notice
+  when a different game's or version's state is refused.
+- These observations used the paired fork runtime `92202ab` (os25). Its
+  SDK `of_savestate.h` documents the contract; this does not establish native
+  save-state support in the older v0.7 runtime described elsewhere here.
+  Use the build skill's native-save-state reference and the verify skill's
+  save-state reference for staging, tests, and interpreting device logs.
+
 - Save slots 10–19 are 256 KB files named in the instance JSON
   (`undertale_0.sav` ...), read and written with `fopen`/`fwrite`.
 - The Pocket writes save slots back to the SD card when the core is left
