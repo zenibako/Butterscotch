@@ -77,12 +77,17 @@ int main(void) {
     mixVoice(&ut, v, prefix, 9);
     mixVoice(&ut, &ut.voices[1], prefix, 9);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    ofVtable.pauseAll(&ut.base);
     assert(ofAudioSnapshot(&ut.base, &bytes, &size, &reason));
+    ofVtable.resumeAll(&ut.base);
+    assert(!ofVtable.isAllPaused(&ut.base));
     mixVoice(&ut, v, expected, 30);
     mixVoice(&ut, &ut.voices[1], expected, 30);
     void *p = ofAudioPrepareSnapshot(&ut.base, bytes, size, &reason);
     assert(p);
     ofAudioApplySnapshot(&ut.base, p); ofAudioFreeSnapshot(p);
+    assert(ofVtable.isAllPaused(&ut.base));
+    ofVtable.resumeAll(&ut.base);
     mixVoice(&ut, &ut.voices[0], actual, 30);
     mixVoice(&ut, &ut.voices[1], actual, 30);
     assert(memcmp(expected, actual, sizeof(actual)) == 0);

@@ -2564,6 +2564,25 @@ static void validateRendererVtable(Renderer* renderer) {
     #undef requireNotNullFunction
 }
 
+void Runner_updateAudio(Runner* runner, float deltaTime) {
+    if (deltaTime > 0 && arrlen(runner->audioEmitters)) {
+        uint64_t elapsed = (uint64_t)(deltaTime * 1000000000.0f);
+        runner->audioEmitterClockNanos += elapsed;
+        if (runner->audioSystem->vtable->pauseStopsFades) {
+            bool allPaused = runner->audioSystem->vtable->isAllPaused != nullptr &&
+                runner->audioSystem->vtable->isAllPaused(runner->audioSystem);
+            repeat(arrlen(runner->audioEmitters), i) {
+                AudioEmitter* emitter = &runner->audioEmitters[i];
+                repeat(arrlen(emitter->voices), j) {
+                    AudioEmitterVoice* voice = &emitter->voices[j];
+                    if (allPaused || voice->paused) voice->gainFadeStart += elapsed;
+                }
+            }
+        }
+    }
+    runner->audioSystem->vtable->update(runner->audioSystem, deltaTime);
+}
+
 void Runner_setPaused(Runner* runner, bool paused) {
     if (runner == nullptr) {
         return;
