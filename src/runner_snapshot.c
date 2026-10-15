@@ -1954,6 +1954,16 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             }
         }
     }
+    /* Revisions 3-6 have no vertex-resource contract. Applying their dormant
+     * arrays must never displace (or arrfree) a live plain buffer pool. */
+    if (!gms2) {
+        bool liveVertex = r->vertexBufferCount > 0;
+        for (ptrdiff_t i = 0; !liveVertex && i < arrlen(r->vertexFormats); i++)
+            liveVertex = r->vertexFormats[i] != NULL;
+        if (liveVertex) {
+            failure = "The game's vertex resources differ from the state's"; goto bad;
+        }
+    }
     uint32_t dormant[SNAP_DORMANT_POOL_COUNT] = {0};
     if (rd.ok && rd.pos != rd.n) {
         if (rd.n - rd.pos < sizeof(dormant)) goto bad;
