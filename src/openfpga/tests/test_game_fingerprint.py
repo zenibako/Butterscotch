@@ -42,4 +42,17 @@ with tempfile.TemporaryDirectory() as directory:
     forwarded = subprocess.check_output(['bash', str(wrapper), 'make'],
         cwd=wrapper_port, env={**os.environ, 'SDK_ROOT': str(stub_sdk)}, text=True)
     assert f'STATE_GAME_ID={expected}' in forwarded
+    # A Deltarune build names its own data through OF_STATE_DATA.
+    other = b'another game'
+    (wrapper_port / 'games/deltarune').mkdir(parents=True)
+    (wrapper_port / 'games/deltarune/data.win').write_bytes(other)
+    forwarded = subprocess.check_output(['bash', str(wrapper), 'make'], cwd=wrapper_port,
+        env={**os.environ, 'SDK_ROOT': str(stub_sdk),
+             'OF_STATE_DATA': str(wrapper_port / 'games/deltarune/data.win')}, text=True)
+    assert f'STATE_GAME_ID={hashlib.sha256(other).hexdigest()[:16]}' in forwarded
+    # The Makefile hands the wrapper the data of the game it builds.
+    deltarune = root / 'games/deltarune'
+    deltarune.mkdir(parents=True)
+    (deltarune / 'data.win').write_bytes(other)
+    assert f'-DOF_STATE_GAME_ID=0x{hashlib.sha256(other).hexdigest()[:16]}ULL' in flags('GAME=deltarune')
 print('PASS: supplied/local fingerprints and missing-fingerprint validation')

@@ -27,11 +27,13 @@ bool ofSnapshotPack(uint64_t gameId, const OfSnapshotSection sections[4], uint8_
     for (unsigned i = 0; i < 4; i++) w.data[36 + i] = (uint8_t)(crc >> (8 * i));
     *data = w.data; *size = w.size; return true;
 }
-bool ofSnapshotUnpack(uint64_t gameId, const uint8_t *data, size_t size, OfSnapshotSection sections[4]) {
+/* Checks everything in an envelope but whose game it is. */
+static bool readEnvelope(const uint8_t *data, size_t size, uint64_t *gameId, OfSnapshotSection sections[4]) {
     if (!data || size < OF_STATE_HEADER || size > OF_SNAPSHOT_LIMIT) return false;
     OfSnapshotReader r = {data, size, 0, true};
-    if (ofSnapGetU32(&r) != OF_STATE_MAGIC || ofSnapGetU32(&r) != OF_STATE_VERSION ||
-        ofSnapGetU32(&r) != (uint32_t)gameId || ofSnapGetU32(&r) != (uint32_t)(gameId >> 32)) return false;
+    if (ofSnapGetU32(&r) != OF_STATE_MAGIC || ofSnapGetU32(&r) != OF_STATE_VERSION) return false;
+    *gameId = ofSnapGetU32(&r);
+    *gameId |= (uint64_t)ofSnapGetU32(&r) << 32;
     uint32_t lengths[4];
     for (unsigned i = 0; i < 4; i++) lengths[i] = ofSnapGetU32(&r);
     if (ofSnapGetU32(&r) != size || ofSnapGetU32(&r) != checksum(data, size)) return false;
@@ -41,4 +43,12 @@ bool ofSnapshotUnpack(uint64_t gameId, const uint8_t *data, size_t size, OfSnaps
         sections[i].data = data + next; sections[i].size = lengths[i]; next += lengths[i];
     }
     return next == size;
+}
+bool ofSnapshotUnpack(uint64_t gameId, const uint8_t *data, size_t size, OfSnapshotSection sections[4]) {
+    uint64_t id;
+    return readEnvelope(data, size, &id, sections) && id == gameId;
+}
+bool ofSnapshotFromOtherGame(uint64_t gameId, const uint8_t *data, size_t size) {
+    uint64_t id; OfSnapshotSection sections[4];
+    return readEnvelope(data, size, &id, sections) && id != gameId;
 }
