@@ -18,6 +18,11 @@ still untested on the device.
 
 ## The tools
 
+For Memories, sleep/wake, cutscene captures, or an attached device log, read
+[Save-state verification](references/save-states.md). It covers fresh-process
+comparisons, scene-policy checks, repeat wakes, and matching saved payloads to
+received payloads. Ordinary screenshot comparisons do not exercise restoration.
+
 Desktop binaries open `data.win` in the current directory, so run them from
 `src/openfpga/games/<game>/` (`scripts/bs-frames.sh -g <game>` does this for you).
 Build with `make -C src/openfpga undertale_pc` (this never touches the
@@ -99,15 +104,30 @@ more than a short walk away, and to reproduce a bug the user can show on
 the desktop build. Ask the user to record it; you cannot play
 interactively.
 
+This example records **from no progress**, matching the helper's reset before
+each replay. From the checkout root:
+
 ```bash
-cd src/openfpga
-BS_SEED=7 BS_RECORD=/path/to/ruins.json ./undertale_pc    # play, then close the window
-scripts/bs-frames.sh -e BS_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
+CHECKOUT=$(pwd -P)
+record_dir=$(mktemp -d "${TMPDIR:-/tmp}/butterscotch-record.XXXXXX")
+for asset in data.win textures.bin music.bin; do
+  ln -s "$CHECKOUT/src/openfpga/games/undertale/$asset" "$record_dir/$asset"
+done
+(cd "$record_dir" && BS_SEED=7 BS_RECORD="$record_dir/ruins.json" \
+  "$CHECKOUT/src/openfpga/undertale_pc") # play, then close the window
+BS_RUN_DIR="$record_dir" \
+  "$CHECKOUT/.claude/skills/butterscotch-pocket-verify/scripts/bs-frames.sh" \
+  -e BS_PLAYBACK="$record_dir/ruins.json" 5200 5300 # no -s
 ```
 
-- Record and replay with the same seed (bs-frames.sh uses 7) and from the
-  same save state; bs-frames.sh starts from none, so record from none too
-  (delete `undertale_0.sav`, `file0`, `file9`, `undertale.ini` first).
+- Record and replay with the same seed (bs-frames.sh uses 7). The example's
+  new directory contains only asset links; the helper clears generated progress
+  there before each requested frame. Keep original saves and attachments intact.
+- For a recording from existing progress, keep a pristine copy of every initial
+  progress file before recording. Restore those copies into a fresh disposable
+  directory before **each** replay and invoke the desktop binary directly with
+  `BS_PLAYBACK`, `BS_DUMP_FRAME`, and `BS_DUMP_PATH`. The helper's default deletes
+  progress; `-k` keeps it but does not rewind it between multiple requested frames.
 - A recording is by frame number, so it replays the same uncapped. Checked
   with flowey.script: recorded through `BS_RECORD`, replayed without the
   script, frames 1300 and 2400 identical.
