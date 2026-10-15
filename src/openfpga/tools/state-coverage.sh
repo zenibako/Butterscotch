@@ -102,7 +102,8 @@ for pair in "$@"; do
     rm -f restored.ppm
     play BS_STATE_PROBE_BYPASS=1 BS_STATE_LOAD_FRAME="$load" BS_STATE_LOAD_PATH="$run/state.bin" \
         BS_DUMP_FRAME="$compare" BS_DUMP_PATH="$run/restored.ppm"
-    if ! grep -q '^Save state load: ok ' last.log; then
+    # Not anchored: a log line the game left unterminated can precede it.
+    if ! grep -q 'Save state load: ok ' last.log; then
         echo "save $save -> compare $compare: load did not succeed"
         tail -5 last.log >&2
         status=1; continue
