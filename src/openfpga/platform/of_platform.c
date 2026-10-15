@@ -24,6 +24,7 @@
 #include "of_strings.h"
 #include "of_native.h"
 #include "of_state_requests.h"
+#include "of_game.h"
 #include "sw_call_notes.h"
 
 #include <stdio.h>
@@ -158,6 +159,13 @@ static bool g_menuClosed = false;
 static char g_notice[128];
 static uint64_t g_noticeUntil = 0;
 static bool g_snapshotNotice;
+static bool g_sleepTest;
+static const char *g_sleepTestLabel;
+
+void ofPlatformStartSleepTest(void) {
+    g_sleepTest = ofGame.sleepTest != NULL;
+    if (g_sleepTest) ofSaveFsSetVolatile(true);
+}
 
 static void showNotice(const char *text) {
     g_snapshotNotice = false;
@@ -166,17 +174,28 @@ static void showNotice(const char *text) {
 }
 
 static void drawSnapshotNotice(uint16_t *fb, int width, int height) {
-    if (width <= OF_LOG_CELL_W) return;
+    int scale = ofFontScale(width), pad = 2 * scale;
+    int lineHeight = ofFontLineHeight(scale), available = width - 2 * pad;
+    if (available <= 0 || lineHeight <= 0) return;
     const char *text = g_notice;
-    size_t columns = (size_t)(width / OF_LOG_CELL_W - 1);
     char line[128];
-    if (!columns) return;
-    if (columns >= sizeof(line)) columns = sizeof(line) - 1;
-    for (int y = 2; *text && y + OF_LOG_CELL_H <= height; y += OF_LOG_CELL_H) {
-        size_t count = strlen(text); if (count > columns) count = columns;
+    for (int y = pad; *text && y + lineHeight + pad <= height; y += lineHeight + 2 * pad) {
+        size_t count = 0, space = 0;
+        while (text[count] && count < sizeof(line) - 1) {
+            line[count] = text[count]; line[count + 1] = 0;
+            if (ofFontWidth(line, scale) > available) break;
+            if (text[count] == ' ') space = count;
+            count++;
+        }
+        if (!count) return;
+        /* Prefer whole words, but split an overlong word to keep progressing. */
+        if (text[count] && space) count = space;
         memcpy(line, text, count); line[count] = 0;
-        ofPerfDrawLogText(fb, width, height, 2, y, line, 0x7FFF);
+        for (int row = y - pad; row < y + lineHeight + pad; row++)
+            memset(fb + (size_t)row * (size_t)width, 0, (size_t)width * sizeof(*fb));
+        ofFontDraw(fb, width, height, pad, y, line, 0x7FFF, scale);
         text += count;
+        while (*text == ' ') text++;
     }
 }
 
@@ -585,6 +604,8 @@ void platformSwapBuffers(void) {
     wasPaused = paused;
     if (g_snapshotNotice) {
         drawSnapshotNotice(g_nextFb, g_nextW, g_nextH);
+    } else if (g_sleepTestLabel) {
+        ofPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_sleepTestLabel);
     } else if (paused) {
         /* A paused game presents this frame and then no more until it is
          * stepped or resumed, so the words stay up with it. That is also
@@ -1086,6 +1107,7 @@ bool platformHandleEvents(void) {
         if (of_btn_released(g_keymap[i].button))
             RunnerKeyboard_onKeyUp(g_runner->keyboard, g_keymap[i].key);
     }
+    if (g_sleepTest) g_sleepTestLabel = ofGame.sleepTest(g_runner);
     return false;
 }
 

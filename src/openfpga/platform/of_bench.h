@@ -14,6 +14,8 @@
  * compared on the device. Started with "--bench" in the app arguments.
  */
 void ofBenchStart(void);
+/* Interactive sleep checkpoints, with ordinary progress kept in memory. */
+void ofPlatformStartSleepTest(void);
 /* Call once per presented frame. Prints the report and halts at the end. */
 void ofBenchFrame(void);
 

@@ -486,12 +486,15 @@ static void adpcmDiffInit(void) {
  * samples come straight out of the buffer, which is nearly always; the end
  * of the buffer or of the track goes through nextSample, with the voice
  * brought up to date before and read back after. */
+static int32_t gainToFixed(float gain);
+
 static void mixVoice(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int pairs) {
     int32_t sample0 = voice->sample0, sample1 = voice->sample1;
     uint32_t frac = voice->frac;
     const uint32_t step = voice->step;
     int32_t gainNow = voice->gainNow;
     const int32_t gainTarget = voice->gainTarget, gainStep = voice->gainStepPerPair;
+    const int32_t groupGain = gainToFixed(AudioSystem_soundGroupGain(&ut->base, voice->sourceIndex)) >> 8;
 
     const uint32_t sampleCount = ut->tracks[voice->track].sampleCount;
     const uint8_t *const data = voice->data;
@@ -556,7 +559,9 @@ static void mixVoice(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int 
             if (delta < -gainStep) delta = -gainStep;
             gainNow += delta;
         }
-        mix[i] += (sample * (gainNow >> 8)) / OF_GAIN_ONE;
+        sample = (sample * (gainNow >> 8)) / OF_GAIN_ONE;
+        if (groupGain != OF_GAIN_ONE) sample = (sample * groupGain) / OF_GAIN_ONE;
+        mix[i] += sample;
     }
 out:
     OF_VOICE_STORE();
@@ -733,6 +738,7 @@ static int32_t gainToFixed(float gain) {
 static void ofInit(AudioSystem *audio, DataWin *dataWin, FileSystem *fileSystem) {
     (void) fileSystem;
     OfAudioSystem *ut = (OfAudioSystem *) audio;
+    audio->dw = dataWin;
     arrput(audio->audioGroups, dataWin);
 
     adpcmDiffInit();
@@ -770,6 +776,7 @@ static void ofDestroy(AudioSystem *audio) {
     free(ut->cachedLastUse);
     free(ut->tracks);
     free(ut->snapshotPcm);
+    free(audio->groupGains);
     free(ut);
 }
 
@@ -777,6 +784,7 @@ static void updateAudio(OfAudioSystem *ut, float deltaTime);
 
 static void ofUpdate(AudioSystem *audio, float deltaTime) {
     ofPerfPhase(OF_PHASE_AUDIO);
+    if (!((OfAudioSystem *) audio)->allPaused) AudioSystem_updateGroupGains(audio, deltaTime);
     updateAudio((OfAudioSystem *) audio, deltaTime);
     ofPerfPhase(OF_PHASE_DRAW);
 }
@@ -1295,6 +1303,7 @@ static AudioSystemVtable ofVtable = {
     .setMasterGain = ofSetMasterGain,
     .setMasterGainForListener = ofSetMasterGainForListener,
     .setChannelCount = ofSetChannelCount,
+    .setGroupGain = AudioSystem_setGroupGain,
     .groupLoad = ofGroupLoad,
     .groupIsLoaded = ofGroupIsLoaded,
     .createStream = ofCreateStream,
