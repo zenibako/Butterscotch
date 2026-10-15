@@ -104,18 +104,30 @@ more than a short walk away, and to reproduce a bug the user can show on
 the desktop build. Ask the user to record it; you cannot play
 interactively.
 
+This example records **from no progress**, matching the helper's reset before
+each replay. From the checkout root:
+
 ```bash
-cd /path/to/disposable/run-with-linked-game-assets
-BS_SEED=7 BS_RECORD=/path/to/ruins.json "$CHECKOUT/src/openfpga/undertale_pc" # play, then close
-# From this skill's directory:
-scripts/bs-frames.sh -e BS_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
+CHECKOUT=$(pwd -P)
+record_dir=$(mktemp -d "${TMPDIR:-/tmp}/butterscotch-record.XXXXXX")
+for asset in data.win textures.bin music.bin; do
+  ln -s "$CHECKOUT/src/openfpga/games/undertale/$asset" "$record_dir/$asset"
+done
+(cd "$record_dir" && BS_SEED=7 BS_RECORD="$record_dir/ruins.json" \
+  "$CHECKOUT/src/openfpga/undertale_pc") # play, then close the window
+BS_RUN_DIR="$record_dir" \
+  "$CHECKOUT/.claude/skills/butterscotch-pocket-verify/scripts/bs-frames.sh" \
+  -e BS_PLAYBACK="$record_dir/ruins.json" 5200 5300 # no -s
 ```
 
-- Record and replay with the same seed (bs-frames.sh uses 7) and from the
-  same progress state. Use an isolated run directory with copies of needed
-  assets and saves; bs-frames.sh starts from no progress by default. Clear
-  generated saves only inside that disposable directory, never in the user's
-  attachment or actual game-save folder.
+- Record and replay with the same seed (bs-frames.sh uses 7). The example's
+  new directory contains only asset links; the helper clears generated progress
+  there before each requested frame. Keep original saves and attachments intact.
+- For a recording from existing progress, keep a pristine copy of every initial
+  progress file before recording. Restore those copies into a fresh disposable
+  directory before **each** replay and invoke the desktop binary directly with
+  `BS_PLAYBACK`, `BS_DUMP_FRAME`, and `BS_DUMP_PATH`. The helper's default deletes
+  progress; `-k` keeps it but does not rewind it between multiple requested frames.
 - A recording is by frame number, so it replays the same uncapped. Checked
   with flowey.script: recorded through `BS_RECORD`, replayed without the
   script, frames 1300 and 2400 identical.

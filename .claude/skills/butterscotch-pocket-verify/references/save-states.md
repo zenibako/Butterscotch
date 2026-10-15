@@ -64,22 +64,28 @@ the different performance benchmark. For this route use the direct binary.
 
 Set `CHECKOUT` to the checkout's absolute path. From a disposable working
 directory with links to the Chapter 1 game assets, run these as separate
-processes (paths below stay in that directory):
+processes. Each invocation allocates new output paths, so a refused capture
+cannot reuse an older `state.bin` or screenshot:
 
 ```bash
+(
+set -eu
+pair_out=$(mktemp -d "$PWD/restore-pair.XXXXXX")
 route=$(cat "$CHECKOUT/.claude/skills/butterscotch-pocket-verify/assets/deltarune-cutscene.script")
 run_pair() {
   env -u BS_STATE_PROBE_BYPASS BS_SEED=7 BS_UNCAPPED=1 BS_NOFLIP=1 \
     BS_SCRIPT="$route" "$@" "$CHECKOUT/src/openfpga/deltarune_pc" --bench-sleep
 }
-run_pair BS_DUMP_FRAME=800 BS_DUMP_PATH="$PWD/ref.ppm" > ref.log 2>&1
-run_pair BS_STATE_SAVE_FRAME=600 BS_STATE_SAVE_PATH="$PWD/state.bin" \
-  BS_EXIT_FRAME=602 > capture.log 2>&1
-test -s state.bin
-run_pair BS_STATE_LOAD_FRAME=40 BS_STATE_LOAD_PATH="$PWD/state.bin" \
-  BS_DUMP_FRAME=800 BS_DUMP_PATH="$PWD/restored.ppm" > restore.log 2>&1
-rg 'Save state load: ok' restore.log
-cmp ref.ppm restored.ppm
+run_pair BS_DUMP_FRAME=800 BS_DUMP_PATH="$pair_out/ref.ppm" > "$pair_out/ref.log" 2>&1
+run_pair BS_STATE_SAVE_FRAME=600 BS_STATE_SAVE_PATH="$pair_out/state.bin" \
+  BS_EXIT_FRAME=602 > "$pair_out/capture.log" 2>&1
+rg 'Save state save: ok' "$pair_out/capture.log"
+test -s "$pair_out/state.bin"
+run_pair BS_STATE_LOAD_FRAME=40 BS_STATE_LOAD_PATH="$pair_out/state.bin" \
+  BS_DUMP_FRAME=800 BS_DUMP_PATH="$pair_out/restored.ppm" > "$pair_out/restore.log" 2>&1
+rg 'Save state load: ok' "$pair_out/restore.log"
+cmp "$pair_out/ref.ppm" "$pair_out/restored.ppm"
+)
 ```
 
 Stop on any failed command. On macOS set
