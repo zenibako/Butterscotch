@@ -264,9 +264,13 @@ all: $(OBJ_DIR)/app.elf $(GAME_PACKS) release
 # Assemble the per-target deliverable.  Each platform owns its layout
 # (pocket = APF tree, mister = disk image); the rule names no target —
 # adding a target = add platforms/<target>/image.sh.
-$(ROOT)/runtime:
+# Re-pointed on every build: a link left by an earlier SDK_ROOT would put that
+# SDK's OS and bitstream on the card next to a program built against this one.
+$(ROOT)/runtime: FORCE
 	@mkdir -p $(ROOT)
-	ln -sfn $(SDK_ROOT)/runtime $@
+	@[ "$$(readlink $@)" = "$(SDK_ROOT)/runtime" ] || ln -sfn $(SDK_ROOT)/runtime $@
+
+FORCE:
 
 ifeq ($(TARGET),pocket)
 release: $(OBJ_DIR)/app.elf $(GAME_PACKS) | $(ROOT)/runtime
