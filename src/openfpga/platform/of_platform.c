@@ -24,6 +24,7 @@
 #include "of_strings.h"
 #include "of_native.h"
 #include "of_state_requests.h"
+#include "of_game.h"
 #include "sw_call_notes.h"
 
 #include <stdio.h>
@@ -158,6 +159,13 @@ static bool g_menuClosed = false;
 static char g_notice[128];
 static uint64_t g_noticeUntil = 0;
 static bool g_snapshotNotice;
+static bool g_sleepTest;
+static const char *g_sleepTestLabel;
+
+void ofPlatformStartSleepTest(void) {
+    g_sleepTest = ofGame.sleepTest != NULL;
+    if (g_sleepTest) ofSaveFsSetVolatile(true);
+}
 
 static void showNotice(const char *text) {
     g_snapshotNotice = false;
@@ -596,6 +604,8 @@ void platformSwapBuffers(void) {
     wasPaused = paused;
     if (g_snapshotNotice) {
         drawSnapshotNotice(g_nextFb, g_nextW, g_nextH);
+    } else if (g_sleepTestLabel) {
+        ofPerfDrawMode(g_nextFb, g_nextW, g_nextH, g_sleepTestLabel);
     } else if (paused) {
         /* A paused game presents this frame and then no more until it is
          * stepped or resumed, so the words stay up with it. That is also
@@ -1097,6 +1107,7 @@ bool platformHandleEvents(void) {
         if (of_btn_released(g_keymap[i].button))
             RunnerKeyboard_onKeyUp(g_runner->keyboard, g_keymap[i].key);
     }
+    if (g_sleepTest) g_sleepTestLabel = ofGame.sleepTest(g_runner);
     return false;
 }
 

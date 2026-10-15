@@ -77,6 +77,9 @@ typedef struct {
      * (NULL here: the game has no save states yet). The runner's own
      * resource check (Runner_snapshotCheck) runs after it. */
     const char *(*savestateReason)(Runner *runner);
+    /* Interactive sleep benchmark: advance its game-specific checkpoints
+     * and return the current on-screen instruction (NULL: unavailable). */
+    const char *(*sleepTest)(Runner *runner);
 } OfGame;
 
 extern const OfGame ofGame;

@@ -14,6 +14,7 @@
 #include "vm.h"
 #include "stb_ds.h"
 #include "of_state_requests.h"
+#include "runner_keyboard.h"
 #include <string.h>
 
 #define DELTARUNE_GRASS_MAX_CELLS 4096
@@ -235,6 +236,34 @@ static const char *savestateReason(Runner *r) {
     return NULL;
 }
 
+/* The phase lives in a GML global so waking an older A state after a refused
+ * sleep at B also rewinds the test itself. The game sets cutscene naturally;
+ * the test changes only the story flag used to enter the real yard scene. */
+static const char *sleepTest(Runner *r) {
+    if (r->dataWin->room.count <= 7 ||
+        strcmp(r->dataWin->room.rooms[7].name, "room_town_krisyard"))
+        return "Sleep test needs Chapter 1";
+    if (r->frameCount < 30) return "Preparing sleep test";
+    VMContext *vm = r->vmContext;
+    Instance *globals = vm->globalScopeInstance;
+    int32_t phaseId = VM_getOrAllocateVarID(vm, "__pocket_sleep_test_phase");
+    RValue phase = Instance_getSelfVar(globals, phaseId);
+    bool start = phase.type == RVALUE_UNDEFINED;
+    bool advance = !start && RValue_toInt32(phase) == 1 && r->currentRoomIndex == 7 &&
+        r->pendingRoom < 0 && RunnerKeyboard_checkPressed(r->keyboard, VK_ENTER);
+    if (start || advance) {
+        Instance_setSelfVar(globals, VM_getOrAllocateVarID(vm, "plot"), RValue_makeReal(start ? 60 : 0));
+        Instance_setSelfVar(globals, VM_getOrAllocateVarID(vm, "interact"), RValue_makeReal(0));
+        phase = RValue_makeReal(start ? 1 : 2);
+        Instance_setSelfVar(globals, phaseId, phase);
+        r->pendingRoom = 7;
+        RunnerKeyboard_clear(r->keyboard, VK_ENTER);
+        logInfo("Sleep test: checkpoint %s\n", start ? "A (allowed)" : "B (cutscene)");
+    }
+    if (RValue_toInt32(phase) == 1) return "A: sleep/wake, then START";
+    return savestateReason(r) ? "B: sleep is refused" : "B: waiting for cutscene";
+}
+
 const OfGame ofGame = {
     .natives = g_natives,
     .nativeCount = sizeof(g_natives) / sizeof(g_natives[0]),
@@ -252,4 +281,5 @@ const OfGame ofGame = {
     .ioAsyncBase = 35u,
     .ioAsyncStep = 1u,
     .savestateReason = savestateReason,
+    .sleepTest = sleepTest,
 };
