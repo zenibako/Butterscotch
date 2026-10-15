@@ -128,15 +128,14 @@ BS_DEFS += -DOF_TRACE_FRAMES
 endif
 
 ifeq ($(SAVESTATES),1)
-ifneq ($(GAME),undertale)
-$(error Native save-state builds support Undertale only)
-endif
 ifneq ($(TARGET),pocket)
 $(error Native save-state builds support Pocket only)
 endif
 BS_DEFS += -DOF_NATIVE_SAVESTATES
 SDK_CONTAINER = $(CURDIR)/tools/native-sdk-container.sh
 export SDK_ROOT
+# The wrapper fingerprints this game's data on the host (see STATE_GAME_ID).
+export OF_STATE_DATA := $(abspath $(G)data.win)
 endif
 
 # Bind snapshots to the user's complete game file as well as loaded bytecode.
@@ -363,9 +362,14 @@ profiler-fixture: $(PC_OBJS)
 builtin-compat-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/builtin-compat.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_builtin_compat_fixture
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
-# Keep this output separate from the ordinary two-game core.
+# Keep this output separate from the ordinary two-game core. Both games share
+# the one core, and the Pocket's sleep switch is per core, so every game built
+# here answers save and load requests (refusing what it cannot restore).
 native-saves:
 	$(MAKE) GAME=undertale SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all
+	@if [ -f games/deltarune/data.win ]; then \
+	    $(MAKE) GAME=deltarune SAVESTATES=1 ROOT=$(CURDIR)/out/native-saves all; \
+	else echo "native-saves: no games/deltarune/data.win, the card has Undertale only"; fi
 
 save-states: native-saves
 
