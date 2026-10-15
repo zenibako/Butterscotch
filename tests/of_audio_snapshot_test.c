@@ -36,6 +36,7 @@ int of_audio_write(const int16_t *samples, int count) {
 
 int main(void) {
     OfAudioSystem ut = {0};
+    ut.base.vtable = &ofVtable;
     OfMusicTrack track = {0};
     uint8_t adpcm[64];
     for (unsigned i = 0; i < sizeof(adpcm); i++) adpcm[i] = (uint8_t)(i * 19);
@@ -63,6 +64,16 @@ int main(void) {
     ut.nextInstanceId = 100013;
     adpcmDiffInit();
     int32_t prefix[9] = {0}, expected[30] = {0}, actual[30] = {0};
+    /* Spatial requests must keep Pocket's non-spatial playback usable. */
+    assert(ut.base.vtable->setSoundSpatial && ut.base.vtable->setListenerPosition);
+    OfVoice unpositioned = *v;
+    ut.base.vtable->setSoundSpatial(&ut.base, v->instanceId, 5, 6, 7, 1, 2, 3, 4, 20, 1);
+    ut.base.vtable->setListenerPosition(&ut.base, 10, 20, 30);
+    int32_t positionedPcm[9] = {0}, unpositionedPcm[9] = {0};
+    OfVoice positioned = *v;
+    mixVoice(&ut, &positioned, positionedPcm, 9);
+    mixVoice(&ut, &unpositioned, unpositionedPcm, 9);
+    assert(!memcmp(positionedPcm, unpositionedPcm, sizeof(positionedPcm)));
     mixVoice(&ut, v, prefix, 9);
     mixVoice(&ut, &ut.voices[1], prefix, 9);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
