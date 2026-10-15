@@ -43,6 +43,7 @@ COMMON="$OUT/Assets/$NAME/common"
 rm -f "$COMMON/$NAME.elf"
 if [ "${SAVESTATES:-0}" != 1 ]; then
     rm -f "$OUT/Assets/$NAME"/*/"Deltarune Sleep Test.json" "$COMMON/deltarune_sleep.ini"
+    rm -f "$OUT/Assets/$NAME"/*/"Undertale Sleep Test.json" "$COMMON/undertale_sleep.ini"
 fi
 if [ "${SAVESTATES:-0}" = 1 ]; then
     python3 - "$OUT" <<'PY'
@@ -101,6 +102,9 @@ for entry in "${GAMES[@]}"; do
         rm -f "$OUT/Assets/$NAME"/*/"$instance" "$COMMON/${game}_os.ini"
         if [ "$game" = deltarune ]; then
             rm -f "$OUT/Assets/$NAME"/*/"Deltarune Sleep Test.json" "$COMMON/deltarune_sleep.ini"
+        fi
+        if [ "$game" = undertale ]; then
+            rm -f "$OUT/Assets/$NAME"/*/"Undertale Sleep Test.json" "$COMMON/undertale_sleep.ini"
         fi
     fi
 done
