@@ -18,6 +18,11 @@ still untested on the device.
 
 ## The tools
 
+For Memories, sleep/wake, cutscene captures, or an attached device log, read
+[Save-state verification](references/save-states.md). It covers fresh-process
+comparisons, scene-policy checks, repeat wakes, and matching saved payloads to
+received payloads. Ordinary screenshot comparisons do not exercise restoration.
+
 Desktop binaries open `data.win` in the current directory, so run them from
 `src/openfpga/games/<game>/` (`scripts/bs-frames.sh -g <game>` does this for you).
 Build with `make -C src/openfpga undertale_pc` (this never touches the
@@ -100,14 +105,17 @@ the desktop build. Ask the user to record it; you cannot play
 interactively.
 
 ```bash
-cd src/openfpga
-BS_SEED=7 BS_RECORD=/path/to/ruins.json ./undertale_pc    # play, then close the window
+cd /path/to/disposable/run-with-linked-game-assets
+BS_SEED=7 BS_RECORD=/path/to/ruins.json "$CHECKOUT/src/openfpga/undertale_pc" # play, then close
+# From this skill's directory:
 scripts/bs-frames.sh -e BS_PLAYBACK=/path/to/ruins.json 5200 5300   # no -s
 ```
 
 - Record and replay with the same seed (bs-frames.sh uses 7) and from the
-  same save state; bs-frames.sh starts from none, so record from none too
-  (delete `undertale_0.sav`, `file0`, `file9`, `undertale.ini` first).
+  same progress state. Use an isolated run directory with copies of needed
+  assets and saves; bs-frames.sh starts from no progress by default. Clear
+  generated saves only inside that disposable directory, never in the user's
+  attachment or actual game-save folder.
 - A recording is by frame number, so it replays the same uncapped. Checked
   with flowey.script: recorded through `BS_RECORD`, replayed without the
   script, frames 1300 and 2400 identical.
