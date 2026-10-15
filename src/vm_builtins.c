@@ -16473,6 +16473,7 @@ static RValue builtin_layer_sprite_create(VMContext* ctx, RValue* args, MAYBE_UN
     if (runtimeLayer == nullptr) return RValue_makeReal(-1.0);
     
     RuntimeSpriteElement* spr = (RuntimeSpriteElement *)safeMalloc(sizeof(RuntimeSpriteElement));
+    spr->name = nullptr;
     spr->spriteIndex = spriteIndex;
     spr->x = x;
     spr->y = y;

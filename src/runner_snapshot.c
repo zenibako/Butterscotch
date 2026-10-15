@@ -16,9 +16,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* This is a same-build, WAD16-only wire format. Never write live pointers. */
+/* This is a same-build, WAD16/17 wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 6u
+#define SNAP_VERSION 8u
+#define SNAP_GMS2_VERSION 7u
+#define SNAP_SAVED_ROOM_VERSION 6u
 #define SNAP_STRING_REF_VERSION 5u
 #define SNAP_ZSTD_LEGACY_VERSION 4u
 #define SNAP_LEGACY_VERSION 3u
@@ -194,7 +196,7 @@ static RunnerPlain makePlain(const Runner *r) {
     return p;
 }
 
-typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY, SLOT_SAVED } SlotKind;
+typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY, SLOT_SAVED, SLOT_STRUCT } SlotKind;
 typedef struct { SlotKind kind; uint32_t container, index; char *key; } SlotRef;
 typedef struct { GMLArray *array; uint32_t ownerSlot; } ArrayRef;
 typedef struct { char *key; int32_t value; } SnapshotVarName;
@@ -220,6 +222,8 @@ typedef struct {
     Instance **savedInstances;
 } SnapshotRoom;
 
+typedef struct SnapshotLegacyTiles { uint32_t room, layer, count; RoomTile *tiles; } SnapshotLegacyTiles;
+typedef struct { uint32_t room, layer, count; uint32_t *cells; } SnapshotTilemap;
 struct RunnerSnapshot {
     bool applied;
     RunnerPlain plain;
@@ -246,6 +250,17 @@ struct RunnerSnapshot {
     SnapshotVarName *varNames;
     GMLArray **arrays; /* one temporary strong ref per array */
     uint32_t *owners;
+    /* Revision 7 (GMS2): methods hold one table ref each until freed; structs
+     * are the registry, in order, each counting the registry's +1. */
+    GMLMethod **methods;
+    Instance **structs;
+    bool *staticInitialized;
+    /* GMS 2 rooms: the current room's runtime layers, ready to install, and
+     * the legacy tiles of every loaded room (layer_tile_x/y move them). */
+    RuntimeLayer *layers;
+    bool hasLayers; /* revision 7: also, the live vertex resources are kept */
+    struct SnapshotLegacyTiles *legacyTiles;
+    SnapshotTilemap *tilemaps;
     SlotRef *slots;
     SnapshotRoom *roomStates;
     uint32_t roomCount;
@@ -257,6 +272,8 @@ struct RunnerSnapshot {
     /* After apply these are the displaced live allocations, freed by Free. */
     Instance *oldGlobal;
     Instance **oldInstances;
+    Instance **oldStructs;
+    RuntimeLayer *oldLayers;
     DsMapEntry **oldMaps;
     DsList *oldLists;
     IniFile *oldCurrentIni;
@@ -301,6 +318,20 @@ static void freeValues(Instance *global, Instance **instances, DsMapEntry **maps
         arrfree(lists[i].items);
     }
     arrfree(lists);
+}
+static void freeLayers(RuntimeLayer *layers) {
+    for (ptrdiff_t i = 0; i < arrlen(layers); i++) Runner_freeRuntimeLayer(&layers[i]);
+    arrfree(layers);
+}
+/* Structs refer to one another and to arrays; release every struct's values
+ * before any shell goes, as the runner's own teardown does. */
+static void freeStructs(Instance **structs) {
+    for (ptrdiff_t i = 0; i < arrlen(structs); i++) {
+        structs[i]->structRegistryIndex = -1;
+        Instance_freeContents(structs[i]);
+    }
+    for (ptrdiff_t i = 0; i < arrlen(structs); i++) free(structs[i]);
+    arrfree(structs);
 }
 static void freeDormantPools(DsQueue *queues, DsStack *stacks,
                              DsPriority *priorities, DsGrid *grids,
@@ -373,6 +404,16 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
     arrfree(s->savedInstances);
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) GMLArray_decRef(s->arrays[i]);
     arrfree(s->arrays); arrfree(s->owners); arrfree(s->slots);
+    for (ptrdiff_t i = 0; i < arrlen(s->methods); i++) GMLMethod_decRef(s->methods[i]);
+    arrfree(s->methods);
+    /* Last: an array released above may still drop a struct reference. */
+    freeStructs(s->applied ? s->oldStructs : s->structs);
+    free(s->staticInitialized);
+    if (s->applied) freeLayers(s->oldLayers); else freeLayers(s->layers);
+    for (ptrdiff_t i = 0; i < arrlen(s->legacyTiles); i++) free(s->legacyTiles[i].tiles);
+    arrfree(s->legacyTiles);
+    for (ptrdiff_t i = 0; i < arrlen(s->tilemaps); i++) free(s->tilemaps[i].cells);
+    arrfree(s->tilemaps);
     if (s->roomStates) for (uint32_t i = 0; i < s->roomCount; i++) {
         SnapshotRoom *state = &s->roomStates[i];
         if (state->stagedLoaded) DataWin_freeRoomPayload(&state->stagedPayload);
@@ -408,6 +449,76 @@ static void noteBlocker(BlockerList *list, const char *msg) {
 
 /* With a list, every check runs and each distinct refusal is noted; without
  * one, the first refusal is returned through reason, as capture needs. */
+/* Vertex resources that games make once at start (GMS 2's __init_d3d makes
+ * a format and an empty buffer) are not saved: a load keeps the live ones,
+ * and only if they are the same as when the state was taken. A format is
+ * summed by its definition; a buffer must not have been written to. */
+static uint32_t vertexFormatSum(const VmVertexFormat *f) {
+    uint32_t h = 2166136261u;
+#define MIX(v) do { uint32_t v_ = (uint32_t)(v); for (int b_ = 0; b_ < 4; b_++) { h = (h ^ (v_ & 255u)) * 16777619u; v_ >>= 8; } } while (0)
+    MIX(f->id); MIX(f->count); MIX(f->bitMask); MIX(f->size); MIX(f->yyFVF);
+    for (uint32_t i = 0; f->format && i < f->count; i++) {
+        MIX(f->format[i].offset); MIX(f->format[i].type); MIX(f->format[i].usage); MIX(f->format[i].bit);
+    }
+#undef MIX
+    return h;
+}
+static bool vertexBufferUnused(const Buffer_Vertex *b) {
+    return b->vertexCount == 0 && !b->frozen && b->streamCurrent == b->streamStart &&
+        !b->pFrozenVB && b->currentMask == 0 && !b->pCurrentFormatVFRelease;
+}
+/* Bound the multiplication before using the parsed tilemap's dimensions. */
+static bool tilemapCellsValid(const RoomLayerTilesData *map) {
+    return map && (!map->tilesY || map->tilesX <= SNAP_LIMIT / sizeof(uint32_t) / map->tilesY) &&
+        (!map->tilesX || !map->tilesY || map->tileData);
+}
+/* The parts of a runtime layer and its elements that are not pointers. */
+typedef struct {
+    uint32_t id, drawOrder; int32_t depth;
+    float xOffset, yOffset, hSpeed, vSpeed;
+    int32_t beginScript, endScript, shaderIndex;
+    uint8_t automaticDepth, visible, dynamic, hasName;
+} LayerPlain;
+typedef struct { uint32_t id, type, blend; float alpha; uint8_t visible, owned; } ElementPlain;
+/* An element that borrows from the room's parsed layers is saved as the
+ * room layer and item it borrows: the tilemap of a tiles layer, a legacy tile
+ * or a sprite instance (for its name) of an assets layer. */
+static bool elementSource(const Room *room, const RuntimeLayerElement *el, int32_t *layer, int32_t *item) {
+    *layer = -1; *item = -1;
+    switch (el->type) {
+        case RuntimeLayerElementType_Background: return el->backgroundElement != NULL;
+        case RuntimeLayerElementType_Instance: return true;
+        case RuntimeLayerElementType_Sprite:
+            if (!el->spriteElement) return false;
+            if (!el->spriteElement->name) return true;
+            break;
+        case RuntimeLayerElementType_Tilemap: if (!el->tilemapData) return false; break;
+        case RuntimeLayerElementType_Tile:
+            if (!el->tileElement) return false;
+            if (el->tileElementOwned) return true;
+            break;
+        default: return false;
+    }
+    for (uint32_t l = 0; room->layers && l < room->layerCount; l++) {
+        const RoomLayer *rl = &room->layers[l];
+        if (el->type == RuntimeLayerElementType_Tilemap) {
+            if (rl->tilesData == el->tilemapData) { *layer = (int32_t)l; return true; }
+            continue;
+        }
+        const RoomLayerAssetsData *a = rl->assetsData;
+        if (rl->type != RoomLayerType_Assets || !a) continue;
+        if (el->type == RuntimeLayerElementType_Tile && a->legacyTiles &&
+            el->tileElement >= a->legacyTiles && el->tileElement < a->legacyTiles + a->legacyTileCount) {
+            *layer = (int32_t)l; *item = (int32_t)(el->tileElement - a->legacyTiles); return true;
+        }
+        if (el->type == RuntimeLayerElementType_Sprite)
+            for (uint32_t j = 0; a->sprites && j < a->spriteCount; j++)
+                if (a->sprites[j].name == el->spriteElement->name) {
+                    *layer = (int32_t)l; *item = (int32_t)j; return true;
+                }
+    }
+    return false;
+}
 static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerList *all) {
 #define REFUSE(msg) do { if (all) noteBlocker(all, msg); \
         else { if (reason) *reason = msg; return false; } } while (0)
@@ -417,7 +528,9 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         else if (reason) *reason = "Runner is not ready";
         return false;
     }
-    if (r->dataWin->gen8.wadVersion != 16) REFUSE("Only WAD16 Undertale state is supported");
+    /* GMS 2.3 (WAD 17) values and current-room runtime layers are revision 7. */
+    if (r->dataWin->gen8.wadVersion != 16 && r->dataWin->gen8.wadVersion != 17)
+        REFUSE("Only WAD 16 and 17 state is supported");
     bool spritesValid = r->dataWin->sprt.parsedCount <= r->dataWin->sprt.count &&
         (!r->dataWin->sprt.count || r->dataWin->sprt.sprites);
     if (!spritesValid)
@@ -448,7 +561,6 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         for (uint32_t i = 0; i < r->dataWin->room.count; i++)
             if (r->physicsRooms[i]) REFUSE("Physics room is unsupported");
     }
-    if (arrlen(r->structInstances)) REFUSE("Live GML structs are unsupported");
     if (r->vmContext->staticStructs) {
         for (uint32_t i = 0; i < r->dataWin->code.count; i++)
             if (r->vmContext->staticStructs[i]) REFUSE("Static structs are unsupported");
@@ -468,8 +580,18 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
             REFUSE("Room dimensions exceed the collision grid limit");
         if (forCapture && room->payloadLoaded && room->tileCount && !room->tiles)
             REFUSE("Loaded room tiles are unavailable");
+        for (uint32_t l = 0; forCapture && room->payloadLoaded && room->layers && l < room->layerCount; l++)
+            if (room->layers[l].type == RoomLayerType_Tiles && !tilemapCellsValid(room->layers[l].tilesData))
+                REFUSE("Loaded room tilemap cells are unavailable or too large");
     }
-    if (arrlen(r->runtimeLayers)) REFUSE("Runtime layers are unsupported");
+    /* The live layers are replaced by a load, so only a capture checks them. */
+    for (ptrdiff_t i = 0; forCapture && i < arrlen(r->runtimeLayers); i++)
+        for (ptrdiff_t j = 0; j < arrlen(r->runtimeLayers[i].elements); j++) {
+            int32_t layer, item;
+            if (!elementSource(r->currentRoom, &r->runtimeLayers[i].elements[j], &layer, &item)) {
+                REFUSE("Unsupported layer element"); i = arrlen(r->runtimeLayers); break;
+            }
+        }
     if (r->currentIni && r->currentIni == r->cachedIni)
         REFUSE("Aliased INI cache is unsupported");
     for (int i = 0; i < MAX_OPEN_TEXT_FILES; i++) if (r->openTextFiles[i].isOpen) REFUSE("Open text file");
@@ -514,10 +636,11 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         if (r->audioEmitters[i].active || arrlen(r->audioEmitters[i].voices))
             REFUSE("Live audio emitter is unsupported");
     for (ptrdiff_t i = 0; i < arrlen(r->vertexFormats); i++)
-        if (r->vertexFormats[i]) REFUSE("Live vertex format is unsupported");
+        if (r->vertexFormats[i] && forCapture && !r->vertexFormats[i]->format && r->vertexFormats[i]->count)
+            REFUSE("Malformed vertex format");
     for (int32_t i = 0; r->vertexBuffers && i < r->vertexBufferCount; i++)
-        if (r->vertexBuffers[i]) REFUSE("Live vertex buffer is unsupported");
-    if (r->vertexBufferCount) REFUSE("Vertex buffer count is unsupported");
+        if (r->vertexBuffers[i] && forCapture && !vertexBufferUnused(r->vertexBuffers[i]))
+            REFUSE("Vertex buffer contents are unsupported");
     if (r->newVertexFormat) REFUSE("Vertex format construction is active");
 #ifdef ENABLE_SW_RENDERER
     SWRendererSnapshotState swState;
@@ -549,10 +672,50 @@ int Runner_snapshotBlockers(Runner *r, const char **out, int max) {
     return all.count;
 }
 
-typedef struct { RValue **slots; GMLArray **arrays; } Graph;
+typedef struct {
+    RValue **slots; GMLArray **arrays;
+    GMLMethod **methods; /* revision 7: shared by identity, as GML compares them */
+    Runner *runner;
+} Graph;
 static int arrayIndex(const Graph *g, GMLArray *array) {
     for (ptrdiff_t i = 0; i < arrlen(g->arrays); i++) if (g->arrays[i] == array) return (int)i;
     return -1;
+}
+/* A method is saved as what made it: a code entry, or the function-table
+ * entry behind a built-in or an unresolved name (handleBreakPushRef). */
+enum { SNAP_METHOD_CODE, SNAP_METHOD_BUILTIN, SNAP_METHOD_UNRESOLVED };
+#if IS_WAD17_OR_HIGHER_ENABLED
+static int methodIndex(const Graph *g, GMLMethod *method) {
+    for (ptrdiff_t i = 0; i < arrlen(g->methods); i++) if (g->methods[i] == method) return (int)i;
+    return -1;
+}
+static bool methodSource(const Runner *r, const GMLMethod *m, uint8_t *kind, uint32_t *index) {
+    const DataWin *dw = r->dataWin;
+    if (m->builtin == NULL && m->unresolvedName == NULL) {
+        if (m->codeIndex < 0 || (uint32_t)m->codeIndex >= dw->code.count ||
+            !dw->code.entries[m->codeIndex].present) return false;
+        *kind = SNAP_METHOD_CODE; *index = (uint32_t)m->codeIndex; return true;
+    }
+    if (m->codeIndex != -1 || !r->vmContext->funcCallCache) return false;
+    for (uint32_t i = 0; i < dw->func.functionCount; i++) {
+        if (m->builtin && !m->unresolvedName &&
+            r->vmContext->funcCallCache[i].builtin == (void *)m->builtin) {
+            *kind = SNAP_METHOD_BUILTIN; *index = i; return true;
+        }
+        if (m->unresolvedName && !m->builtin && dw->func.functions[i].name == m->unresolvedName) {
+            *kind = SNAP_METHOD_UNRESOLVED; *index = i; return true;
+        }
+    }
+    return false;
+}
+#endif
+/* Structs are saved as the whole registry, in its order; a value names one
+ * by its place there. Static structs, and structs that inherit statics, are
+ * not saved. */
+static bool structSaved(const Runner *r, const Instance *st) {
+    return st && st->objectIndex == STRUCT_OBJECT_INDEX && st->structRegistryIndex >= 0 &&
+        st->structRegistryIndex < (int32_t)arrlen(r->structInstances) &&
+        r->structInstances[st->structRegistryIndex] == st && !st->staticParent && !st->destroyed;
 }
 static bool collect(Graph *g, RValue *slot) {
     if ((size_t)arrlen(g->slots) >= SNAP_MAX_ITEMS) return false;
@@ -565,12 +728,25 @@ static bool collect(Graph *g, RValue *slot) {
 #endif
         case RVALUE_STRING: return slot->string != NULL && strlen(slot->string) < SNAP_LIMIT;
         case RVALUE_ARRAY:
-            if (!slot->array || slot->array->type != GML_LEGACY_ARRAY) return false;
+            if (!slot->array || (slot->array->type != GML_LEGACY_ARRAY &&
+                                 slot->array->type != GML_MODERN_ARRAY)) return false;
             if (arrayIndex(g, slot->array) < 0) {
                 if ((size_t)arrlen(g->arrays) >= SNAP_MAX_ITEMS) return false;
                 arrput(g->arrays, slot->array);
             }
             return true;
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: {
+            uint8_t kind; uint32_t index;
+            if (!slot->method || !methodSource(g->runner, slot->method, &kind, &index)) return false;
+            if (methodIndex(g, slot->method) < 0) {
+                if ((size_t)arrlen(g->methods) >= SNAP_MAX_ITEMS) return false;
+                arrput(g->methods, slot->method);
+            }
+            return true;
+        }
+#endif
+        case RVALUE_STRUCT: return structSaved(g->runner, slot->structInst);
         default: return false;
     }
 }
@@ -598,8 +774,21 @@ static bool collectGraph(Runner *r, Graph *g) {
     for (ptrdiff_t i = 0; i < arrlen(r->dsListPool); i++)
         for (ptrdiff_t j = 0; j < arrlen(r->dsListPool[i].items); j++)
             if (!collect(g, &r->dsListPool[i].items[j])) return false;
+    /* The writer and reader visit values in this same order: array owners
+     * are restored by the position of their slot. */
+    if ((size_t)arrlen(r->structInstances) > SNAP_MAX_ITEMS) return false;
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        if (!structSaved(r, r->structInstances[i]) ||
+            !collectMap(g, &r->structInstances[i]->selfVars)) return false;
+    }
     for (ptrdiff_t a = 0; a < arrlen(g->arrays); a++) {
         GMLArray *array = g->arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            if (array->modern.length < 0 || array->modern.length > (int32_t)SNAP_MAX_ITEMS) return false;
+            for (int32_t i = 0; i < array->modern.length; i++)
+                if (!collect(g, &array->modern.data[i])) return false;
+            continue;
+        }
         if (array->legacy.rowCount < 0 || array->legacy.rowCount > 1024) return false;
         for (int32_t row = 0; row < array->legacy.rowCount; row++) {
             GMLArrayRow *rr = &array->legacy.rows[row];
@@ -702,6 +891,10 @@ static void putValue(Writer *w, const Graph *g, RValue *v) {
 #endif
         case RVALUE_STRING: putString(w, v->string); break;
         case RVALUE_ARRAY: put32(w, (uint32_t)arrayIndex(g, v->array)); break;
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: put32(w, (uint32_t)methodIndex(g, v->method)); break;
+#endif
+        case RVALUE_STRUCT: put32(w, (uint32_t)v->structInst->structRegistryIndex); break;
         default: w->ok = false; w->failure = "Unsupported snapshot value"; break;
     }
 }
@@ -725,9 +918,10 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 #endif
     if (!eligible(r, reason, true, NULL)) return false;
     Graph g = {0};
+    g.runner = r;
     if (!collectGraph(r, &g)) {
         if (reason) *reason = "Unsupported value graph";
-        arrfree(g.slots); arrfree(g.arrays); return false;
+        arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods); return false;
     }
 #ifdef PLATFORM_BUSY_TICK
     phase[1] = nowNanos();
@@ -736,7 +930,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (!buildStringIndex(&w, &r->dataWin->strg)) {
         if (reason) *reason = "Runner snapshot string dictionary unavailable";
         free(w.stringIndex);
-        arrfree(g.slots); arrfree(g.arrays); return false;
+        arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods); return false;
     }
     put32(&w, SNAP_MAGIC); put32(&w, SNAP_VERSION); put64(&w, gameId);
     put32(&w, 0); put32(&w, 0); /* length and checksum filled below */
@@ -755,8 +949,21 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         if (loaded) put(&w, room->tiles, (size_t)room->tileCount * sizeof(RoomTile));
     }
     put32(&w, (uint32_t)arrlen(g.arrays));
+    /* GMS 2.3 bytecode owns arrays by a scope token (BREAK_SETOWNER), not by
+     * the slot holding them: revision 7 keeps that token as it is. */
+    bool tokenOwners = IS_WAD17_OR_HIGHER(r->vmContext);
     for (ptrdiff_t i = 0; i < arrlen(g.arrays); i++) {
         GMLArray *a = g.arrays[i];
+        uint8_t modern = a->type == GML_MODERN_ARRAY;
+        put(&w, &modern, 1);
+        if (tokenOwners) put64(&w, (uint64_t)(uintptr_t)a->owner);
+        if (modern) { put32(&w, (uint32_t)a->modern.length); continue; }
+        if (tokenOwners) {
+            put32(&w, (uint32_t)a->legacy.rowCount);
+            for (int32_t row = 0; row < a->legacy.rowCount; row++)
+                put32(&w, (uint32_t)a->legacy.rows[row].length);
+            continue;
+        }
         uint32_t owner = slotIndex(&g, a->owner);
         /* A dead legacy owner slot must remain non-null and distinct from
          * every live slot, so a shared array still forks on the next write. */
@@ -768,6 +975,22 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         put32(&w, (uint32_t)a->legacy.rowCount);
         for (int32_t row = 0; row < a->legacy.rowCount; row++)
             put32(&w, (uint32_t)a->legacy.rows[row].length);
+    }
+    put32(&w, (uint32_t)arrlen(g.methods));
+#if IS_WAD17_OR_HIGHER_ENABLED
+    for (ptrdiff_t i = 0; i < arrlen(g.methods); i++) {
+        uint8_t kind = 0; uint32_t index = 0;
+        methodSource(r, g.methods[i], &kind, &index);
+        put(&w, &kind, 1); put32(&w, index);
+        put32(&w, (uint32_t)g.methods[i]->boundInstanceId);
+    }
+#endif
+    put32(&w, (uint32_t)arrlen(r->structInstances));
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        const Instance *st = r->structInstances[i];
+        uint8_t pinned = st->pinned;
+        put32(&w, st->instanceId); put(&w, &pinned, 1);
+        put32(&w, (uint32_t)st->constructorCodeIndex);
     }
     put32(&w, (uint32_t)hmlen(r->tileLayerMap));
     for (ptrdiff_t i = 0; i < hmlen(r->tileLayerMap); i++)
@@ -822,12 +1045,112 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         put(&w, &freed, 1); put32(&w, (uint32_t)arrlen(list->items));
         for (ptrdiff_t j = 0; j < arrlen(list->items); j++) putValue(&w, &g, &list->items[j]);
     }
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++)
+        putMap(&w, &g, &r->structInstances[i]->selfVars);
     for (ptrdiff_t a = 0; a < arrlen(g.arrays); a++) {
         GMLArray *array = g.arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            for (int32_t i = 0; i < array->modern.length; i++) putValue(&w, &g, &array->modern.data[i]);
+            continue;
+        }
         for (int32_t row = 0; row < array->legacy.rowCount; row++)
             for (int32_t col = 0; col < array->legacy.rows[row].length; col++)
                 putValue(&w, &g, &array->legacy.rows[row].data[col]);
     }
+    /* Which functions have run their static block (GMS 2.3). */
+    uint32_t staticCount = r->vmContext->staticInitialized ? r->dataWin->code.count : 0;
+    put32(&w, staticCount);
+    for (uint32_t i = 0; i < staticCount; i += 8) {
+        uint8_t bits = 0;
+        for (uint32_t b = 0; b < 8 && i + b < staticCount; b++)
+            if (r->vmContext->staticInitialized[i + b]) bits |= (uint8_t)(1u << b);
+        put(&w, &bits, 1);
+    }
+    /* The current room's runtime layers (GMS 2 rooms always have them). */
+    put32(&w, (uint32_t)arrlen(r->runtimeLayers));
+    for (ptrdiff_t i = 0; i < arrlen(r->runtimeLayers); i++) {
+        const RuntimeLayer *L = &r->runtimeLayers[i];
+        LayerPlain lp; memset(&lp, 0, sizeof(lp));
+        lp.id = L->id; lp.drawOrder = L->drawOrder; lp.depth = L->depth;
+        lp.xOffset = L->xOffset; lp.yOffset = L->yOffset; lp.hSpeed = L->hSpeed; lp.vSpeed = L->vSpeed;
+        lp.beginScript = L->beginScript; lp.endScript = L->endScript; lp.shaderIndex = L->shaderIndex;
+        lp.automaticDepth = L->automaticDepth; lp.visible = L->visible; lp.dynamic = L->dynamic;
+        lp.hasName = L->dynamicName != NULL;
+        put(&w, &lp, sizeof(lp));
+        if (L->dynamicName) putString(&w, L->dynamicName);
+        put32(&w, (uint32_t)arrlen(L->elements));
+        for (ptrdiff_t j = 0; j < arrlen(L->elements); j++) {
+            const RuntimeLayerElement *el = &L->elements[j];
+            int32_t layer, item;
+            if (!elementSource(r->currentRoom, el, &layer, &item)) {
+                w.ok = false; w.failure = "Unsupported layer element"; break;
+            }
+            ElementPlain ep; memset(&ep, 0, sizeof(ep));
+            ep.id = el->id; ep.type = (uint32_t)el->type; ep.blend = el->blend; ep.alpha = el->alpha;
+            ep.visible = el->visible; ep.owned = el->tileElementOwned;
+            put(&w, &ep, sizeof(ep));
+            put32(&w, (uint32_t)layer); put32(&w, (uint32_t)item);
+            switch (el->type) {
+                case RuntimeLayerElementType_Background:
+                    put(&w, el->backgroundElement, sizeof(RuntimeBackgroundElement)); break;
+                case RuntimeLayerElementType_Instance: put32(&w, (uint32_t)el->instanceId); break;
+                case RuntimeLayerElementType_Sprite: {
+                    RuntimeSpriteElement sp = *el->spriteElement; sp.name = NULL;
+                    put(&w, &sp, sizeof(sp)); break;
+                }
+                case RuntimeLayerElementType_Tile:
+                    if (el->tileElementOwned) put(&w, el->tileElement, sizeof(RoomTile));
+                    break;
+                default: break;
+            }
+        }
+    }
+    /* Legacy tiles of every loaded room's assets layers: layer_tile_x/y move
+     * them in the parsed room data itself. */
+    uint32_t legacyLayers = 0;
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++)
+            if (room->layers[l].type == RoomLayerType_Assets && room->layers[l].assetsData &&
+                room->layers[l].assetsData->legacyTileCount) legacyLayers++;
+    }
+    put32(&w, legacyLayers);
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++) {
+            const RoomLayerAssetsData *a = room->layers[l].assetsData;
+            if (room->layers[l].type != RoomLayerType_Assets || !a || !a->legacyTileCount) continue;
+            put32(&w, i); put32(&w, l); put32(&w, a->legacyTileCount);
+            put(&w, a->legacyTiles, (size_t)a->legacyTileCount * sizeof(RoomTile));
+        }
+    }
+    /* Revision 8: tilemap_set[_at_pixel] writes directly into parsed room
+     * cells, including layers no longer present in the live runtime list. */
+    uint32_t tilemapCount = 0;
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++)
+            if (room->layers[l].type == RoomLayerType_Tiles) tilemapCount++;
+    }
+    put32(&w, tilemapCount);
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++) {
+            if (room->layers[l].type != RoomLayerType_Tiles) continue;
+            const RoomLayerTilesData *map = room->layers[l].tilesData;
+            put32(&w, i); put32(&w, l); put32(&w, map->tilesX); put32(&w, map->tilesY);
+            put(&w, map->tileData, (size_t)map->tilesX * map->tilesY * sizeof(uint32_t));
+        }
+    }
+    /* Vertex resources are described, not saved (vertexFormatSum). The buffer
+     * pool is a plain array of vertexBufferCount slots, not an stb array. */
+    put32(&w, (uint32_t)arrlen(r->vertexFormats));
+    for (ptrdiff_t i = 0; i < arrlen(r->vertexFormats); i++)
+        put32(&w, r->vertexFormats[i] ? vertexFormatSum(r->vertexFormats[i]) : 0);
+    uint32_t bufferSlots = r->vertexBuffers ? (uint32_t)r->vertexBufferCount : 0;
+    put32(&w, bufferSlots);
+    for (uint32_t i = 0; i < bufferSlots; i++)
+        put32(&w, r->vertexBuffers[i] ? r->vertexBuffers[i]->bufferSize + 1u : 0);
     put32(&w, (uint32_t)arrlen(r->dsQueuePool));
     put32(&w, (uint32_t)arrlen(r->dsStackPool));
     put32(&w, (uint32_t)arrlen(r->dsPriorityPool));
@@ -837,8 +1160,8 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     put32(&w, (uint32_t)arrlen(r->particleSystemPool));
     put32(&w, (uint32_t)arrlen(r->particleTypePool));
     put32(&w, (uint32_t)arrlen(r->audioEmitters));
-    put32(&w, (uint32_t)arrlen(r->vertexFormats));
-    put32(&w, (uint32_t)arrlen(r->vertexBuffers));
+    put32(&w, 0); /* vertex formats and buffers: described above */
+    put32(&w, 0);
     put32(&w, SNAP_INI_MAGIC);
     uint32_t iniFlags = (r->currentIni ? 1u : 0u) |
         (r->cachedIni ? 2u : 0u) |
@@ -852,7 +1175,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (r->cachedIniPath) putString(&w, r->cachedIniPath);
     if (r->cachedIni) putIni(&w, r->cachedIni, &iniEntryBudget);
     free(w.stringIndex);
-    arrfree(g.slots); arrfree(g.arrays);
+    arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods);
     if (!w.ok || w.n > SNAP_LIMIT) {
         if (reason) *reason = w.failure ? w.failure : "Runner snapshot encoding failed";
         free(w.p); return false;
@@ -1002,6 +1325,9 @@ static RValue *slotPointer(RunnerSnapshot *s, SlotRef ref) {
         case SLOT_ARRAY:
             if (ref.container >= (uint32_t)arrlen(s->arrays)) return NULL;
             return GMLArray_slot(s->arrays[ref.container], (int32_t)ref.index);
+        case SLOT_STRUCT:
+            if (ref.container >= (uint32_t)arrlen(s->structs)) return NULL;
+            return IntRValueHashMap_findSlot(&s->structs[ref.container]->selfVars, (int32_t)ref.index);
     }
     return NULL;
 }
@@ -1030,6 +1356,22 @@ static void getValue(Reader *rd, RunnerSnapshot *s, RValue *out, SlotRef ref) {
             GMLArray_incRef(value.array);
             break;
         }
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: {
+            uint32_t id = get32(rd);
+            if (id >= (uint32_t)arrlen(s->methods)) { rd->ok = false; break; }
+            value.method = s->methods[id]; value.ownsReference = true;
+            GMLMethod_incRef(value.method);
+            break;
+        }
+#endif
+        case RVALUE_STRUCT: {
+            uint32_t id = get32(rd);
+            if (id >= (uint32_t)arrlen(s->structs)) { rd->ok = false; break; }
+            value.structInst = s->structs[id]; value.ownsReference = true;
+            Instance_structIncRef(value.structInst);
+            break;
+        }
         default: rd->ok = false; break;
     }
     if (!rd->ok) { if (value.type == RVALUE_STRING) free((void *)value.string); return; }
@@ -1050,14 +1392,28 @@ static void getMap(Reader *rd, RunnerSnapshot *s, IntRValueHashMap *map,
         getValue(rd, s, slot, ref);
     }
 }
+/* Element i of a, for either layout; counts elements when out is NULL. */
+static int32_t arrayElements(GMLArray *a, RValue ***out) {
+    int32_t n = 0;
+    if (a->type == GML_MODERN_ARRAY) {
+        for (int32_t i = 0; i < a->modern.length; i++) if (out) (*out)[n++] = &a->modern.data[i]; else n++;
+        return n;
+    }
+    for (int32_t row = 0; row < a->legacy.rowCount; row++)
+        for (int32_t col = 0; col < a->legacy.rows[row].length; col++)
+            if (out) (*out)[n++] = &a->legacy.rows[row].data[col]; else n++;
+    return n;
+}
 static void breakArrayCycles(RunnerSnapshot *s) {
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) {
         GMLArray *a = s->arrays[i];
-        for (int32_t row = 0; row < a->legacy.rowCount; row++)
-            for (int32_t col = 0; col < a->legacy.rows[row].length; col++) {
-                RValue *v = &a->legacy.rows[row].data[col];
-                if (v->type == RVALUE_ARRAY) { RValue_free(v); *v = RValue_makeUndefined(); }
-            }
+        int32_t n = arrayElements(a, NULL);
+        RValue **cells = n ? (RValue **)malloc((size_t)n * sizeof(RValue *)) : NULL;
+        if (n && !cells) continue;
+        arrayElements(a, &cells);
+        for (int32_t k = 0; k < n; k++)
+            if (cells[k]->type == RVALUE_ARRAY) { RValue_free(cells[k]); *cells[k] = RValue_makeUndefined(); }
+        free(cells);
     }
 }
 static bool visitArray(RunnerSnapshot *s, uint32_t id, uint8_t *colors, unsigned depth) {
@@ -1065,15 +1421,19 @@ static bool visitArray(RunnerSnapshot *s, uint32_t id, uint8_t *colors, unsigned
     if (colors[id] == 2) return true;
     colors[id] = 1;
     GMLArray *a = s->arrays[id];
-    for (int32_t row = 0; row < a->legacy.rowCount; row++)
-        for (int32_t col = 0; col < a->legacy.rows[row].length; col++) {
-            RValue *v = &a->legacy.rows[row].data[col];
-            if (v->type != RVALUE_ARRAY) continue;
-            uint32_t child = UINT32_MAX;
-            for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++)
-                if (s->arrays[i] == v->array) { child = (uint32_t)i; break; }
-            if (child == UINT32_MAX || !visitArray(s, child, colors, depth + 1)) return false;
-        }
+    int32_t n = arrayElements(a, NULL);
+    RValue **cells = n ? (RValue **)malloc((size_t)n * sizeof(RValue *)) : NULL;
+    if (n && !cells) return false;
+    arrayElements(a, &cells);
+    for (int32_t k = 0; k < n; k++) {
+        RValue *v = cells[k];
+        if (v->type != RVALUE_ARRAY) continue;
+        uint32_t child = UINT32_MAX;
+        for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++)
+            if (s->arrays[i] == v->array) { child = (uint32_t)i; break; }
+        if (child == UINT32_MAX || !visitArray(s, child, colors, depth + 1)) { free(cells); return false; }
+    }
+    free(cells);
     colors[id] = 2;
     return true;
 }
@@ -1106,6 +1466,11 @@ static bool buildIndexes(RunnerSnapshot *s, Runner *r) {
         if (hmgeti(s->byId, id) >= 0) return false;
         hmput(s->byId, id, inst);
     }
+    for (ptrdiff_t i = 0; i < arrlen(s->structs); i++) {
+        int id = (int)s->structs[i]->instanceId;
+        if (hmgeti(s->byId, id) >= 0) return false;
+        hmput(s->byId, id, s->structs[i]);
+    }
     return true;
 }
 
@@ -1127,7 +1492,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
     if (!hdr.ok || magic != SNAP_MAGIC ||
-        (version != SNAP_VERSION && version != SNAP_STRING_REF_VERSION &&
+        (version != SNAP_VERSION && version != SNAP_GMS2_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
+         version != SNAP_STRING_REF_VERSION &&
          version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
         id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
@@ -1244,12 +1610,35 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t arrayCount = get32(&rd);
     if (!rd.ok || !countOK(arrayCount)) goto bad;
     uint32_t arrayElements = 0;
+    bool gms2 = version >= SNAP_GMS2_VERSION;
+    bool tokenOwners = gms2 && IS_WAD17_OR_HIGHER(r->vmContext);
     for (uint32_t i = 0; i < arrayCount && rd.ok; i++) {
-        uint32_t owner = get32(&rd), rowCount = get32(&rd);
-        if (!countOK(rowCount) || rowCount > 1024) goto bad;
+        uint8_t modern = 0;
+        if (gms2) get(&rd, &modern, 1);
+        uint64_t token = tokenOwners ? get64(&rd) : 0;
+        if (!rd.ok || modern > 1) goto bad;
+        if (modern) {
+            uint32_t len = get32(&rd);
+            if (!rd.ok || len > SNAP_MAX_ITEMS - arrayElements || (size_t)len > (rd.n - rd.pos) / 4) {
+                failure = "Array element budget exceeded"; goto bad;
+            }
+            arrayElements += len;
+            GMLArray *a = (GMLArray *)calloc(1, sizeof(GMLArray));
+            if (!a) goto bad;
+            a->type = GML_MODERN_ARRAY; a->refCount = 1;
+            a->owner = (void *)(uintptr_t)token;
+            a->modern.data = (RValue *)calloc(len ? len : 1, sizeof(RValue));
+            if (!a->modern.data) { free(a); goto bad; }
+            a->modern.length = a->modern.capacity = (int32_t)len;
+            arrput(s->arrays, a); arrput(s->owners, SNAP_OWNER_NONE);
+            continue;
+        }
+        uint32_t owner = tokenOwners ? SNAP_OWNER_NONE : get32(&rd), rowCount = get32(&rd);
+        if (!rd.ok || !countOK(rowCount) || rowCount > 1024) goto bad;
         GMLArray *a = (GMLArray *)calloc(1, sizeof(GMLArray));
         if (!a) goto bad;
         a->type = GML_LEGACY_ARRAY; a->refCount = 1;
+        if (tokenOwners) a->owner = (void *)(uintptr_t)token;
         a->legacy.rowCount = a->legacy.rowCapacity = (int32_t)rowCount;
         a->legacy.rows = (GMLArrayRow *)calloc(rowCount ? rowCount : 1, sizeof(GMLArrayRow));
         if (!a->legacy.rows) { free(a); goto bad; }
@@ -1266,6 +1655,41 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             rr->data = (RValue *)calloc(len ? len : 1, sizeof(RValue));
             if (!rr->data) goto bad;
             rr->length = rr->capacity = (int32_t)len;
+        }
+    }
+    if (gms2) {
+        uint32_t methodCount = get32(&rd);
+        if (!rd.ok || !countOK(methodCount) || (methodCount && !IS_WAD17_OR_HIGHER_ENABLED)) goto bad;
+        const DataWin *dw = r->dataWin;
+        for (uint32_t i = 0; i < methodCount && rd.ok; i++) {
+            uint8_t kind = 0; get(&rd, &kind, 1);
+            uint32_t index = get32(&rd);
+            int32_t bound = (int32_t)get32(&rd);
+            if (!rd.ok) goto bad;
+            GMLMethod *m = NULL;
+            if (kind == SNAP_METHOD_CODE && index < dw->code.count && dw->code.entries[index].present)
+                m = GMLMethod_create((int32_t)index, bound);
+            else if (kind == SNAP_METHOD_BUILTIN && index < dw->func.functionCount &&
+                     r->vmContext->funcCallCache && r->vmContext->funcCallCache[index].builtin)
+                m = GMLMethod_createBuiltin((BuiltinFunc)r->vmContext->funcCallCache[index].builtin, bound);
+            else if (kind == SNAP_METHOD_UNRESOLVED && index < dw->func.functionCount)
+                m = GMLMethod_createUnresolved(dw->func.functions[index].name, bound);
+            if (!m) goto bad;
+            arrput(s->methods, m);
+        }
+        uint32_t structCount = get32(&rd);
+        if (!rd.ok || !countOK(structCount)) goto bad;
+        for (uint32_t i = 0; i < structCount && rd.ok; i++) {
+            uint32_t id = get32(&rd); uint8_t pinned = 0; get(&rd, &pinned, 1);
+            int32_t constructor = (int32_t)get32(&rd);
+            if (!rd.ok || pinned > 1 || constructor < -1 ||
+                (constructor >= 0 && (uint32_t)constructor >= dw->code.count)) goto bad;
+            Instance *st = Instance_create(id, STRUCT_OBJECT_INDEX, 0, 0);
+            st->refCount = 1; /* the registry's */
+            st->pinned = pinned != 0;
+            st->structRegistryIndex = (int32_t)i;
+            st->constructorCodeIndex = constructor;
+            arrput(s->structs, st);
         }
     }
     uint32_t tileLayerCount = get32(&rd);
@@ -1286,7 +1710,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         arrput(s->instances, inst);
         getMap(&rd, s, &inst->selfVars, SLOT_INSTANCE, i);
     }
-    uint32_t savedRooms = version >= SNAP_VERSION ? get32(&rd) : 0;
+    uint32_t savedRooms = version >= SNAP_SAVED_ROOM_VERSION ? get32(&rd) : 0;
     if (!rd.ok || savedRooms > roomCount || (savedRooms && !r->savedRoomStates)) goto bad;
     int64_t lastSaved = -1;
     for (uint32_t n = 0; n < savedRooms && rd.ok; n++) {
@@ -1359,13 +1783,186 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             getValue(&rd, s, &s->lists[i].items[j], ref);
         }
     }
+    for (ptrdiff_t i = 0; i < arrlen(s->structs) && rd.ok; i++)
+        getMap(&rd, s, &s->structs[i]->selfVars, SLOT_STRUCT, (uint32_t)i);
     for (uint32_t a = 0; a < arrayCount && rd.ok; a++) {
         GMLArray *array = s->arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            for (int32_t i = 0; i < array->modern.length && rd.ok; i++) {
+                SlotRef ref = {SLOT_ARRAY, a, (uint32_t)i, NULL};
+                getValue(&rd, s, &array->modern.data[i], ref);
+            }
+            continue;
+        }
         for (int32_t row = 0; row < array->legacy.rowCount; row++)
             for (int32_t col = 0; col < array->legacy.rows[row].length && rd.ok; col++) {
                 SlotRef ref = {SLOT_ARRAY, a, (uint32_t)row * GML_LEGACY_ARRAY_STRIDE + (uint32_t)col, NULL};
                 getValue(&rd, s, &array->legacy.rows[row].data[col], ref);
             }
+    }
+    if (gms2) {
+        uint32_t staticCount = get32(&rd);
+        if (!rd.ok || (staticCount && staticCount != r->dataWin->code.count) ||
+            (staticCount && !r->vmContext->staticInitialized)) goto bad;
+        if (staticCount) {
+            s->staticInitialized = (bool *)calloc(staticCount, sizeof(bool));
+            if (!s->staticInitialized) goto bad;
+            for (uint32_t i = 0; i < staticCount && rd.ok; i += 8) {
+                uint8_t bits = 0; get(&rd, &bits, 1);
+                for (uint32_t b = 0; b < 8 && i + b < staticCount; b++)
+                    s->staticInitialized[i + b] = (bits >> b) & 1u;
+            }
+        }
+        /* Borrowed elements point into the payload the room will have once
+         * applied: the live one, or the one staged above. */
+        SnapshotRoom *current = &s->roomStates[s->plain.roomIndex];
+        const Room *payload = current->stagedLoaded ? &current->stagedPayload : s->room;
+        uint32_t layerCount = get32(&rd);
+        if (!rd.ok || !countOK(layerCount)) goto bad;
+        s->hasLayers = true;
+        uint32_t elementBudget = SNAP_MAX_ITEMS;
+        for (uint32_t i = 0; i < layerCount && rd.ok; i++) {
+            LayerPlain lp; get(&rd, &lp, sizeof(lp));
+            if (!rd.ok || lp.automaticDepth > 1 || lp.visible > 1 || lp.dynamic > 1 || lp.hasName > 1) goto bad;
+            RuntimeLayer L; memset(&L, 0, sizeof(L));
+            L.id = lp.id; L.drawOrder = lp.drawOrder; L.depth = lp.depth;
+            L.xOffset = lp.xOffset; L.yOffset = lp.yOffset; L.hSpeed = lp.hSpeed; L.vSpeed = lp.vSpeed;
+            L.beginScript = lp.beginScript; L.endScript = lp.endScript; L.shaderIndex = lp.shaderIndex;
+            L.automaticDepth = lp.automaticDepth; L.visible = lp.visible; L.dynamic = lp.dynamic;
+            arrput(s->layers, L);
+            RuntimeLayer *dst = &arrlast(s->layers);
+            if (lp.hasName && !(dst->dynamicName = getString(&rd))) goto bad;
+            uint32_t elements = get32(&rd);
+            if (!rd.ok || elements > elementBudget) goto bad;
+            elementBudget -= elements;
+            for (uint32_t j = 0; j < elements && rd.ok; j++) {
+                ElementPlain ep; get(&rd, &ep, sizeof(ep));
+                int32_t layer = (int32_t)get32(&rd), item = (int32_t)get32(&rd);
+                if (!rd.ok || ep.visible > 1 || ep.owned > 1) goto bad;
+                RuntimeLayerElement el; memset(&el, 0, sizeof(el));
+                el.id = ep.id; el.type = (RuntimeLayerElementType)ep.type;
+                el.visible = ep.visible; el.alpha = ep.alpha; el.blend = ep.blend;
+                const RoomLayer *rl = layer >= 0 && payload->layers && (uint32_t)layer < payload->layerCount
+                    ? &payload->layers[layer] : NULL;
+                const RoomLayerAssetsData *a = rl && rl->type == RoomLayerType_Assets ? rl->assetsData : NULL;
+                switch (ep.type) {
+                    case RuntimeLayerElementType_Background:
+                        el.backgroundElement = (RuntimeBackgroundElement *)malloc(sizeof(RuntimeBackgroundElement));
+                        if (!el.backgroundElement) goto bad;
+                        get(&rd, el.backgroundElement, sizeof(RuntimeBackgroundElement));
+                        break;
+                    case RuntimeLayerElementType_Instance: el.instanceId = (int32_t)get32(&rd); break;
+                    case RuntimeLayerElementType_Sprite:
+                        el.spriteElement = (RuntimeSpriteElement *)malloc(sizeof(RuntimeSpriteElement));
+                        if (!el.spriteElement) goto bad;
+                        get(&rd, el.spriteElement, sizeof(RuntimeSpriteElement));
+                        el.spriteElement->name = NULL;
+                        if (layer >= 0) {
+                            if (!a || item < 0 || (uint32_t)item >= a->spriteCount) { free(el.spriteElement); goto bad; }
+                            el.spriteElement->name = a->sprites[item].name;
+                        }
+                        break;
+                    case RuntimeLayerElementType_Tilemap:
+                        if (!rl || rl->type != RoomLayerType_Tiles || !rl->tilesData) goto bad;
+                        el.tilemapData = rl->tilesData;
+                        break;
+                    case RuntimeLayerElementType_Tile:
+                        if (ep.owned) {
+                            el.tileElement = (RoomTile *)malloc(sizeof(RoomTile));
+                            if (!el.tileElement) goto bad;
+                            el.tileElementOwned = true;
+                            get(&rd, el.tileElement, sizeof(RoomTile));
+                        } else {
+                            if (!a || item < 0 || (uint32_t)item >= a->legacyTileCount) goto bad;
+                            el.tileElement = &a->legacyTiles[item];
+                        }
+                        break;
+                    default: goto bad;
+                }
+                arrput(dst->elements, el);
+            }
+        }
+        uint32_t legacyLayers = get32(&rd);
+        if (!rd.ok || !countOK(legacyLayers)) goto bad;
+        for (uint32_t i = 0; i < legacyLayers && rd.ok; i++) {
+            uint32_t room = get32(&rd), layer = get32(&rd), count = get32(&rd);
+            if (!rd.ok || room >= roomCount || !s->roomStates[room].payloadLoaded) goto bad;
+            SnapshotRoom *state = &s->roomStates[room];
+            const Room *target = state->stagedLoaded ? &state->stagedPayload : &r->dataWin->room.rooms[room];
+            if (!target->layers || layer >= target->layerCount ||
+                target->layers[layer].type != RoomLayerType_Assets || !target->layers[layer].assetsData ||
+                target->layers[layer].assetsData->legacyTileCount != count ||
+                (size_t)count > (rd.n - rd.pos) / sizeof(RoomTile)) goto bad;
+            SnapshotLegacyTiles t = {room, layer, count, (RoomTile *)malloc((size_t)count * sizeof(RoomTile))};
+            if (!t.tiles) goto bad;
+            get(&rd, t.tiles, (size_t)count * sizeof(RoomTile));
+            arrput(s->legacyTiles, t);
+        }
+        if (version >= SNAP_VERSION) {
+            uint32_t tilemapCount = get32(&rd);
+            if (!rd.ok || !countOK(tilemapCount)) goto bad;
+            uint32_t previousRoom = 0, previousLayer = 0;
+            for (uint32_t i = 0; i < tilemapCount && rd.ok; i++) {
+                uint32_t room = get32(&rd), layer = get32(&rd);
+                uint32_t width = get32(&rd), height = get32(&rd);
+                if (!rd.ok || room >= roomCount || !s->roomStates[room].payloadLoaded ||
+                    (i && (room < previousRoom || (room == previousRoom && layer <= previousLayer)))) goto bad;
+                previousRoom = room; previousLayer = layer;
+                SnapshotRoom *state = &s->roomStates[room];
+                const Room *target = state->stagedLoaded ? &state->stagedPayload : &r->dataWin->room.rooms[room];
+                if (!target->layers || layer >= target->layerCount || target->layers[layer].type != RoomLayerType_Tiles)
+                    goto bad;
+                const RoomLayerTilesData *map = target->layers[layer].tilesData;
+                if (!tilemapCellsValid(map) || map->tilesX != width || map->tilesY != height) goto bad;
+                size_t count = (size_t)width * height;
+                if (count > (rd.n - rd.pos) / sizeof(uint32_t)) goto bad;
+                SnapshotTilemap t = {room, layer, (uint32_t)count, NULL};
+                t.cells = (uint32_t *)malloc((count ? count : 1) * sizeof(uint32_t));
+                if (!t.cells) goto bad;
+                get(&rd, t.cells, count * sizeof(uint32_t));
+                arrput(s->tilemaps, t);
+            }
+            /* Require every loaded tilemap exactly once, in capture order. */
+            uint32_t expected = 0;
+            for (uint32_t i = 0; i < roomCount; i++) {
+                SnapshotRoom *state = &s->roomStates[i];
+                const Room *target = state->stagedLoaded ? &state->stagedPayload : &r->dataWin->room.rooms[i];
+                for (uint32_t l = 0; state->payloadLoaded && target->layers && l < target->layerCount; l++)
+                    if (target->layers[l].type == RoomLayerType_Tiles) expected++;
+            }
+            if (tilemapCount != expected) goto bad;
+        }
+        uint32_t formatSlots = get32(&rd);
+        if (!rd.ok || formatSlots != (uint32_t)arrlen(r->vertexFormats)) {
+            failure = "The game's vertex resources differ from the state's"; goto bad;
+        }
+        for (uint32_t i = 0; i < formatSlots && rd.ok; i++) {
+            uint32_t sum = get32(&rd);
+            uint32_t live = r->vertexFormats[i] ? vertexFormatSum(r->vertexFormats[i]) : 0;
+            if (rd.ok && sum != live) { failure = "The game's vertex resources differ from the state's"; goto bad; }
+        }
+        uint32_t bufferSlots = get32(&rd);
+        uint32_t liveSlots = r->vertexBuffers ? (uint32_t)r->vertexBufferCount : 0;
+        if (!rd.ok || bufferSlots != liveSlots) {
+            failure = "The game's vertex resources differ from the state's"; goto bad;
+        }
+        for (uint32_t i = 0; i < bufferSlots && rd.ok; i++) {
+            uint32_t size = get32(&rd);
+            const Buffer_Vertex *b = r->vertexBuffers[i];
+            if (rd.ok && (size != (b ? b->bufferSize + 1u : 0) || (b && !vertexBufferUnused(b)))) {
+                failure = "The game's vertex resources differ from the state's"; goto bad;
+            }
+        }
+    }
+    /* Revisions 3-6 have no vertex-resource contract. Applying their dormant
+     * arrays must never displace (or arrfree) a live plain buffer pool. */
+    if (!gms2) {
+        bool liveVertex = r->vertexBufferCount > 0;
+        for (ptrdiff_t i = 0; !liveVertex && i < arrlen(r->vertexFormats); i++)
+            liveVertex = r->vertexFormats[i] != NULL;
+        if (liveVertex) {
+            failure = "The game's vertex resources differ from the state's"; goto bad;
+        }
     }
     uint32_t dormant[SNAP_DORMANT_POOL_COUNT] = {0};
     if (rd.ok && rd.pos != rd.n) {
@@ -1521,6 +2118,7 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     if (!r || !s || s->applied) return;
     s->oldGlobal = r->vmContext->globalScopeInstance;
     s->oldInstances = r->instances; s->oldMaps = r->dsMapPool;
+    s->oldStructs = r->structInstances;
     s->oldLists = r->dsListPool;
     s->oldQueues = r->dsQueuePool; s->oldStacks = r->dsStackPool;
     s->oldPriorities = r->dsPriorityPool; s->oldGrids = r->dsGridPool;
@@ -1542,12 +2140,24 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     r->vmContext->globalScopeInstance = s->global;
     r->vmContext->varNameMap = (void *)s->varNames;
     r->instances = s->instances; r->dsMapPool = s->maps; r->dsListPool = s->lists;
+    r->structInstances = s->structs;
+    if (s->staticInitialized)
+        memcpy(r->vmContext->staticInitialized, s->staticInitialized,
+               r->dataWin->code.count * sizeof(bool));
+    else if (r->vmContext->staticInitialized)
+        memset(r->vmContext->staticInitialized, 0, r->dataWin->code.count * sizeof(bool));
     r->dsQueuePool = s->queues; r->dsStackPool = s->stacks;
     r->dsPriorityPool = s->priorities; r->dsGridPool = s->grids;
     r->gmlBufferPool = s->buffers; r->mpGridPool = s->mpGrids;
     r->particleSystemPool = s->particleSystems;
     r->particleTypePool = s->particleTypes; r->audioEmitters = s->emitters;
-    r->vertexFormats = s->vertexFormats; r->vertexBuffers = s->vertexBuffers;
+    if (s->hasLayers) {
+        /* Revision 7 checked the live vertex resources match; keep them, and
+         * let Free release the empty dormant arrays read for them. */
+        s->oldVertexFormats = s->vertexFormats; s->oldVertexBuffers = s->vertexBuffers;
+    } else {
+        r->vertexFormats = s->vertexFormats; r->vertexBuffers = s->vertexBuffers;
+    }
     r->instancesById = s->byId;
     r->instancesByObject = s->byObject; r->instancesByExactObject = s->byExact;
     r->spatialGrid = s->grid; r->tileLayerMap = s->tileLayers;
@@ -1579,6 +2189,23 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
         }
         room->width = state->width; room->height = state->height;
         room->speed = state->speed; room->persistent = state->persistent;
+    }
+    if (s->hasLayers) {
+        s->oldLayers = r->runtimeLayers;
+        r->runtimeLayers = s->layers;
+        for (ptrdiff_t i = 0; i < arrlen(s->legacyTiles); i++) {
+            SnapshotLegacyTiles *t = &s->legacyTiles[i];
+            Room *room = &r->dataWin->room.rooms[t->room];
+            memcpy(room->layers[t->layer].assetsData->legacyTiles, t->tiles, (size_t)t->count * sizeof(RoomTile));
+        }
+        for (ptrdiff_t i = 0; i < arrlen(s->tilemaps); i++) {
+            SnapshotTilemap *t = &s->tilemaps[i];
+            Room *room = &r->dataWin->room.rooms[t->room];
+            if (t->count) memcpy(room->layers[t->layer].tilesData->tileData, t->cells,
+                                 (size_t)t->count * sizeof(uint32_t));
+        }
+    } else {
+        s->oldLayers = NULL;
     }
     r->currentIni = s->currentIni;
     r->currentIniPath = s->currentIniPath;

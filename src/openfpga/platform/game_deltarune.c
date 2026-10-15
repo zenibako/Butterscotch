@@ -12,6 +12,9 @@
 #include "runner.h"
 #include "rvalue.h"
 #include "vm.h"
+#include "stb_ds.h"
+#include "of_state_requests.h"
+#include <string.h>
 
 #define DELTARUNE_GRASS_MAX_CELLS 4096
 
@@ -214,12 +217,22 @@ static const OfBenchSection g_sections[] = {
     { "battle: next turn", 3600, "bnext" },
 };
 
-/* Save states are not supported yet: every save is refused with this reason.
- * The program still answers each save and load request (of_state_requests.c),
- * because it shares a core, and so the Pocket's sleep switch, with Undertale. */
+/* Save states (of_state_requests.c) are taken anywhere the runner can save
+ * them exactly, except while the player is in a cutscene: the same rule as
+ * Undertale's (game_undertale.c), on the same marker, obj_mainchara.cutscene.
+ * Only the build this was measured on (Chapter 1, WAD 17) is accepted. */
 static const char *savestateReason(Runner *r) {
-    (void)r;
-    return "Save states aren't ready for Deltarune yet";
+    if (r->dataWin->gen8.wadVersion != 17 || strcmp(r->dataWin->gen8.name, "DELTARUNE"))
+        return "Unsupported game version";
+    for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
+        Instance *inst = r->instances[i];
+        if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
+            (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
+        const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
+        if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
+            return "Can't save during cutscenes";
+    }
+    return NULL;
 }
 
 const OfGame ofGame = {
