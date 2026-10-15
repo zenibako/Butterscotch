@@ -2566,7 +2566,7 @@ static void validateRendererVtable(Renderer* renderer) {
 
 void Runner_updateAudio(Runner* runner, float deltaTime) {
     if (deltaTime > 0 && arrlen(runner->audioEmitters)) {
-        uint64_t elapsed = (uint64_t)(deltaTime * 1000000000.0f);
+        uint64_t elapsed = (uint64_t)(int64_t)(deltaTime * 1000000000.0f);
         runner->audioEmitterClockNanos += elapsed;
         if (runner->audioSystem->vtable->pauseStopsFades) {
             bool allPaused = runner->audioSystem->vtable->isAllPaused != nullptr &&
