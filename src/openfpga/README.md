@@ -99,7 +99,7 @@ make copy       # copy the core to a mounted Pocket SD card
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
 
-### Save states and sleep (experimental; Undertale, with Deltarune to follow)
+### Save states and sleep (experimental; Undertale and Deltarune Chapter 1)
 
 The save-state build requires a matching os25 runtime with
 `INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build the
@@ -147,8 +147,9 @@ separate; loading a save state rewinds its captured progress files.
 
 Both games run under the one core, and the Pocket's sleep and Memories
 switch (`sleep_supported` in `core.json`) belongs to the core, so each game's
-program answers every save and load request. Deltarune refuses every save
-for now, with "Save states aren't ready for Deltarune yet". A state is bound
+program answers every save and load request. Deltarune (Chapter 1) follows
+the same scene rule as Undertale, refusing only while the player is in a
+cutscene (`obj_mainchara.cutscene`). A state is bound
 to the game and the exact `data.win` it was taken with. The Pocket lists
 every game's Memories together, so loading one into the other game, or after
 the game's data has changed, is refused with "This Memory is from another
@@ -165,9 +166,14 @@ Analogue menu to keep it. The log records capture sizes, elapsed time,
 transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
-Core format revision 6 uses lossless Zstandard compression, references strings
-already present in the matching game data, and carries persistent rooms' saved
-state; states from revisions 3 through 5 remain readable. Native builds avoid the renderer's large allocation probe
+Core format revision 8 uses lossless Zstandard compression, references strings
+already present in the matching game data, carries persistent rooms' saved
+state, and holds GameMaker 2.3 values (methods, structs and GMS 2 arrays), the
+VM's static-block flags, the current room's runtime layers and every loaded
+room's legacy tiles and tilemap cells; states from revisions 3 through 7 remain
+readable. Vertex formats and empty vertex buffers a game makes at start are not
+saved: a load keeps the game's own and is refused if they differ from the state's.
+Native builds avoid the renderer's large allocation probe
 when the OS can prove the reserve fits, otherwise retaining the original probe.
 The first reserve check logs the allocation and query timings for comparison.
 State-request logs include refusal reasons and separate load receive,

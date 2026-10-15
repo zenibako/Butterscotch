@@ -113,6 +113,41 @@ static void invalidIniMagic(uint8_t *raw, size_t n) {
         }
     assert(false);
 }
+/* A zero-tilemap fixture has one revision-8 count before the vertex slots. */
+static void toRevision7(uint8_t *raw, uint32_t *rawLen) {
+    size_t ini = *rawLen - 8;
+    while (ini > 0 && le32(raw + ini) != 0x31494e49u) ini--;
+    assert(ini >= 68 && le32(raw + ini - 56) == 0);
+    memmove(raw + ini - 56, raw + ini - 52, *rawLen - (ini - 52));
+    *rawLen -= 4;
+}
+/* Revision 7 added a layout byte (and, for GMS 2.3 games, an owner token) to
+ * each array, the method and struct tables after the arrays, and the static
+ * block flags, runtime layers, legacy tile layers and vertex resource slots
+ * before the dormant pools. Strip them from a WAD 16 fixture's
+ * body that has no methods, structs or static flags. */
+static void toRevision6(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
+    toRevision7(raw, rawLen);
+    size_t at = roomBlock(raw, *rawLen, rooms) + 4 + rooms;
+    for (uint32_t i = 0; i < rooms; i++)
+        at += 12 + 2 + 4 + (size_t)le32(raw + at + 14) * sizeof(RoomTile);
+    uint32_t arrays = le32(raw + at); at += 4;
+    for (uint32_t i = 0; i < arrays; i++) {
+        assert(raw[at] == 0); /* legacy layout */
+        memmove(raw + at, raw + at + 1, *rawLen - at - 1); *rawLen -= 1;
+        at += 8 + 4 * (size_t)le32(raw + at + 4);
+    }
+    /* at: tile layer count, preceded by the method and struct counts */
+    assert(le32(raw + at) == 0 && le32(raw + at + 4) == 0);
+    memmove(raw + at, raw + at + 8, *rawLen - at - 8); *rawLen -= 8;
+    size_t ini = *rawLen - 8;
+    while (ini > 0 && le32(raw + ini) != 0x31494e49u) ini--;
+    /* static flags, runtime layers, legacy tile layers, vertex format and
+     * buffer slots: five zero counts before the dormant pools */
+    assert(ini >= 64);
+    for (size_t k = 64; k > 44; k -= 4) assert(le32(raw + ini - k) == 0);
+    memmove(raw + ini - 64, raw + ini - 44, *rawLen - (ini - 44)); *rawLen -= 20;
+}
 /* Revision 6 added the saved persistent rooms after the live instances.
  * Older revisions lack that count; drop it from a body with no instances. */
 static void dropSavedRooms(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
@@ -213,6 +248,14 @@ static void destroyFixture(Runner *r) {
     SpatialGrid_free(r->spatialGrid);
     Ini_free(r->currentIni); free(r->currentIniPath);
     Ini_free(r->cachedIni); free(r->cachedIniPath);
+    /* Registry-owned structs can form cycles through arrays. Release all
+     * contents before their shells, as in the runner's teardown. */
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        r->structInstances[i]->structRegistryIndex = -1;
+        Instance_freeContents(r->structInstances[i]);
+    }
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) free(r->structInstances[i]);
+    arrfree(r->structInstances);
     arrfree(r->eventDispatchInstances);
     arrfree(r->cachedDrawables);
 }
@@ -347,15 +390,37 @@ static void testBlockersListsEveryRefusal(void) {
 
     /* The vertex buffer table is a plain array sized by vertexBufferCount,
      * not an stb_ds array: the preflight must bound it by that count. */
+    /* Revision 7 keeps the game's own vertex resources across a load, so an
+     * empty pool and an unused buffer are fine; a written one is refused. */
     r.vertexBufferCount = 4;
     r.vertexBuffers = calloc(4, sizeof(*r.vertexBuffers));
     assert(r.vertexBuffers);
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    Buffer_Vertex buffer; memset(&buffer, 0, sizeof(buffer));
+    r.vertexBuffers[3] = &buffer;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 69, &bytes, &size, &reason));
+    buffer.vertexCount = 3;
     assert(Runner_snapshotBlockers(&r, why, 8) == 1);
-    assert(listed(why, 1, "Vertex buffer count is unsupported"));
-    r.vertexBuffers[3] = (Buffer_Vertex *)&r;   /* any non-null entry is a live buffer */
-    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
-    assert(listed(why, 2, "Live vertex buffer is unsupported"));
+    assert(listed(why, 1, "Vertex buffer contents are unsupported"));
     assert(Runner_snapshotCheck(&r) != NULL);
+    buffer.vertexCount = 0;
+    buffer.currentMask = 1; /* A partial vertex has not advanced the stream. */
+    assert(Runner_snapshotBlockers(&r, why, 8) == 1);
+    assert(listed(why, 1, "Vertex buffer contents are unsupported"));
+    assert(Runner_snapshotPrepare(&r, 69, bytes, size, &reason) == NULL);
+    assert(buffer.currentMask == 1);
+    buffer.currentMask = 0;
+    VmVertexFormat activeFormat = {0};
+    buffer.pCurrentFormatVFRelease = &activeFormat; /* vertex_begin alone */
+    assert(Runner_snapshotCheck(&r) != NULL);
+    assert(Runner_snapshotPrepare(&r, 69, bytes, size, &reason) == NULL);
+    assert(buffer.pCurrentFormatVFRelease == &activeFormat);
+    buffer.pCurrentFormatVFRelease = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 69, bytes, size, &reason);
+    assert(prepared); Runner_snapshotFree(prepared); free(bytes);
     free(r.vertexBuffers);
     r.vertexBuffers = NULL;
     r.vertexBufferCount = 0;
@@ -854,6 +919,7 @@ static void testOlderCoreV3Trailers(void) {
     assert(Runner_snapshotCapture(&r, 56, &bytes, &size, &reason));
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 3);
     free(raw);
@@ -874,6 +940,7 @@ static void testRevision5WithoutSavedRooms(void) {
     assert(Runner_snapshotCapture(&r, 59, &bytes, &size, &reason));
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 5);
     free(raw);
@@ -882,6 +949,300 @@ static void testRevision5WithoutSavedRooms(void) {
     assert(s);
     Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
     free(bytes); destroyFixture(&r);
+}
+
+#if IS_WAD17_OR_HIGHER_ENABLED
+/* Revision 7: a GMS 2.3 struct whose GMS2 array holds the struct itself and a
+ * method that two globals share; the array's owner is a scope token, and the
+ * VM's static-block flags come back with the state. */
+static void testGms2ValuesRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    dw.gen8.wadVersion = 17;
+    dw.detectedFormat.major = 2; dw.detectedFormat.minor = 3;
+    CodeEntry entries[2]; memset(entries, 0, sizeof(entries));
+    entries[0].present = entries[1].present = true;
+    dw.code.entries = entries; dw.code.count = 2;
+    vm.staticInitialized = calloc(2, sizeof(bool));
+    vm.staticInitialized[1] = true;
+
+    Instance *st = Runner_createStruct(&r);
+    uint32_t structId = st->instanceId;
+    GMLArray *items = GMLArray_create(&dw, 2);
+    assert(items->type == GML_MODERN_ARRAY);
+    items->owner = (void *)(uintptr_t)1234;
+    GMLMethod *method = GMLMethod_create(1, (int32_t)structId);
+    /* The setters take their own reference; ours are dropped below. */
+    GMLArray_set(items, 0, RValue_makeStructWeak(st));
+    GMLArray_set(items, 1, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(st, 5, RValue_makeArrayWeak(items));
+    Instance_setSelfVar(vm.globalScopeInstance, 1, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(vm.globalScopeInstance, 2, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(vm.globalScopeInstance, 3, RValue_makeStructWeak(st));
+    GMLArray_decRef(items); GMLMethod_decRef(method);
+    assert(st->refCount == 3 && method->refCount == 3);
+
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 77, &bytes, &size, &reason));
+    assert(le32(bytes + 4) == 8);
+
+    /* Disturb the live state, then load. */
+    Instance_setSelfVar(vm.globalScopeInstance, 2, RValue_makeReal(0));
+    vm.staticInitialized[1] = false; vm.staticInitialized[0] = true;
+    RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 77, bytes, size, &reason);
+    assert(snap);
+    Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+
+    assert(arrlen(r.structInstances) == 1);
+    Instance *back = r.structInstances[0];
+    assert(back != st && back->instanceId == structId && back->structRegistryIndex == 0);
+    assert(back->refCount == 3); /* the registry, global 3, and items[0] */
+    int key = (int)structId;
+    assert(hmget(r.instancesById, key) == back);
+    RValue m1 = Instance_getSelfVar(vm.globalScopeInstance, 1);
+    RValue m2 = Instance_getSelfVar(vm.globalScopeInstance, 2);
+    assert(m1.type == RVALUE_METHOD && m2.type == RVALUE_METHOD && m1.method == m2.method);
+    assert(m1.method->codeIndex == 1 && m1.method->boundInstanceId == (int32_t)structId);
+    RValue s3 = Instance_getSelfVar(vm.globalScopeInstance, 3);
+    assert(s3.type == RVALUE_STRUCT && s3.structInst == back);
+    RValue arr = Instance_getSelfVar(back, 5);
+    assert(arr.type == RVALUE_ARRAY && arr.array->type == GML_MODERN_ARRAY);
+    assert(arr.array->owner == (void *)(uintptr_t)1234 && arr.array->modern.length == 2);
+    assert(arr.array->modern.data[0].type == RVALUE_STRUCT && arr.array->modern.data[0].structInst == back);
+    assert(arr.array->modern.data[1].type == RVALUE_METHOD && arr.array->modern.data[1].method == m1.method);
+    assert(m1.method->refCount == 3); /* globals 1 and 2, and items[1] */
+    assert(!vm.staticInitialized[0] && vm.staticInitialized[1]);
+
+    /* A method that points at no code is not saved. */
+    free(bytes); bytes = NULL;
+    RValue invalidMethod = RValue_makeMethod(GMLMethod_create(7, -1));
+    Instance_setSelfVar(vm.globalScopeInstance, 4, invalidMethod);
+    RValue_free(&invalidMethod);
+    assert(!Runner_snapshotCapture(&r, 77, &bytes, &size, &reason));
+    free(bytes); free(vm.staticInitialized);
+    destroyFixture(&r);
+}
+#endif
+
+/* Revision 7: the current room's runtime layers. Elements that borrow from
+ * the parsed room (a tilemap, a legacy tile, a sprite's name) come back
+ * pointing at the same room data; an owned tile and a dynamic layer's name
+ * come back as copies; legacy tiles moved after the capture are put back;
+ * the game's own vertex format is kept when it matches. */
+static void testRuntimeLayersRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint32_t cells[4] = {1, 2, 3, 4};
+    RoomLayerTilesData tilemap = {0, 2, 2, cells};
+    RoomTile legacy[2]; memset(legacy, 0, sizeof(legacy));
+    legacy[0].x = 10; legacy[1].x = 20;
+    static const char spriteName[] = "graphic_lamp";
+    SpriteInstance sprites[1]; memset(sprites, 0, sizeof(sprites));
+    sprites[0].name = spriteName;
+    RoomLayerAssetsData assets = {2, legacy, 1, sprites};
+    RoomLayer layers[2]; memset(layers, 0, sizeof(layers));
+    layers[0].type = RoomLayerType_Tiles; layers[0].tilesData = &tilemap;
+    layers[1].type = RoomLayerType_Assets; layers[1].assetsData = &assets;
+    room.layers = layers; room.layerCount = 2;
+
+    RuntimeLayer parsed; memset(&parsed, 0, sizeof(parsed));
+    parsed.id = 5; parsed.depth = 100; parsed.visible = true;
+    parsed.beginScript = parsed.endScript = parsed.shaderIndex = -1;
+    RuntimeLayerElement el; memset(&el, 0, sizeof(el));
+    el.id = 6; el.type = RuntimeLayerElementType_Tilemap; el.visible = true; el.tilemapData = &tilemap;
+    arrput(parsed.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 7; el.type = RuntimeLayerElementType_Tile; el.tileElement = &legacy[1]; el.alpha = 0.5f;
+    arrput(parsed.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 8; el.type = RuntimeLayerElementType_Sprite;
+    el.spriteElement = calloc(1, sizeof(RuntimeSpriteElement));
+    el.spriteElement->name = spriteName; el.spriteElement->x = 33;
+    arrput(parsed.elements, el);
+    arrput(r.runtimeLayers, parsed);
+    RuntimeLayer dynamic; memset(&dynamic, 0, sizeof(dynamic));
+    dynamic.id = 9; dynamic.dynamic = true; dynamic.dynamicName = strdup("_layer_9");
+    dynamic.beginScript = dynamic.endScript = dynamic.shaderIndex = -1;
+    memset(&el, 0, sizeof(el));
+    el.id = 10; el.type = RuntimeLayerElementType_Tile; el.tileElementOwned = true;
+    el.tileElement = calloc(1, sizeof(RoomTile)); el.tileElement->y = 44;
+    arrput(dynamic.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 11; el.type = RuntimeLayerElementType_Instance; el.instanceId = 100001;
+    arrput(dynamic.elements, el);
+    arrput(r.runtimeLayers, dynamic);
+    VmVertexElement elements[1] = {{0, (enum yyVertexType)1, (enum yyVertexUsage)1, 1}};
+    VmVertexFormat format; memset(&format, 0, sizeof(format));
+    format.id = 1; format.count = 1; format.format = elements; format.size = 12;
+    arrsetlen(r.vertexFormats, 2); r.vertexFormats[0] = NULL; r.vertexFormats[1] = &format;
+
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 66, &bytes, &size, &reason));
+    legacy[1].x = 99; /* layer_tile_x after the capture */
+    cells[0] = 99; /* tilemap_set after the capture */
+    RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 66, bytes, size, &reason);
+    assert(snap);
+    assert(cells[0] == 99); /* Preparation must leave live cells alone. */
+    Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+    assert(cells[0] == 1 && cells[3] == 4);
+
+    assert(arrlen(r.runtimeLayers) == 2);
+    RuntimeLayer *a = &r.runtimeLayers[0], *b = &r.runtimeLayers[1];
+    assert(a->id == 5 && a->depth == 100 && a->visible && !a->dynamicName && arrlen(a->elements) == 3);
+    assert(a->elements[0].type == RuntimeLayerElementType_Tilemap && a->elements[0].tilemapData == &tilemap);
+    assert(a->elements[1].tileElement == &legacy[1] && !a->elements[1].tileElementOwned &&
+           a->elements[1].alpha == 0.5f);
+    assert(legacy[1].x == 20 && legacy[0].x == 10); /* put back */
+    assert(a->elements[2].spriteElement && a->elements[2].spriteElement->name == spriteName &&
+           a->elements[2].spriteElement->x == 33);
+    assert(b->dynamic && b->dynamicName && !strcmp(b->dynamicName, "_layer_9") && arrlen(b->elements) == 2);
+    assert(b->elements[0].tileElementOwned && b->elements[0].tileElement->y == 44);
+    assert(b->elements[1].type == RuntimeLayerElementType_Instance && b->elements[1].instanceId == 100001);
+    assert(arrlen(r.vertexFormats) == 2 && r.vertexFormats[1] == &format); /* kept */
+
+    /* A changed vertex format is not the game the state was taken from. */
+    format.size = 16;
+    assert(Runner_snapshotPrepare(&r, 66, bytes, size, &reason) == NULL);
+    format.size = 12;
+    /* An element pointing outside the room's data is not saved. */
+    RoomTile stray; memset(&stray, 0, sizeof(stray));
+    r.runtimeLayers[0].elements[1].tileElement = &stray;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    r.runtimeLayers[0].elements[1].tileElement = &legacy[1];
+    free(bytes);
+    for (ptrdiff_t i = 0; i < arrlen(r.runtimeLayers); i++) Runner_freeRuntimeLayer(&r.runtimeLayers[i]);
+    arrfree(r.runtimeLayers);
+    arrfree(r.vertexFormats); r.vertexFormats = NULL;
+    room.layers = NULL; room.layerCount = 0;
+    destroyFixture(&r);
+}
+
+/* Parsed tilemaps without a live layer element still carry game mutations.
+ * Restore into a separate runner with pristine room payloads as on cold load. */
+static void testTilemapCellsColdRestore(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room rooms[2]; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    rooms[1] = rooms[0]; dw.room.count = 2;
+    uint32_t cells[2][2] = {{0xf0000042u, 3}, {17, 0x40000004u}};
+    RoomLayerTilesData maps[2] = {{0, 2, 1, cells[0]}, {0, 1, 2, cells[1]}};
+    RoomLayer layers[2]; memset(layers, 0, sizeof(layers));
+    for (int i = 0; i < 2; i++) {
+        layers[i].type = RoomLayerType_Tiles; layers[i].tilesData = &maps[i];
+        rooms[i].layers = &layers[i]; rooms[i].layerCount = 1;
+    }
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 67, &bytes, &size, &reason));
+    destroyFixture(&r);
+
+    fixture(&r, &dw, &vm, &renderer, &vtable, &rooms[0], &object);
+    rooms[1] = rooms[0]; dw.room.count = 2;
+    for (int i = 0; i < 2; i++) {
+        cells[i][0] = cells[i][1] = 0;
+        rooms[i].layers = &layers[i]; rooms[i].layerCount = 1;
+    }
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    size_t header = 0;
+    for (size_t i = 20; i + 4 <= rawLen; i++)
+        if (le32(raw + i) == 0xf0000042u) { header = i - 16; break; }
+    assert(header && le32(raw + header - 4) == 2);
+    for (int fault = 0; fault < 5; fault++) {
+        uint8_t *changed = malloc(rawLen), *bad = malloc(size);
+        assert(changed && bad);
+        memcpy(changed, raw, rawLen); memcpy(bad, bytes, size);
+        size_t badSize = size; uint32_t changedLen = rawLen;
+        if (fault == 0) write32(changed + header + 8, UINT32_MAX); /* width */
+        if (fault == 1) write32(changed + header, 2); /* missing room */
+        if (fault == 2) write32(changed + header + 24, 0); /* duplicate map */
+        if (fault == 3) write32(changed + header - 4, UINT32_MAX); /* map count */
+        if (fault == 4) { /* Validly framed, but omits both loaded maps. */
+            write32(changed + header - 4, 0);
+            memmove(changed + header, changed + header + 48, rawLen - header - 48);
+            changedLen -= 48;
+        }
+        encodeRaw(&bad, &badSize, changed, changedLen, 8);
+        assert(Runner_snapshotPrepare(&r, 67, bad, badSize, &reason) == NULL);
+        assert(cells[0][0] == 0 && cells[1][0] == 0 && r.frameCount == 42);
+        free(changed); free(bad);
+    }
+    free(raw);
+    RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 67, bytes, size, &reason);
+    assert(snap && cells[0][0] == 0 && cells[1][0] == 0);
+    Runner_snapshotFree(snap); /* Abandoning a prepared load changes no cells. */
+    assert(cells[0][0] == 0 && cells[1][0] == 0);
+    snap = Runner_snapshotPrepare(&r, 67, bytes, size, &reason);
+    assert(snap);
+    Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+    assert(cells[0][0] == 0xf0000042u && cells[0][1] == 3);
+    assert(cells[1][0] == 17 && cells[1][1] == 0x40000004u);
+    maps[1].tileData = NULL;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    maps[1].tileData = cells[1]; maps[1].tilesY = UINT32_MAX;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    maps[1].tilesY = 2;
+    free(rooms[1].tiles); rooms[1].tiles = NULL;
+    free(bytes); destroyFixture(&r);
+}
+
+/* Legacy formats describe no live vertex resources. Never displace a plain
+ * buffer pool with their dormant stb arrays, or free it as an stb array. */
+static void testLegacyLoadRefusesLiveVertexResources(void) {
+    for (uint32_t version = 3; version <= 6; version++) {
+        Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+        Room room; GameObject object;
+        fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+        uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+        assert(Runner_snapshotCapture(&r, 70, &bytes, &size, &reason));
+        uint32_t rawLen;
+        uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+        toRevision6(raw, &rawLen, 1);
+        if (version < 6) dropSavedRooms(raw, &rawLen, 1);
+        encodeRaw(&bytes, &size, raw, rawLen, version); free(raw);
+
+        r.vertexBufferCount = 4;
+        r.vertexBuffers = calloc(4, sizeof(*r.vertexBuffers));
+        assert(r.vertexBuffers);
+        Buffer_Vertex **buffers = r.vertexBuffers;
+        assert(Runner_snapshotPrepare(&r, 70, bytes, size, &reason) == NULL);
+        assert(reason && !strcmp(reason, "The game's vertex resources differ from the state's"));
+        assert(r.vertexBuffers == buffers && r.vertexBufferCount == 4 && r.frameCount == 42);
+        free(buffers); r.vertexBuffers = NULL; r.vertexBufferCount = 0;
+
+        VmVertexFormat format = {0}; format.id = 7;
+        arrput(r.vertexFormats, &format);
+        assert(Runner_snapshotPrepare(&r, 70, bytes, size, &reason) == NULL);
+        assert(r.vertexFormats[0] == &format && format.id == 7);
+        r.vertexFormats[0] = NULL; /* Dormant slots remain compatible. */
+        RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 70, bytes, size, &reason);
+        assert(snap); Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+        free(bytes); destroyFixture(&r);
+    }
+}
+
+static void testRevisions6And7StillLoad(void) {
+    for (uint32_t version = 6; version <= 7; version++) {
+        Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+        Room room; GameObject object;
+        fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+        r.score = 123;
+        uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+        assert(Runner_snapshotCapture(&r, 68, &bytes, &size, &reason));
+        uint32_t rawLen;
+        uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+        if (version == 6) toRevision6(raw, &rawLen, 1);
+        else toRevision7(raw, &rawLen);
+        encodeRaw(&bytes, &size, raw, rawLen, version);
+        free(raw);
+        r.score = 0;
+        RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 68, bytes, size, &reason);
+        assert(snap);
+        Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+        assert(r.score == 123);
+        free(bytes); destroyFixture(&r);
+    }
 }
 
 static void testZstdV4FrameValidation(void) {
@@ -894,9 +1255,10 @@ static void testZstdV4FrameValidation(void) {
     memcpy(&r.lives, &livesBits, sizeof(livesBits));
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 58, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 6);
+    assert(le32(bytes + 4) == 8);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 4);
     assert(le32(bytes + 4) == 4);
@@ -1074,7 +1436,7 @@ static void testStaticStringReferences(void) {
     arrput(r.dsListPool, list);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 91, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 6);
+    assert(le32(bytes + 4) == 8);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
     dw.strg.count = 0;
@@ -1119,7 +1481,7 @@ static void testStaticStringReferences(void) {
     uint8_t *bad = malloc(size); assert(bad); memcpy(bad, bytes, size);
     write32(raw + ref, 0x80000002u);
     size_t badSize = size;
-    encodeRaw(&bad, &badSize, raw, rawLen, 6);
+    encodeRaw(&bad, &badSize, raw, rawLen, 8);
     assert(Runner_snapshotPrepare(&r, 91, bad, badSize, &reason) == NULL);
     free(bad); free(raw); free(bytes);
     destroyFixture(&r);
@@ -1178,7 +1540,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
     assert(runs == 1); /* Exactly the 64 consecutive list values. */
     for (int j = 0; j < 64; j++)
         write32(raw + run + (size_t)j * 8u + 4u, 0x80000001u);
-    encodeRaw(&bytes, &size, raw, rawLen, 6);
+    encodeRaw(&bytes, &size, raw, rawLen, 8);
     assert(size < 1024u * 1024u);
     assert(Runner_snapshotPrepare(&r, 93, bytes, size, &reason) == NULL);
     assert(r.frameCount == 42 && arrlen(r.dsListPool[0].items) == 64);
@@ -1196,6 +1558,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
 }
 
 int main(void) {
+    testBlockersListsEveryRefusal();
     testRestoreDiscardsLiveSavedRoomResources();
     testPersistentSavedRoomRoundTrip();
     testStaticStringReferences();
@@ -1203,11 +1566,17 @@ int main(void) {
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
     testRevision5WithoutSavedRooms();
+    testLegacyLoadRefusesLiveVertexResources();
+    testRevisions6And7StillLoad();
+    testTilemapCellsColdRestore();
+    testRuntimeLayersRoundTrip();
+#if IS_WAD17_OR_HIGHER_ENABLED
+    testGms2ValuesRoundTrip();
+#endif
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
     testPausedCaptureEligibility();
     testDynamicSpriteCaptureEligibility();
-    testBlockersListsEveryRefusal();
     testBlockersWithInvalidSpriteRegistry();
     testAllLoadedRoomsAndDefinitions();
     testDormantPoolHoleRefuses();

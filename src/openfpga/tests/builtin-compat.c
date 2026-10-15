@@ -228,18 +228,35 @@ static void testEmitter(VMContext *ctx, const char *property) {
     ctx->runner->audioSystem = NULL;
 }
 
+static void testDynamicSpriteName(VMContext *ctx) {
+    RuntimeLayer layer = {0}; layer.id = 5;
+    arrput(ctx->runner->runtimeLayers, layer);
+    RValue args[] = {RValue_makeReal(5), RValue_makeReal(10),
+                    RValue_makeReal(20), RValue_makeReal(3)};
+    RValue id = call(ctx, "layer_sprite_create", args, 4);
+    RuntimeLayer *created = &ctx->runner->runtimeLayers[0];
+    assert(arrlen(created->elements) == 1);
+    assert(created->elements[0].id == (uint32_t)RValue_toInt32(id));
+    RuntimeSpriteElement *sprite = created->elements[0].spriteElement;
+    assert(sprite && sprite->name == NULL);
+    assert(sprite->x == 10 && sprite->y == 20 && sprite->spriteIndex == 3);
+    Runner_freeRuntimeLayer(created);
+    arrfree(ctx->runner->runtimeLayers);
+}
+
 int main(int argc, char **argv) {
     DataWin data = {0}; Runner runner = {0}; VMContext ctx = {0};
     data.gen8.wadVersion = 16;
     runner.dataWin = &data;
     ctx.dataWin = &data; ctx.runner = &runner;
     VMBuiltins_registerAll(&ctx);
+    if (argc == 1 || !strcmp(argv[1], "sprite")) testDynamicSpriteName(&ctx);
     if (argc == 1 || !strcmp(argv[1], "date")) testDateStrings(&ctx);
     const char *properties[] = {"gain", "pitch", "velocity"};
     for (int i = 0; i < 3; i++)
         if (argc == 1 || !strcmp(argv[1], properties[i])) testEmitter(&ctx, properties[i]);
     arrfree(runner.audioEmitters);
     shfree(ctx.builtinMap);
-    puts("PASS: date string ownership and emitter gain/pitch/velocity compatibility");
+    puts("PASS: dynamic sprite name, date strings and emitter compatibility");
     return 0;
 }
