@@ -18,7 +18,8 @@
 
 /* This is a same-build, WAD16-only wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 6u
+#define SNAP_VERSION 7u
+#define SNAP_SAVED_ROOM_VERSION 6u
 #define SNAP_STRING_REF_VERSION 5u
 #define SNAP_ZSTD_LEGACY_VERSION 4u
 #define SNAP_LEGACY_VERSION 3u
@@ -194,7 +195,7 @@ static RunnerPlain makePlain(const Runner *r) {
     return p;
 }
 
-typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY, SLOT_SAVED } SlotKind;
+typedef enum { SLOT_GLOBAL, SLOT_INSTANCE, SLOT_MAP, SLOT_LIST, SLOT_ARRAY, SLOT_SAVED, SLOT_STRUCT } SlotKind;
 typedef struct { SlotKind kind; uint32_t container, index; char *key; } SlotRef;
 typedef struct { GMLArray *array; uint32_t ownerSlot; } ArrayRef;
 typedef struct { char *key; int32_t value; } SnapshotVarName;
@@ -246,6 +247,11 @@ struct RunnerSnapshot {
     SnapshotVarName *varNames;
     GMLArray **arrays; /* one temporary strong ref per array */
     uint32_t *owners;
+    /* Revision 7 (GMS2): methods hold one table ref each until freed; structs
+     * are the registry, in order, each counting the registry's +1. */
+    GMLMethod **methods;
+    Instance **structs;
+    bool *staticInitialized;
     SlotRef *slots;
     SnapshotRoom *roomStates;
     uint32_t roomCount;
@@ -257,6 +263,7 @@ struct RunnerSnapshot {
     /* After apply these are the displaced live allocations, freed by Free. */
     Instance *oldGlobal;
     Instance **oldInstances;
+    Instance **oldStructs;
     DsMapEntry **oldMaps;
     DsList *oldLists;
     IniFile *oldCurrentIni;
@@ -301,6 +308,16 @@ static void freeValues(Instance *global, Instance **instances, DsMapEntry **maps
         arrfree(lists[i].items);
     }
     arrfree(lists);
+}
+/* Structs refer to one another and to arrays; release every struct's values
+ * before any shell goes, as the runner's own teardown does. */
+static void freeStructs(Instance **structs) {
+    for (ptrdiff_t i = 0; i < arrlen(structs); i++) {
+        structs[i]->structRegistryIndex = -1;
+        Instance_freeContents(structs[i]);
+    }
+    for (ptrdiff_t i = 0; i < arrlen(structs); i++) free(structs[i]);
+    arrfree(structs);
 }
 static void freeDormantPools(DsQueue *queues, DsStack *stacks,
                              DsPriority *priorities, DsGrid *grids,
@@ -373,6 +390,11 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
     arrfree(s->savedInstances);
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) GMLArray_decRef(s->arrays[i]);
     arrfree(s->arrays); arrfree(s->owners); arrfree(s->slots);
+    for (ptrdiff_t i = 0; i < arrlen(s->methods); i++) GMLMethod_decRef(s->methods[i]);
+    arrfree(s->methods);
+    /* Last: an array released above may still drop a struct reference. */
+    freeStructs(s->applied ? s->oldStructs : s->structs);
+    free(s->staticInitialized);
     if (s->roomStates) for (uint32_t i = 0; i < s->roomCount; i++) {
         SnapshotRoom *state = &s->roomStates[i];
         if (state->stagedLoaded) DataWin_freeRoomPayload(&state->stagedPayload);
@@ -417,7 +439,10 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         else if (reason) *reason = "Runner is not ready";
         return false;
     }
-    if (r->dataWin->gen8.wadVersion != 16) REFUSE("Only WAD16 Undertale state is supported");
+    /* GMS 2.3 (WAD 17) values are revision 7. Rooms with runtime layers, which
+     * every GMS 2 room has, are still refused below. */
+    if (r->dataWin->gen8.wadVersion != 16 && r->dataWin->gen8.wadVersion != 17)
+        REFUSE("Only WAD 16 and 17 state is supported");
     bool spritesValid = r->dataWin->sprt.parsedCount <= r->dataWin->sprt.count &&
         (!r->dataWin->sprt.count || r->dataWin->sprt.sprites);
     if (!spritesValid)
@@ -448,7 +473,6 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         for (uint32_t i = 0; i < r->dataWin->room.count; i++)
             if (r->physicsRooms[i]) REFUSE("Physics room is unsupported");
     }
-    if (arrlen(r->structInstances)) REFUSE("Live GML structs are unsupported");
     if (r->vmContext->staticStructs) {
         for (uint32_t i = 0; i < r->dataWin->code.count; i++)
             if (r->vmContext->staticStructs[i]) REFUSE("Static structs are unsupported");
@@ -549,10 +573,50 @@ int Runner_snapshotBlockers(Runner *r, const char **out, int max) {
     return all.count;
 }
 
-typedef struct { RValue **slots; GMLArray **arrays; } Graph;
+typedef struct {
+    RValue **slots; GMLArray **arrays;
+    GMLMethod **methods; /* revision 7: shared by identity, as GML compares them */
+    Runner *runner;
+} Graph;
 static int arrayIndex(const Graph *g, GMLArray *array) {
     for (ptrdiff_t i = 0; i < arrlen(g->arrays); i++) if (g->arrays[i] == array) return (int)i;
     return -1;
+}
+/* A method is saved as what made it: a code entry, or the function-table
+ * entry behind a built-in or an unresolved name (handleBreakPushRef). */
+enum { SNAP_METHOD_CODE, SNAP_METHOD_BUILTIN, SNAP_METHOD_UNRESOLVED };
+#if IS_WAD17_OR_HIGHER_ENABLED
+static int methodIndex(const Graph *g, GMLMethod *method) {
+    for (ptrdiff_t i = 0; i < arrlen(g->methods); i++) if (g->methods[i] == method) return (int)i;
+    return -1;
+}
+static bool methodSource(const Runner *r, const GMLMethod *m, uint8_t *kind, uint32_t *index) {
+    const DataWin *dw = r->dataWin;
+    if (m->builtin == NULL && m->unresolvedName == NULL) {
+        if (m->codeIndex < 0 || (uint32_t)m->codeIndex >= dw->code.count ||
+            !dw->code.entries[m->codeIndex].present) return false;
+        *kind = SNAP_METHOD_CODE; *index = (uint32_t)m->codeIndex; return true;
+    }
+    if (m->codeIndex != -1 || !r->vmContext->funcCallCache) return false;
+    for (uint32_t i = 0; i < dw->func.functionCount; i++) {
+        if (m->builtin && !m->unresolvedName &&
+            r->vmContext->funcCallCache[i].builtin == (void *)m->builtin) {
+            *kind = SNAP_METHOD_BUILTIN; *index = i; return true;
+        }
+        if (m->unresolvedName && !m->builtin && dw->func.functions[i].name == m->unresolvedName) {
+            *kind = SNAP_METHOD_UNRESOLVED; *index = i; return true;
+        }
+    }
+    return false;
+}
+#endif
+/* Structs are saved as the whole registry, in its order; a value names one
+ * by its place there. Static structs, and structs that inherit statics, are
+ * not saved. */
+static bool structSaved(const Runner *r, const Instance *st) {
+    return st && st->objectIndex == STRUCT_OBJECT_INDEX && st->structRegistryIndex >= 0 &&
+        st->structRegistryIndex < (int32_t)arrlen(r->structInstances) &&
+        r->structInstances[st->structRegistryIndex] == st && !st->staticParent && !st->destroyed;
 }
 static bool collect(Graph *g, RValue *slot) {
     if ((size_t)arrlen(g->slots) >= SNAP_MAX_ITEMS) return false;
@@ -565,12 +629,25 @@ static bool collect(Graph *g, RValue *slot) {
 #endif
         case RVALUE_STRING: return slot->string != NULL && strlen(slot->string) < SNAP_LIMIT;
         case RVALUE_ARRAY:
-            if (!slot->array || slot->array->type != GML_LEGACY_ARRAY) return false;
+            if (!slot->array || (slot->array->type != GML_LEGACY_ARRAY &&
+                                 slot->array->type != GML_MODERN_ARRAY)) return false;
             if (arrayIndex(g, slot->array) < 0) {
                 if ((size_t)arrlen(g->arrays) >= SNAP_MAX_ITEMS) return false;
                 arrput(g->arrays, slot->array);
             }
             return true;
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: {
+            uint8_t kind; uint32_t index;
+            if (!slot->method || !methodSource(g->runner, slot->method, &kind, &index)) return false;
+            if (methodIndex(g, slot->method) < 0) {
+                if ((size_t)arrlen(g->methods) >= SNAP_MAX_ITEMS) return false;
+                arrput(g->methods, slot->method);
+            }
+            return true;
+        }
+#endif
+        case RVALUE_STRUCT: return structSaved(g->runner, slot->structInst);
         default: return false;
     }
 }
@@ -598,8 +675,21 @@ static bool collectGraph(Runner *r, Graph *g) {
     for (ptrdiff_t i = 0; i < arrlen(r->dsListPool); i++)
         for (ptrdiff_t j = 0; j < arrlen(r->dsListPool[i].items); j++)
             if (!collect(g, &r->dsListPool[i].items[j])) return false;
+    /* The writer and reader visit values in this same order: array owners
+     * are restored by the position of their slot. */
+    if ((size_t)arrlen(r->structInstances) > SNAP_MAX_ITEMS) return false;
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        if (!structSaved(r, r->structInstances[i]) ||
+            !collectMap(g, &r->structInstances[i]->selfVars)) return false;
+    }
     for (ptrdiff_t a = 0; a < arrlen(g->arrays); a++) {
         GMLArray *array = g->arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            if (array->modern.length < 0 || array->modern.length > (int32_t)SNAP_MAX_ITEMS) return false;
+            for (int32_t i = 0; i < array->modern.length; i++)
+                if (!collect(g, &array->modern.data[i])) return false;
+            continue;
+        }
         if (array->legacy.rowCount < 0 || array->legacy.rowCount > 1024) return false;
         for (int32_t row = 0; row < array->legacy.rowCount; row++) {
             GMLArrayRow *rr = &array->legacy.rows[row];
@@ -702,6 +792,10 @@ static void putValue(Writer *w, const Graph *g, RValue *v) {
 #endif
         case RVALUE_STRING: putString(w, v->string); break;
         case RVALUE_ARRAY: put32(w, (uint32_t)arrayIndex(g, v->array)); break;
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: put32(w, (uint32_t)methodIndex(g, v->method)); break;
+#endif
+        case RVALUE_STRUCT: put32(w, (uint32_t)v->structInst->structRegistryIndex); break;
         default: w->ok = false; w->failure = "Unsupported snapshot value"; break;
     }
 }
@@ -725,9 +819,10 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
 #endif
     if (!eligible(r, reason, true, NULL)) return false;
     Graph g = {0};
+    g.runner = r;
     if (!collectGraph(r, &g)) {
         if (reason) *reason = "Unsupported value graph";
-        arrfree(g.slots); arrfree(g.arrays); return false;
+        arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods); return false;
     }
 #ifdef PLATFORM_BUSY_TICK
     phase[1] = nowNanos();
@@ -736,7 +831,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (!buildStringIndex(&w, &r->dataWin->strg)) {
         if (reason) *reason = "Runner snapshot string dictionary unavailable";
         free(w.stringIndex);
-        arrfree(g.slots); arrfree(g.arrays); return false;
+        arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods); return false;
     }
     put32(&w, SNAP_MAGIC); put32(&w, SNAP_VERSION); put64(&w, gameId);
     put32(&w, 0); put32(&w, 0); /* length and checksum filled below */
@@ -755,8 +850,21 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         if (loaded) put(&w, room->tiles, (size_t)room->tileCount * sizeof(RoomTile));
     }
     put32(&w, (uint32_t)arrlen(g.arrays));
+    /* GMS 2.3 bytecode owns arrays by a scope token (BREAK_SETOWNER), not by
+     * the slot holding them: revision 7 keeps that token as it is. */
+    bool tokenOwners = IS_WAD17_OR_HIGHER(r->vmContext);
     for (ptrdiff_t i = 0; i < arrlen(g.arrays); i++) {
         GMLArray *a = g.arrays[i];
+        uint8_t modern = a->type == GML_MODERN_ARRAY;
+        put(&w, &modern, 1);
+        if (tokenOwners) put64(&w, (uint64_t)(uintptr_t)a->owner);
+        if (modern) { put32(&w, (uint32_t)a->modern.length); continue; }
+        if (tokenOwners) {
+            put32(&w, (uint32_t)a->legacy.rowCount);
+            for (int32_t row = 0; row < a->legacy.rowCount; row++)
+                put32(&w, (uint32_t)a->legacy.rows[row].length);
+            continue;
+        }
         uint32_t owner = slotIndex(&g, a->owner);
         /* A dead legacy owner slot must remain non-null and distinct from
          * every live slot, so a shared array still forks on the next write. */
@@ -768,6 +876,22 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         put32(&w, (uint32_t)a->legacy.rowCount);
         for (int32_t row = 0; row < a->legacy.rowCount; row++)
             put32(&w, (uint32_t)a->legacy.rows[row].length);
+    }
+    put32(&w, (uint32_t)arrlen(g.methods));
+#if IS_WAD17_OR_HIGHER_ENABLED
+    for (ptrdiff_t i = 0; i < arrlen(g.methods); i++) {
+        uint8_t kind = 0; uint32_t index = 0;
+        methodSource(r, g.methods[i], &kind, &index);
+        put(&w, &kind, 1); put32(&w, index);
+        put32(&w, (uint32_t)g.methods[i]->boundInstanceId);
+    }
+#endif
+    put32(&w, (uint32_t)arrlen(r->structInstances));
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++) {
+        const Instance *st = r->structInstances[i];
+        uint8_t pinned = st->pinned;
+        put32(&w, st->instanceId); put(&w, &pinned, 1);
+        put32(&w, (uint32_t)st->constructorCodeIndex);
     }
     put32(&w, (uint32_t)hmlen(r->tileLayerMap));
     for (ptrdiff_t i = 0; i < hmlen(r->tileLayerMap); i++)
@@ -822,11 +946,26 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
         put(&w, &freed, 1); put32(&w, (uint32_t)arrlen(list->items));
         for (ptrdiff_t j = 0; j < arrlen(list->items); j++) putValue(&w, &g, &list->items[j]);
     }
+    for (ptrdiff_t i = 0; i < arrlen(r->structInstances); i++)
+        putMap(&w, &g, &r->structInstances[i]->selfVars);
     for (ptrdiff_t a = 0; a < arrlen(g.arrays); a++) {
         GMLArray *array = g.arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            for (int32_t i = 0; i < array->modern.length; i++) putValue(&w, &g, &array->modern.data[i]);
+            continue;
+        }
         for (int32_t row = 0; row < array->legacy.rowCount; row++)
             for (int32_t col = 0; col < array->legacy.rows[row].length; col++)
                 putValue(&w, &g, &array->legacy.rows[row].data[col]);
+    }
+    /* Which functions have run their static block (GMS 2.3). */
+    uint32_t staticCount = r->vmContext->staticInitialized ? r->dataWin->code.count : 0;
+    put32(&w, staticCount);
+    for (uint32_t i = 0; i < staticCount; i += 8) {
+        uint8_t bits = 0;
+        for (uint32_t b = 0; b < 8 && i + b < staticCount; b++)
+            if (r->vmContext->staticInitialized[i + b]) bits |= (uint8_t)(1u << b);
+        put(&w, &bits, 1);
     }
     put32(&w, (uint32_t)arrlen(r->dsQueuePool));
     put32(&w, (uint32_t)arrlen(r->dsStackPool));
@@ -852,7 +991,7 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     if (r->cachedIniPath) putString(&w, r->cachedIniPath);
     if (r->cachedIni) putIni(&w, r->cachedIni, &iniEntryBudget);
     free(w.stringIndex);
-    arrfree(g.slots); arrfree(g.arrays);
+    arrfree(g.slots); arrfree(g.arrays); arrfree(g.methods);
     if (!w.ok || w.n > SNAP_LIMIT) {
         if (reason) *reason = w.failure ? w.failure : "Runner snapshot encoding failed";
         free(w.p); return false;
@@ -1002,6 +1141,9 @@ static RValue *slotPointer(RunnerSnapshot *s, SlotRef ref) {
         case SLOT_ARRAY:
             if (ref.container >= (uint32_t)arrlen(s->arrays)) return NULL;
             return GMLArray_slot(s->arrays[ref.container], (int32_t)ref.index);
+        case SLOT_STRUCT:
+            if (ref.container >= (uint32_t)arrlen(s->structs)) return NULL;
+            return IntRValueHashMap_findSlot(&s->structs[ref.container]->selfVars, (int32_t)ref.index);
     }
     return NULL;
 }
@@ -1030,6 +1172,22 @@ static void getValue(Reader *rd, RunnerSnapshot *s, RValue *out, SlotRef ref) {
             GMLArray_incRef(value.array);
             break;
         }
+#if IS_WAD17_OR_HIGHER_ENABLED
+        case RVALUE_METHOD: {
+            uint32_t id = get32(rd);
+            if (id >= (uint32_t)arrlen(s->methods)) { rd->ok = false; break; }
+            value.method = s->methods[id]; value.ownsReference = true;
+            GMLMethod_incRef(value.method);
+            break;
+        }
+#endif
+        case RVALUE_STRUCT: {
+            uint32_t id = get32(rd);
+            if (id >= (uint32_t)arrlen(s->structs)) { rd->ok = false; break; }
+            value.structInst = s->structs[id]; value.ownsReference = true;
+            Instance_structIncRef(value.structInst);
+            break;
+        }
         default: rd->ok = false; break;
     }
     if (!rd->ok) { if (value.type == RVALUE_STRING) free((void *)value.string); return; }
@@ -1050,14 +1208,28 @@ static void getMap(Reader *rd, RunnerSnapshot *s, IntRValueHashMap *map,
         getValue(rd, s, slot, ref);
     }
 }
+/* Element i of a, for either layout; counts elements when out is NULL. */
+static int32_t arrayElements(GMLArray *a, RValue ***out) {
+    int32_t n = 0;
+    if (a->type == GML_MODERN_ARRAY) {
+        for (int32_t i = 0; i < a->modern.length; i++) if (out) (*out)[n++] = &a->modern.data[i]; else n++;
+        return n;
+    }
+    for (int32_t row = 0; row < a->legacy.rowCount; row++)
+        for (int32_t col = 0; col < a->legacy.rows[row].length; col++)
+            if (out) (*out)[n++] = &a->legacy.rows[row].data[col]; else n++;
+    return n;
+}
 static void breakArrayCycles(RunnerSnapshot *s) {
     for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++) {
         GMLArray *a = s->arrays[i];
-        for (int32_t row = 0; row < a->legacy.rowCount; row++)
-            for (int32_t col = 0; col < a->legacy.rows[row].length; col++) {
-                RValue *v = &a->legacy.rows[row].data[col];
-                if (v->type == RVALUE_ARRAY) { RValue_free(v); *v = RValue_makeUndefined(); }
-            }
+        int32_t n = arrayElements(a, NULL);
+        RValue **cells = n ? (RValue **)malloc((size_t)n * sizeof(RValue *)) : NULL;
+        if (n && !cells) continue;
+        arrayElements(a, &cells);
+        for (int32_t k = 0; k < n; k++)
+            if (cells[k]->type == RVALUE_ARRAY) { RValue_free(cells[k]); *cells[k] = RValue_makeUndefined(); }
+        free(cells);
     }
 }
 static bool visitArray(RunnerSnapshot *s, uint32_t id, uint8_t *colors, unsigned depth) {
@@ -1065,15 +1237,19 @@ static bool visitArray(RunnerSnapshot *s, uint32_t id, uint8_t *colors, unsigned
     if (colors[id] == 2) return true;
     colors[id] = 1;
     GMLArray *a = s->arrays[id];
-    for (int32_t row = 0; row < a->legacy.rowCount; row++)
-        for (int32_t col = 0; col < a->legacy.rows[row].length; col++) {
-            RValue *v = &a->legacy.rows[row].data[col];
-            if (v->type != RVALUE_ARRAY) continue;
-            uint32_t child = UINT32_MAX;
-            for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++)
-                if (s->arrays[i] == v->array) { child = (uint32_t)i; break; }
-            if (child == UINT32_MAX || !visitArray(s, child, colors, depth + 1)) return false;
-        }
+    int32_t n = arrayElements(a, NULL);
+    RValue **cells = n ? (RValue **)malloc((size_t)n * sizeof(RValue *)) : NULL;
+    if (n && !cells) return false;
+    arrayElements(a, &cells);
+    for (int32_t k = 0; k < n; k++) {
+        RValue *v = cells[k];
+        if (v->type != RVALUE_ARRAY) continue;
+        uint32_t child = UINT32_MAX;
+        for (ptrdiff_t i = 0; i < arrlen(s->arrays); i++)
+            if (s->arrays[i] == v->array) { child = (uint32_t)i; break; }
+        if (child == UINT32_MAX || !visitArray(s, child, colors, depth + 1)) { free(cells); return false; }
+    }
+    free(cells);
     colors[id] = 2;
     return true;
 }
@@ -1106,6 +1282,11 @@ static bool buildIndexes(RunnerSnapshot *s, Runner *r) {
         if (hmgeti(s->byId, id) >= 0) return false;
         hmput(s->byId, id, inst);
     }
+    for (ptrdiff_t i = 0; i < arrlen(s->structs); i++) {
+        int id = (int)s->structs[i]->instanceId;
+        if (hmgeti(s->byId, id) >= 0) return false;
+        hmput(s->byId, id, s->structs[i]);
+    }
     return true;
 }
 
@@ -1127,7 +1308,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
     if (!hdr.ok || magic != SNAP_MAGIC ||
-        (version != SNAP_VERSION && version != SNAP_STRING_REF_VERSION &&
+        (version != SNAP_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
+         version != SNAP_STRING_REF_VERSION &&
          version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
         id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
@@ -1244,12 +1426,35 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t arrayCount = get32(&rd);
     if (!rd.ok || !countOK(arrayCount)) goto bad;
     uint32_t arrayElements = 0;
+    bool gms2 = version >= SNAP_VERSION;
+    bool tokenOwners = gms2 && IS_WAD17_OR_HIGHER(r->vmContext);
     for (uint32_t i = 0; i < arrayCount && rd.ok; i++) {
-        uint32_t owner = get32(&rd), rowCount = get32(&rd);
-        if (!countOK(rowCount) || rowCount > 1024) goto bad;
+        uint8_t modern = 0;
+        if (gms2) get(&rd, &modern, 1);
+        uint64_t token = tokenOwners ? get64(&rd) : 0;
+        if (!rd.ok || modern > 1) goto bad;
+        if (modern) {
+            uint32_t len = get32(&rd);
+            if (!rd.ok || len > SNAP_MAX_ITEMS - arrayElements || (size_t)len > (rd.n - rd.pos) / 4) {
+                failure = "Array element budget exceeded"; goto bad;
+            }
+            arrayElements += len;
+            GMLArray *a = (GMLArray *)calloc(1, sizeof(GMLArray));
+            if (!a) goto bad;
+            a->type = GML_MODERN_ARRAY; a->refCount = 1;
+            a->owner = (void *)(uintptr_t)token;
+            a->modern.data = (RValue *)calloc(len ? len : 1, sizeof(RValue));
+            if (!a->modern.data) { free(a); goto bad; }
+            a->modern.length = a->modern.capacity = (int32_t)len;
+            arrput(s->arrays, a); arrput(s->owners, SNAP_OWNER_NONE);
+            continue;
+        }
+        uint32_t owner = tokenOwners ? SNAP_OWNER_NONE : get32(&rd), rowCount = get32(&rd);
+        if (!rd.ok || !countOK(rowCount) || rowCount > 1024) goto bad;
         GMLArray *a = (GMLArray *)calloc(1, sizeof(GMLArray));
         if (!a) goto bad;
         a->type = GML_LEGACY_ARRAY; a->refCount = 1;
+        if (tokenOwners) a->owner = (void *)(uintptr_t)token;
         a->legacy.rowCount = a->legacy.rowCapacity = (int32_t)rowCount;
         a->legacy.rows = (GMLArrayRow *)calloc(rowCount ? rowCount : 1, sizeof(GMLArrayRow));
         if (!a->legacy.rows) { free(a); goto bad; }
@@ -1266,6 +1471,41 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             rr->data = (RValue *)calloc(len ? len : 1, sizeof(RValue));
             if (!rr->data) goto bad;
             rr->length = rr->capacity = (int32_t)len;
+        }
+    }
+    if (gms2) {
+        uint32_t methodCount = get32(&rd);
+        if (!rd.ok || !countOK(methodCount) || (methodCount && !IS_WAD17_OR_HIGHER_ENABLED)) goto bad;
+        const DataWin *dw = r->dataWin;
+        for (uint32_t i = 0; i < methodCount && rd.ok; i++) {
+            uint8_t kind = 0; get(&rd, &kind, 1);
+            uint32_t index = get32(&rd);
+            int32_t bound = (int32_t)get32(&rd);
+            if (!rd.ok) goto bad;
+            GMLMethod *m = NULL;
+            if (kind == SNAP_METHOD_CODE && index < dw->code.count && dw->code.entries[index].present)
+                m = GMLMethod_create((int32_t)index, bound);
+            else if (kind == SNAP_METHOD_BUILTIN && index < dw->func.functionCount &&
+                     r->vmContext->funcCallCache && r->vmContext->funcCallCache[index].builtin)
+                m = GMLMethod_createBuiltin((BuiltinFunc)r->vmContext->funcCallCache[index].builtin, bound);
+            else if (kind == SNAP_METHOD_UNRESOLVED && index < dw->func.functionCount)
+                m = GMLMethod_createUnresolved(dw->func.functions[index].name, bound);
+            if (!m) goto bad;
+            arrput(s->methods, m);
+        }
+        uint32_t structCount = get32(&rd);
+        if (!rd.ok || !countOK(structCount)) goto bad;
+        for (uint32_t i = 0; i < structCount && rd.ok; i++) {
+            uint32_t id = get32(&rd); uint8_t pinned = 0; get(&rd, &pinned, 1);
+            int32_t constructor = (int32_t)get32(&rd);
+            if (!rd.ok || pinned > 1 || constructor < -1 ||
+                (constructor >= 0 && (uint32_t)constructor >= dw->code.count)) goto bad;
+            Instance *st = Instance_create(id, STRUCT_OBJECT_INDEX, 0, 0);
+            st->refCount = 1; /* the registry's */
+            st->pinned = pinned != 0;
+            st->structRegistryIndex = (int32_t)i;
+            st->constructorCodeIndex = constructor;
+            arrput(s->structs, st);
         }
     }
     uint32_t tileLayerCount = get32(&rd);
@@ -1286,7 +1526,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         arrput(s->instances, inst);
         getMap(&rd, s, &inst->selfVars, SLOT_INSTANCE, i);
     }
-    uint32_t savedRooms = version >= SNAP_VERSION ? get32(&rd) : 0;
+    uint32_t savedRooms = version >= SNAP_SAVED_ROOM_VERSION ? get32(&rd) : 0;
     if (!rd.ok || savedRooms > roomCount || (savedRooms && !r->savedRoomStates)) goto bad;
     int64_t lastSaved = -1;
     for (uint32_t n = 0; n < savedRooms && rd.ok; n++) {
@@ -1359,13 +1599,36 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             getValue(&rd, s, &s->lists[i].items[j], ref);
         }
     }
+    for (ptrdiff_t i = 0; i < arrlen(s->structs) && rd.ok; i++)
+        getMap(&rd, s, &s->structs[i]->selfVars, SLOT_STRUCT, (uint32_t)i);
     for (uint32_t a = 0; a < arrayCount && rd.ok; a++) {
         GMLArray *array = s->arrays[a];
+        if (array->type == GML_MODERN_ARRAY) {
+            for (int32_t i = 0; i < array->modern.length && rd.ok; i++) {
+                SlotRef ref = {SLOT_ARRAY, a, (uint32_t)i, NULL};
+                getValue(&rd, s, &array->modern.data[i], ref);
+            }
+            continue;
+        }
         for (int32_t row = 0; row < array->legacy.rowCount; row++)
             for (int32_t col = 0; col < array->legacy.rows[row].length && rd.ok; col++) {
                 SlotRef ref = {SLOT_ARRAY, a, (uint32_t)row * GML_LEGACY_ARRAY_STRIDE + (uint32_t)col, NULL};
                 getValue(&rd, s, &array->legacy.rows[row].data[col], ref);
             }
+    }
+    if (gms2) {
+        uint32_t staticCount = get32(&rd);
+        if (!rd.ok || (staticCount && staticCount != r->dataWin->code.count) ||
+            (staticCount && !r->vmContext->staticInitialized)) goto bad;
+        if (staticCount) {
+            s->staticInitialized = (bool *)calloc(staticCount, sizeof(bool));
+            if (!s->staticInitialized) goto bad;
+            for (uint32_t i = 0; i < staticCount && rd.ok; i += 8) {
+                uint8_t bits = 0; get(&rd, &bits, 1);
+                for (uint32_t b = 0; b < 8 && i + b < staticCount; b++)
+                    s->staticInitialized[i + b] = (bits >> b) & 1u;
+            }
+        }
     }
     uint32_t dormant[SNAP_DORMANT_POOL_COUNT] = {0};
     if (rd.ok && rd.pos != rd.n) {
@@ -1521,6 +1784,7 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     if (!r || !s || s->applied) return;
     s->oldGlobal = r->vmContext->globalScopeInstance;
     s->oldInstances = r->instances; s->oldMaps = r->dsMapPool;
+    s->oldStructs = r->structInstances;
     s->oldLists = r->dsListPool;
     s->oldQueues = r->dsQueuePool; s->oldStacks = r->dsStackPool;
     s->oldPriorities = r->dsPriorityPool; s->oldGrids = r->dsGridPool;
@@ -1542,6 +1806,12 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     r->vmContext->globalScopeInstance = s->global;
     r->vmContext->varNameMap = (void *)s->varNames;
     r->instances = s->instances; r->dsMapPool = s->maps; r->dsListPool = s->lists;
+    r->structInstances = s->structs;
+    if (s->staticInitialized)
+        memcpy(r->vmContext->staticInitialized, s->staticInitialized,
+               r->dataWin->code.count * sizeof(bool));
+    else if (r->vmContext->staticInitialized)
+        memset(r->vmContext->staticInitialized, 0, r->dataWin->code.count * sizeof(bool));
     r->dsQueuePool = s->queues; r->dsStackPool = s->stacks;
     r->dsPriorityPool = s->priorities; r->dsGridPool = s->grids;
     r->gmlBufferPool = s->buffers; r->mpGridPool = s->mpGrids;

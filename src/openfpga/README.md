@@ -165,9 +165,10 @@ Analogue menu to keep it. The log records capture sizes, elapsed time,
 transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
-Core format revision 6 uses lossless Zstandard compression, references strings
-already present in the matching game data, and carries persistent rooms' saved
-state; states from revisions 3 through 5 remain readable. Native builds avoid the renderer's large allocation probe
+Core format revision 7 uses lossless Zstandard compression, references strings
+already present in the matching game data, carries persistent rooms' saved
+state, and holds GameMaker 2.3 values (methods, structs and GMS 2 arrays) and
+the VM's static-block flags; states from revisions 3 through 6 remain readable. Native builds avoid the renderer's large allocation probe
 when the OS can prove the reserve fits, otherwise retaining the original probe.
 The first reserve check logs the allocation and query timings for comparison.
 State-request logs include refusal reasons and separate load receive,

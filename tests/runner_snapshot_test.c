@@ -113,6 +113,28 @@ static void invalidIniMagic(uint8_t *raw, size_t n) {
         }
     assert(false);
 }
+/* Revision 7 added a layout byte (and, for GMS 2.3 games, an owner token) to
+ * each array, the method and struct tables after the arrays, and the static
+ * block flags before the dormant pools. Strip them from a WAD 16 fixture's
+ * body that has no methods, structs or static flags. */
+static void toRevision6(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
+    size_t at = roomBlock(raw, *rawLen, rooms) + 4 + rooms;
+    for (uint32_t i = 0; i < rooms; i++)
+        at += 12 + 2 + 4 + (size_t)le32(raw + at + 14) * sizeof(RoomTile);
+    uint32_t arrays = le32(raw + at); at += 4;
+    for (uint32_t i = 0; i < arrays; i++) {
+        assert(raw[at] == 0); /* legacy layout */
+        memmove(raw + at, raw + at + 1, *rawLen - at - 1); *rawLen -= 1;
+        at += 8 + 4 * (size_t)le32(raw + at + 4);
+    }
+    /* at: tile layer count, preceded by the method and struct counts */
+    assert(le32(raw + at) == 0 && le32(raw + at + 4) == 0);
+    memmove(raw + at, raw + at + 8, *rawLen - at - 8); *rawLen -= 8;
+    size_t ini = *rawLen - 8;
+    while (ini > 0 && le32(raw + ini) != 0x31494e49u) ini--;
+    assert(ini >= 48 && le32(raw + ini - 48) == 0); /* no static flags */
+    memmove(raw + ini - 48, raw + ini - 44, *rawLen - (ini - 44)); *rawLen -= 4;
+}
 /* Revision 6 added the saved persistent rooms after the live instances.
  * Older revisions lack that count; drop it from a body with no instances. */
 static void dropSavedRooms(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
@@ -854,6 +876,7 @@ static void testOlderCoreV3Trailers(void) {
     assert(Runner_snapshotCapture(&r, 56, &bytes, &size, &reason));
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 3);
     free(raw);
@@ -874,6 +897,7 @@ static void testRevision5WithoutSavedRooms(void) {
     assert(Runner_snapshotCapture(&r, 59, &bytes, &size, &reason));
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 5);
     free(raw);
@@ -883,6 +907,77 @@ static void testRevision5WithoutSavedRooms(void) {
     Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
     free(bytes); destroyFixture(&r);
 }
+
+#if IS_WAD17_OR_HIGHER_ENABLED
+/* Revision 7: a GMS 2.3 struct whose GMS2 array holds the struct itself and a
+ * method that two globals share; the array's owner is a scope token, and the
+ * VM's static-block flags come back with the state. */
+static void testGms2ValuesRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    dw.gen8.wadVersion = 17;
+    dw.detectedFormat.major = 2; dw.detectedFormat.minor = 3;
+    CodeEntry entries[2]; memset(entries, 0, sizeof(entries));
+    entries[0].present = entries[1].present = true;
+    dw.code.entries = entries; dw.code.count = 2;
+    vm.staticInitialized = calloc(2, sizeof(bool));
+    vm.staticInitialized[1] = true;
+
+    Instance *st = Runner_createStruct(&r);
+    uint32_t structId = st->instanceId;
+    GMLArray *items = GMLArray_create(&dw, 2);
+    assert(items->type == GML_MODERN_ARRAY);
+    items->owner = (void *)(uintptr_t)1234;
+    GMLMethod *method = GMLMethod_create(1, (int32_t)structId);
+    /* The setters take their own reference; ours are dropped below. */
+    GMLArray_set(items, 0, RValue_makeStructWeak(st));
+    GMLArray_set(items, 1, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(st, 5, RValue_makeArrayWeak(items));
+    Instance_setSelfVar(vm.globalScopeInstance, 1, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(vm.globalScopeInstance, 2, RValue_makeMethodWeak(method));
+    Instance_setSelfVar(vm.globalScopeInstance, 3, RValue_makeStructWeak(st));
+    GMLArray_decRef(items); GMLMethod_decRef(method);
+    assert(st->refCount == 3 && method->refCount == 3);
+
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 77, &bytes, &size, &reason));
+    assert(le32(bytes + 4) == 7);
+
+    /* Disturb the live state, then load. */
+    Instance_setSelfVar(vm.globalScopeInstance, 2, RValue_makeReal(0));
+    vm.staticInitialized[1] = false; vm.staticInitialized[0] = true;
+    RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 77, bytes, size, &reason);
+    assert(snap);
+    Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+
+    assert(arrlen(r.structInstances) == 1);
+    Instance *back = r.structInstances[0];
+    assert(back != st && back->instanceId == structId && back->structRegistryIndex == 0);
+    assert(back->refCount == 3); /* the registry, global 3, and items[0] */
+    int key = (int)structId;
+    assert(hmget(r.instancesById, key) == back);
+    RValue m1 = Instance_getSelfVar(vm.globalScopeInstance, 1);
+    RValue m2 = Instance_getSelfVar(vm.globalScopeInstance, 2);
+    assert(m1.type == RVALUE_METHOD && m2.type == RVALUE_METHOD && m1.method == m2.method);
+    assert(m1.method->codeIndex == 1 && m1.method->boundInstanceId == (int32_t)structId);
+    RValue s3 = Instance_getSelfVar(vm.globalScopeInstance, 3);
+    assert(s3.type == RVALUE_STRUCT && s3.structInst == back);
+    RValue arr = Instance_getSelfVar(back, 5);
+    assert(arr.type == RVALUE_ARRAY && arr.array->type == GML_MODERN_ARRAY);
+    assert(arr.array->owner == (void *)(uintptr_t)1234 && arr.array->modern.length == 2);
+    assert(arr.array->modern.data[0].type == RVALUE_STRUCT && arr.array->modern.data[0].structInst == back);
+    assert(arr.array->modern.data[1].type == RVALUE_METHOD && arr.array->modern.data[1].method == m1.method);
+    assert(m1.method->refCount == 3); /* globals 1 and 2, and items[1] */
+    assert(!vm.staticInitialized[0] && vm.staticInitialized[1]);
+
+    /* A method that points at no code is not saved. */
+    Instance_setSelfVar(vm.globalScopeInstance, 4, RValue_makeMethod(GMLMethod_create(7, -1)));
+    assert(!Runner_snapshotCapture(&r, 77, &bytes, &size, &reason));
+    free(bytes); free(vm.staticInitialized);
+    destroyFixture(&r);
+}
+#endif
 
 static void testZstdV4FrameValidation(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
@@ -894,9 +989,10 @@ static void testZstdV4FrameValidation(void) {
     memcpy(&r.lives, &livesBits, sizeof(livesBits));
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 58, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 6);
+    assert(le32(bytes + 4) == 7);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    toRevision6(raw, &rawLen, 1);
     dropSavedRooms(raw, &rawLen, 1);
     encodeRaw(&bytes, &size, raw, rawLen, 4);
     assert(le32(bytes + 4) == 4);
@@ -1074,7 +1170,7 @@ static void testStaticStringReferences(void) {
     arrput(r.dsListPool, list);
     uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
     assert(Runner_snapshotCapture(&r, 91, &bytes, &size, &reason));
-    assert(le32(bytes + 4) == 6);
+    assert(le32(bytes + 4) == 7);
     uint32_t rawLen;
     uint8_t *raw = decodeRaw(bytes, size, &rawLen);
     dw.strg.count = 0;
@@ -1119,7 +1215,7 @@ static void testStaticStringReferences(void) {
     uint8_t *bad = malloc(size); assert(bad); memcpy(bad, bytes, size);
     write32(raw + ref, 0x80000002u);
     size_t badSize = size;
-    encodeRaw(&bad, &badSize, raw, rawLen, 6);
+    encodeRaw(&bad, &badSize, raw, rawLen, 7);
     assert(Runner_snapshotPrepare(&r, 91, bad, badSize, &reason) == NULL);
     free(bad); free(raw); free(bytes);
     destroyFixture(&r);
@@ -1178,7 +1274,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
     assert(runs == 1); /* Exactly the 64 consecutive list values. */
     for (int j = 0; j < 64; j++)
         write32(raw + run + (size_t)j * 8u + 4u, 0x80000001u);
-    encodeRaw(&bytes, &size, raw, rawLen, 6);
+    encodeRaw(&bytes, &size, raw, rawLen, 7);
     assert(size < 1024u * 1024u);
     assert(Runner_snapshotPrepare(&r, 93, bytes, size, &reason) == NULL);
     assert(r.frameCount == 42 && arrlen(r.dsListPool[0].items) == 64);
@@ -1203,6 +1299,9 @@ int main(void) {
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
     testRevision5WithoutSavedRooms();
+#if IS_WAD17_OR_HIGHER_ENABLED
+    testGms2ValuesRoundTrip();
+#endif
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
     testPausedCaptureEligibility();
