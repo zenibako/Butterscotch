@@ -94,6 +94,11 @@ int main(int argc, char **argv) {
     args.renderer = SOFTWARE;
     args.dataWinPath = OF_DATA_WIN_NAME;
     for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--bench-sleep") == 0) {
+            args.seed = 7;
+            args.hasSeed = true;
+            ofPlatformStartSleepTest();
+        }
         /* --bench measures accuracy mode and --bench-smooth speed mode,
          * whichever the player would start in. --bench-lowres keeps every
          * room at 320x240 with plain point sampling, for bitstreams whose

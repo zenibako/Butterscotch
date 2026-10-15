@@ -3,6 +3,8 @@
 #include "vm_builtins.h"
 #include "runner.h"
 #include "stb_ds.h"
+#include "of_game.h"
+#include "runner_keyboard.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -244,12 +246,59 @@ static void testDynamicSpriteName(VMContext *ctx) {
     arrfree(ctx->runner->runtimeLayers);
 }
 
+#ifdef GAME_DELTARUNE
+static void testSleepBenchmark(VMContext *ctx) {
+    Runner *r = ctx->runner;
+    Room rooms[8] = {{0}};
+    rooms[7].name = "room_town_krisyard";
+    ctx->dataWin->room.rooms = rooms; ctx->dataWin->room.count = 8;
+    ctx->dataWin->gen8.name = "DELTARUNE"; ctx->dataWin->gen8.wadVersion = 17;
+    ctx->globalScopeInstance = Instance_create(1, STRUCT_OBJECT_INDEX, 0, 0);
+    r->vmContext = ctx; r->keyboard = RunnerKeyboard_create();
+    r->frameCount = 30; r->pendingRoom = -1;
+    assert(ofGame.sleepTest != NULL);
+    ofGame.sleepTest(r);
+    assert(r->pendingRoom == 7);
+    int plot = VM_getOrAllocateVarID(ctx, "plot");
+    assert(RValue_toReal(Instance_getSelfVar(ctx->globalScopeInstance, plot)) == 60);
+    r->currentRoomIndex = 7; r->currentRoom = &rooms[7]; r->pendingRoom = -1;
+    r->frameCount = 300;
+    ofGame.sleepTest(r); assert(r->pendingRoom == -1); /* A waits indefinitely. */
+    RunnerKeyboard_onKeyDown(r->keyboard, VK_ENTER);
+    ofGame.sleepTest(r);
+    assert(r->pendingRoom == 7);
+    assert(RValue_toReal(Instance_getSelfVar(ctx->globalScopeInstance, plot)) == 0);
+    assert(!RunnerKeyboard_check(r->keyboard, VK_ENTER));
+    r->pendingRoom = -1; r->frameCount++;
+    ofGame.sleepTest(r); assert(r->pendingRoom == -1); /* B doesn't keep reloading. */
+    GameObject mainCharacter = {0}; mainCharacter.name = "obj_mainchara";
+    ctx->dataWin->objt.objects = &mainCharacter; ctx->dataWin->objt.count = 1;
+    Instance *character = Instance_create(2, 0, 0, 0);
+    Instance_setSelfVar(character, VM_getOrAllocateVarID(ctx, "cutscene"), RValue_makeReal(1));
+    arrput(r->instances, character);
+    assert(ofGame.savestateReason(r) == NULL); /* The marker alone isn't an unsupported resource. */
+    ctx->dataWin->gen8.wadVersion = 16;
+    assert(ofGame.savestateReason(r) != NULL);
+    ctx->dataWin->gen8.wadVersion = 17;
+    Instance_free(character); arrfree(r->instances);
+    ctx->dataWin->objt.objects = NULL; ctx->dataWin->objt.count = 0;
+    Instance_free(ctx->globalScopeInstance); ctx->globalScopeInstance = NULL;
+    RunnerKeyboard_free(r->keyboard); r->keyboard = NULL;
+    for (ptrdiff_t i = 0; i < shlen(ctx->varNameMap); i++) free(ctx->varNameMap[i].key);
+    shfree(ctx->varNameMap); r->currentRoom = NULL;
+    ctx->dataWin->room.rooms = NULL; ctx->dataWin->room.count = 0;
+}
+#endif
+
 int main(int argc, char **argv) {
     DataWin data = {0}; Runner runner = {0}; VMContext ctx = {0};
     data.gen8.wadVersion = 16;
     runner.dataWin = &data;
     ctx.dataWin = &data; ctx.runner = &runner;
     VMBuiltins_registerAll(&ctx);
+#ifdef GAME_DELTARUNE
+    if (argc == 1 || !strcmp(argv[1], "sleep")) testSleepBenchmark(&ctx);
+#endif
     if (argc == 1 || !strcmp(argv[1], "sprite")) testDynamicSpriteName(&ctx);
     if (argc == 1 || !strcmp(argv[1], "date")) testDateStrings(&ctx);
     const char *properties[] = {"gain", "pitch", "velocity"};
