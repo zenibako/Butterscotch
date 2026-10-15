@@ -34,7 +34,50 @@ int of_audio_write(const int16_t *samples, int count) {
     return count;
 }
 
+static void testGroupVolume(void) {
+    OfAudioSystem ut = {0};
+    DataWin dw = {0}; Sound sounds[2] = {{0}, {0}};
+    OfMusicTrack track = {0};
+    dw.agrp.count = 2; dw.sond.count = 2; dw.sond.sounds = sounds;
+    sounds[1].audioGroup = 1;
+    ut.base.dw = &dw; ut.base.vtable = &ofVtable;
+    ut.tracks = &track; track.sampleCount = 128;
+    OfVoice voice = {0};
+    voice.sample0 = voice.sample1 = 16000; voice.step = 1;
+    voice.sourceIndex = 1; voice.gainNow = voice.gainTarget = 4096 << 8;
+    /* Continue resets group gain before restoring master volume. */
+    assert(ofVtable.setGroupGain != NULL);
+    ofVtable.setGroupGain(&ut.base, 1, 0.5f, 0);
+    int32_t pcm[4] = {0};
+    mixVoice(&ut, &voice, pcm, 1); assert(pcm[0] == 8000);
+    voice.sourceIndex = 0;
+    mixVoice(&ut, &voice, pcm + 1, 1); assert(pcm[1] == 16000);
+    voice.sourceIndex = 300000; /* Dynamic streams belong to default group. */
+    mixVoice(&ut, &voice, pcm + 2, 1); assert(pcm[2] == 16000);
+    ofVtable.setGroupGain(&ut.base, 1, 0, 1000);
+    ofVtable.update(&ut.base, 0.5f);
+    voice.sourceIndex = 1;
+    mixVoice(&ut, &voice, pcm + 3, 1); assert(pcm[3] == 4000);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    ut.nextInstanceId = OF_INSTANCE_ID_BASE;
+    assert(ofAudioSnapshot(&ut.base, &bytes, &size, &reason));
+    ofVtable.setGroupGain(&ut.base, 1, 1, 0);
+    void *prepared = ofAudioPrepareSnapshot(&ut.base, bytes, size, &reason);
+    assert(prepared);
+    ofAudioApplySnapshot(&ut.base, prepared); ofAudioFreeSnapshot(prepared);
+    free(bytes);
+    assert(AudioSystem_getGroupGain(&ut.base, 1) == 0.25f);
+    ofVtable.pauseAll(&ut.base);
+    ofVtable.update(&ut.base, 0.5f);
+    assert(AudioSystem_getGroupGain(&ut.base, 1) == 0.25f);
+    ofVtable.resumeAll(&ut.base);
+    ofVtable.update(&ut.base, 0.5f);
+    assert(AudioSystem_getGroupGain(&ut.base, 1) == 0);
+    free(ut.base.groupGains);
+}
+
 int main(void) {
+    testGroupVolume();
     OfAudioSystem ut = {0};
     ut.base.vtable = &ofVtable;
     OfMusicTrack track = {0};
