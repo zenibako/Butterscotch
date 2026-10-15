@@ -16,9 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* This is a same-build, WAD16-only wire format. Never write live pointers. */
+/* This is a same-build, WAD16/17 wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 7u
+#define SNAP_VERSION 8u
+#define SNAP_GMS2_VERSION 7u
 #define SNAP_SAVED_ROOM_VERSION 6u
 #define SNAP_STRING_REF_VERSION 5u
 #define SNAP_ZSTD_LEGACY_VERSION 4u
@@ -222,6 +223,7 @@ typedef struct {
 } SnapshotRoom;
 
 typedef struct SnapshotLegacyTiles { uint32_t room, layer, count; RoomTile *tiles; } SnapshotLegacyTiles;
+typedef struct { uint32_t room, layer, count; uint32_t *cells; } SnapshotTilemap;
 struct RunnerSnapshot {
     bool applied;
     RunnerPlain plain;
@@ -258,6 +260,7 @@ struct RunnerSnapshot {
     RuntimeLayer *layers;
     bool hasLayers; /* revision 7: also, the live vertex resources are kept */
     struct SnapshotLegacyTiles *legacyTiles;
+    SnapshotTilemap *tilemaps;
     SlotRef *slots;
     SnapshotRoom *roomStates;
     uint32_t roomCount;
@@ -409,6 +412,8 @@ void Runner_snapshotFree(RunnerSnapshot *s) {
     if (s->applied) freeLayers(s->oldLayers); else freeLayers(s->layers);
     for (ptrdiff_t i = 0; i < arrlen(s->legacyTiles); i++) free(s->legacyTiles[i].tiles);
     arrfree(s->legacyTiles);
+    for (ptrdiff_t i = 0; i < arrlen(s->tilemaps); i++) free(s->tilemaps[i].cells);
+    arrfree(s->tilemaps);
     if (s->roomStates) for (uint32_t i = 0; i < s->roomCount; i++) {
         SnapshotRoom *state = &s->roomStates[i];
         if (state->stagedLoaded) DataWin_freeRoomPayload(&state->stagedPayload);
@@ -459,7 +464,13 @@ static uint32_t vertexFormatSum(const VmVertexFormat *f) {
     return h;
 }
 static bool vertexBufferUnused(const Buffer_Vertex *b) {
-    return b->vertexCount == 0 && !b->frozen && b->streamCurrent == b->streamStart && !b->pFrozenVB;
+    return b->vertexCount == 0 && !b->frozen && b->streamCurrent == b->streamStart &&
+        !b->pFrozenVB && b->currentMask == 0 && !b->pCurrentFormatVFRelease;
+}
+/* Bound the multiplication before using the parsed tilemap's dimensions. */
+static bool tilemapCellsValid(const RoomLayerTilesData *map) {
+    return map && (!map->tilesY || map->tilesX <= SNAP_LIMIT / sizeof(uint32_t) / map->tilesY) &&
+        (!map->tilesX || !map->tilesY || map->tileData);
 }
 /* The parts of a runtime layer and its elements that are not pointers. */
 typedef struct {
@@ -517,8 +528,7 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
         else if (reason) *reason = "Runner is not ready";
         return false;
     }
-    /* GMS 2.3 (WAD 17) values are revision 7. Rooms with runtime layers, which
-     * every GMS 2 room has, are still refused below. */
+    /* GMS 2.3 (WAD 17) values and current-room runtime layers are revision 7. */
     if (r->dataWin->gen8.wadVersion != 16 && r->dataWin->gen8.wadVersion != 17)
         REFUSE("Only WAD 16 and 17 state is supported");
     bool spritesValid = r->dataWin->sprt.parsedCount <= r->dataWin->sprt.count &&
@@ -570,6 +580,9 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
             REFUSE("Room dimensions exceed the collision grid limit");
         if (forCapture && room->payloadLoaded && room->tileCount && !room->tiles)
             REFUSE("Loaded room tiles are unavailable");
+        for (uint32_t l = 0; forCapture && room->payloadLoaded && room->layers && l < room->layerCount; l++)
+            if (room->layers[l].type == RoomLayerType_Tiles && !tilemapCellsValid(room->layers[l].tilesData))
+                REFUSE("Loaded room tilemap cells are unavailable or too large");
     }
     /* The live layers are replaced by a load, so only a capture checks them. */
     for (ptrdiff_t i = 0; forCapture && i < arrlen(r->runtimeLayers); i++)
@@ -1111,6 +1124,24 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
             put(&w, a->legacyTiles, (size_t)a->legacyTileCount * sizeof(RoomTile));
         }
     }
+    /* Revision 8: tilemap_set[_at_pixel] writes directly into parsed room
+     * cells, including layers no longer present in the live runtime list. */
+    uint32_t tilemapCount = 0;
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++)
+            if (room->layers[l].type == RoomLayerType_Tiles) tilemapCount++;
+    }
+    put32(&w, tilemapCount);
+    for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
+        const Room *room = &r->dataWin->room.rooms[i];
+        for (uint32_t l = 0; room->payloadLoaded && room->layers && l < room->layerCount; l++) {
+            if (room->layers[l].type != RoomLayerType_Tiles) continue;
+            const RoomLayerTilesData *map = room->layers[l].tilesData;
+            put32(&w, i); put32(&w, l); put32(&w, map->tilesX); put32(&w, map->tilesY);
+            put(&w, map->tileData, (size_t)map->tilesX * map->tilesY * sizeof(uint32_t));
+        }
+    }
     /* Vertex resources are described, not saved (vertexFormatSum). The buffer
      * pool is a plain array of vertexBufferCount slots, not an stb array. */
     put32(&w, (uint32_t)arrlen(r->vertexFormats));
@@ -1461,7 +1492,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
     if (!hdr.ok || magic != SNAP_MAGIC ||
-        (version != SNAP_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
+        (version != SNAP_VERSION && version != SNAP_GMS2_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
          version != SNAP_STRING_REF_VERSION &&
          version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
         id != gameId ||
@@ -1579,7 +1610,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t arrayCount = get32(&rd);
     if (!rd.ok || !countOK(arrayCount)) goto bad;
     uint32_t arrayElements = 0;
-    bool gms2 = version >= SNAP_VERSION;
+    bool gms2 = version >= SNAP_GMS2_VERSION;
     bool tokenOwners = gms2 && IS_WAD17_OR_HIGHER(r->vmContext);
     for (uint32_t i = 0; i < arrayCount && rd.ok; i++) {
         uint8_t modern = 0;
@@ -1867,6 +1898,40 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             get(&rd, t.tiles, (size_t)count * sizeof(RoomTile));
             arrput(s->legacyTiles, t);
         }
+        if (version >= SNAP_VERSION) {
+            uint32_t tilemapCount = get32(&rd);
+            if (!rd.ok || !countOK(tilemapCount)) goto bad;
+            uint32_t previousRoom = 0, previousLayer = 0;
+            for (uint32_t i = 0; i < tilemapCount && rd.ok; i++) {
+                uint32_t room = get32(&rd), layer = get32(&rd);
+                uint32_t width = get32(&rd), height = get32(&rd);
+                if (!rd.ok || room >= roomCount || !s->roomStates[room].payloadLoaded ||
+                    (i && (room < previousRoom || (room == previousRoom && layer <= previousLayer)))) goto bad;
+                previousRoom = room; previousLayer = layer;
+                SnapshotRoom *state = &s->roomStates[room];
+                const Room *target = state->stagedLoaded ? &state->stagedPayload : &r->dataWin->room.rooms[room];
+                if (!target->layers || layer >= target->layerCount || target->layers[layer].type != RoomLayerType_Tiles)
+                    goto bad;
+                const RoomLayerTilesData *map = target->layers[layer].tilesData;
+                if (!tilemapCellsValid(map) || map->tilesX != width || map->tilesY != height) goto bad;
+                size_t count = (size_t)width * height;
+                if (count > (rd.n - rd.pos) / sizeof(uint32_t)) goto bad;
+                SnapshotTilemap t = {room, layer, (uint32_t)count, NULL};
+                t.cells = (uint32_t *)malloc((count ? count : 1) * sizeof(uint32_t));
+                if (!t.cells) goto bad;
+                get(&rd, t.cells, count * sizeof(uint32_t));
+                arrput(s->tilemaps, t);
+            }
+            /* Require every loaded tilemap exactly once, in capture order. */
+            uint32_t expected = 0;
+            for (uint32_t i = 0; i < roomCount; i++) {
+                SnapshotRoom *state = &s->roomStates[i];
+                const Room *target = state->stagedLoaded ? &state->stagedPayload : &r->dataWin->room.rooms[i];
+                for (uint32_t l = 0; state->payloadLoaded && target->layers && l < target->layerCount; l++)
+                    if (target->layers[l].type == RoomLayerType_Tiles) expected++;
+            }
+            if (tilemapCount != expected) goto bad;
+        }
         uint32_t formatSlots = get32(&rd);
         if (!rd.ok || formatSlots != (uint32_t)arrlen(r->vertexFormats)) {
             failure = "The game's vertex resources differ from the state's"; goto bad;
@@ -2122,6 +2187,12 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
             SnapshotLegacyTiles *t = &s->legacyTiles[i];
             Room *room = &r->dataWin->room.rooms[t->room];
             memcpy(room->layers[t->layer].assetsData->legacyTiles, t->tiles, (size_t)t->count * sizeof(RoomTile));
+        }
+        for (ptrdiff_t i = 0; i < arrlen(s->tilemaps); i++) {
+            SnapshotTilemap *t = &s->tilemaps[i];
+            Room *room = &r->dataWin->room.rooms[t->room];
+            if (t->count) memcpy(room->layers[t->layer].tilesData->tileData, t->cells,
+                                 (size_t)t->count * sizeof(uint32_t));
         }
     } else {
         s->oldLayers = NULL;
