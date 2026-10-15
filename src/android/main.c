@@ -721,7 +721,7 @@ JNIEXPORT jint JNICALL JNI_FN(stepAndDraw)(MAYBE_UNUSED JNIEnv* env, MAYBE_UNUSE
     // Update audio system (gain fading, cleanup ended sounds)
     if (0.0f > deltaTime) deltaTime = 0.0f;
     if (deltaTime > 0.1f) deltaTime = 0.1f; // cap delta to avoid huge fades on lag spikes
-    runner->audioSystem->vtable->update(runner->audioSystem, deltaTime);
+    Runner_updateAudio(runner, deltaTime);
 
     // winW/winH is the EGL surface size the host gives us; the desktop instead queries it via
     // platformGetWindowSize. Cache it so the getWindowSize hook can read it.

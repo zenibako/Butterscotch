@@ -54,6 +54,8 @@ typedef struct {
     bool (*groupIsLoaded)(AudioSystem* audio, int32_t groupIndex);
     int32_t (*createStream)(AudioSystem* audio, const char* filename);
     bool (*destroyStream)(AudioSystem* audio, int32_t streamIndex);
+    bool pauseStopsFades; // sample-driven mixers freeze gain ramps on paused voices
+    bool (*isAllPaused)(AudioSystem* audio); // authoritative pause state, including after restore
 } AudioSystemVtable;
 
 // ===[ AudioSystem Base Struct ]===

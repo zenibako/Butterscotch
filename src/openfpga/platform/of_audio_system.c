@@ -1080,6 +1080,10 @@ static void ofResumeAll(AudioSystem *audio) {
     ((OfAudioSystem *) audio)->allPaused = false;
 }
 
+static bool ofIsAllPaused(AudioSystem *audio) {
+    return ((OfAudioSystem *) audio)->allPaused;
+}
+
 static void ofSetSoundGain(AudioSystem *audio, int32_t soundOrInstance, float gain, uint32_t timeMs) {
     OfAudioSystem *ut = (OfAudioSystem *) audio;
     OfStream *stream = streamFor(ut, soundOrInstance);
@@ -1295,6 +1299,8 @@ static AudioSystemVtable ofVtable = {
     .groupIsLoaded = ofGroupIsLoaded,
     .createStream = ofCreateStream,
     .destroyStream = ofDestroyStream,
+    .pauseStopsFades = true,
+    .isAllPaused = ofIsAllPaused,
 };
 
 AudioSystem *platformCreateAudioSystem(void) {
