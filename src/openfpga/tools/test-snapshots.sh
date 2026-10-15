@@ -16,7 +16,7 @@ else flags+=(-D_GNU_SOURCE -Wl,--gc-sections); fi
 export ASAN_OPTIONS=detect_leaks=0
 "$cc" "${flags[@]}" -I"$repo/vendor/miniz" -I"$repo/vendor/zstd" \
     "$repo/tests/runner_snapshot_test.c" "$repo/src/runner_snapshot.c" "$repo/src/runner.c" \
-    "$repo/src/instance.c" "$repo/src/gml_array.c" "$repo/src/int_rvalue_hashmap.c" \
+    "$repo/src/instance.c" "$repo/src/gml_array.c" "$repo/src/gml_method.c" "$repo/src/int_rvalue_hashmap.c" \
     "$repo/src/spatial_grid.c" "$repo/src/random.c" "$repo/src/ini.c" \
     "$repo/src/stb_ds.c" "$repo/src/gettime.c" "$repo/src/data_win.c" \
     "$repo/src/binary_reader.c" "$repo/src/log.c" \
@@ -25,6 +25,17 @@ export ASAN_OPTIONS=detect_leaks=0
     "$repo/vendor/miniz/miniz_tinfl.c" "$repo/vendor/zstd/zstd.c" -lm -o "$out/runner"
 "$out/runner"
 echo "runner snapshot: passed"
+"$cc" "${flags[@]}" -DENABLE_WAD17 -I"$repo/vendor/miniz" -I"$repo/vendor/zstd" \
+    "$repo/tests/runner_snapshot_test.c" "$repo/src/runner_snapshot.c" "$repo/src/runner.c" \
+    "$repo/src/instance.c" "$repo/src/gml_array.c" "$repo/src/gml_method.c" "$repo/src/int_rvalue_hashmap.c" \
+    "$repo/src/spatial_grid.c" "$repo/src/random.c" "$repo/src/ini.c" \
+    "$repo/src/stb_ds.c" "$repo/src/gettime.c" "$repo/src/data_win.c" \
+    "$repo/src/binary_reader.c" "$repo/src/log.c" \
+    "$repo/src/physics/disabled/physics_disabled.c" \
+    "$repo/vendor/miniz/miniz.c" "$repo/vendor/miniz/miniz_tdef.c" \
+    "$repo/vendor/miniz/miniz_tinfl.c" "$repo/vendor/zstd/zstd.c" -lm -o "$out/runner17"
+"$out/runner17"
+echo "runner snapshot (WAD 17): passed"
 "$cc" "${flags[@]}" "$repo/tests/data_win_room_cache_test.c" \
     "$repo/src/data_win.c" "$repo/src/binary_reader.c" \
     "$repo/src/log.c" "$repo/src/stb_ds.c" -lm -o "$out/room-cache"
