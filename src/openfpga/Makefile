@@ -353,6 +353,11 @@ sprite-clipping-fixture: $(PC_OBJS)
 .PHONY: profiler-fixture
 profiler-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/profiler.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_profiler_fixture
+
+# Asset-free builtin ownership and audio compatibility checks.
+.PHONY: builtin-compat-fixture
+builtin-compat-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/builtin-compat.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_builtin_compat_fixture
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
 # Keep this output separate from the ordinary two-game core.
 native-saves:

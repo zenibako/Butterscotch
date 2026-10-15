@@ -7663,10 +7663,74 @@ static void audioEmitterUpdateVoices(Runner* runner, AudioEmitter* emitter) {
     AudioSystem* audio = runner->audioSystem;
     if (audio == nullptr) return;
     repeat(arrlen(emitter->voices), i) {
-        audio->vtable->setSoundSpatial(audio, emitter->voices[i], (float)emitter->x, (float)emitter->y, (float)emitter->z,
+        audio->vtable->setSoundSpatial(audio, emitter->voices[i].instanceId, (float)emitter->x, (float)emitter->y, (float)emitter->z,
                                         (float)emitter->vx, (float)emitter->vy, (float)emitter->vz, 
                                         (float)emitter->falloffRef, (float)emitter->falloffMax, (float)emitter->falloffFactor);
     }
+}
+
+static void audioEmitterApplyGain(AudioSystem* audio, AudioEmitter* emitter, AudioEmitterVoice* voice, uint32_t timeMs) {
+    if (audio == nullptr) return;
+    audio->vtable->setSoundGain(audio, voice->instanceId, voice->gain * (float)emitter->gain, timeMs);
+}
+
+static uint64_t audioEmitterFadeElapsed(Runner* runner, AudioEmitterVoice* voice) {
+    uint64_t now = runner->audioEmitterClockNanos;
+    return now >= voice->gainFadeStart ? now - voice->gainFadeStart : 0;
+}
+
+static float audioEmitterCurrentGain(Runner* runner, AudioEmitterVoice* voice) {
+    uint64_t elapsed = audioEmitterFadeElapsed(runner, voice);
+    if (!voice->gainFadeNanos || elapsed >= voice->gainFadeNanos) return voice->gain;
+    float t = (float)(int64_t)elapsed / (float)(int64_t)voice->gainFadeNanos;
+    return voice->gainFrom + (voice->gain - voice->gainFrom) * t;
+}
+
+static void audioEmitterStartGain(Runner* runner, AudioEmitter* emitter, AudioEmitterVoice* voice,
+                                  float gain, uint32_t timeMs) {
+    voice->gainFrom = audioEmitterCurrentGain(runner, voice);
+    voice->gain = gain;
+    voice->gainFadeStart = runner->audioEmitterClockNanos;
+    voice->gainFadeNanos = (uint64_t)timeMs * 1000000u;
+    audioEmitterApplyGain(runner->audioSystem, emitter, voice, timeMs);
+}
+
+static void audioEmitterRescaleGain(Runner* runner, AudioEmitter* emitter, AudioEmitterVoice* voice, GMLReal oldGain) {
+    AudioSystem* audio = runner->audioSystem;
+    if (audio == nullptr) return;
+    uint64_t elapsed = audioEmitterFadeElapsed(runner, voice);
+    uint64_t remaining = elapsed < voice->gainFadeNanos ? voice->gainFadeNanos - elapsed : 0;
+    float current = audioEmitterCurrentGain(runner, voice);
+    float oldMultiplier = (float)oldGain;
+    if (remaining && oldMultiplier > 0)
+        current = audio->vtable->getSoundGain(audio, voice->instanceId) / oldMultiplier;
+    voice->gainFrom = current;
+    voice->gainFadeStart = runner->audioEmitterClockNanos;
+    voice->gainFadeNanos = remaining;
+    audio->vtable->setSoundGain(audio, voice->instanceId, current * (float)emitter->gain, 0);
+    if (remaining)
+        audioEmitterApplyGain(audio, emitter, voice, (uint32_t)((remaining + 999999u) / 1000000u));
+}
+
+static void audioEmitterApplyPitch(AudioSystem* audio, AudioEmitter* emitter, AudioEmitterVoice* voice) {
+    if (audio == nullptr) return;
+    GMLReal pitch = (GMLReal)voice->pitch * emitter->pitch;
+    pitch = GMLReal_fmin(256, GMLReal_fmax((GMLReal)(1.0 / 256.0), pitch));
+    audio->vtable->setSoundPitch(audio, voice->instanceId, (float)pitch);
+}
+
+static AudioEmitterVoice* audioEmitterFindVoice(Runner* runner, int32_t id, AudioEmitter** owner) {
+    repeat(arrlen(runner->audioEmitters), i) {
+        AudioEmitter* emitter = &runner->audioEmitters[i];
+        if (!emitter->active) continue;
+        repeat(arrlen(emitter->voices), j) {
+            if (emitter->voices[j].instanceId == id) {
+                *owner = emitter;
+                return &emitter->voices[j];
+            }
+        }
+    }
+    return nullptr;
 }
 
 static RValue builtin_audio_emitter_falloff(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -7687,8 +7751,11 @@ static RValue builtin_audio_emitter_gain(VMContext* ctx, RValue* args, int32_t a
     if (args[0].type == RVALUE_UNDEFINED) return RValue_makeUndefined();
     AudioEmitter* emitter = audioEmitterGet(ctx->runner, RValue_toInt32(args[0]));
     if (emitter == nullptr) return RValue_makeUndefined();
-    emitter->gain = RValue_toReal(args[1]);
-    audioEmitterUpdateVoices(ctx->runner, emitter);
+    GMLReal oldGain = emitter->gain;
+    emitter->gain = GMLReal_fmax(0, RValue_toReal(args[1]));
+    if (emitter->gain == oldGain) return RValue_makeUndefined();
+    repeat(arrlen(emitter->voices), i)
+        audioEmitterRescaleGain(ctx->runner, emitter, &emitter->voices[i], oldGain);
     return RValue_makeUndefined();
 }
 
@@ -7697,8 +7764,9 @@ static RValue builtin_audio_emitter_pitch(VMContext* ctx, RValue* args, int32_t 
     if (args[0].type == RVALUE_UNDEFINED) return RValue_makeUndefined();
     AudioEmitter* emitter = audioEmitterGet(ctx->runner, RValue_toInt32(args[0]));
     if (emitter == nullptr) return RValue_makeUndefined();
-    emitter->pitch = RValue_toReal(args[1]);
-    audioEmitterUpdateVoices(ctx->runner, emitter);
+    emitter->pitch = GMLReal_fmax(audioPositiveMinimum(), RValue_toReal(args[1]));
+    repeat(arrlen(emitter->voices), i)
+        audioEmitterApplyPitch(ctx->runner->audioSystem, emitter, &emitter->voices[i]);
     return RValue_makeUndefined();
 }
 
@@ -7752,7 +7820,7 @@ static RValue builtin_audio_emitter_free(VMContext* ctx, RValue* args, int32_t a
     AudioSystem* audio = ctx->runner->audioSystem;
     if (audio != nullptr) {
         repeat(arrlen(emitter->voices), i) {
-            audio->vtable->stopSound(audio, emitter->voices[i]);
+            audio->vtable->stopSound(audio, emitter->voices[i].instanceId);
         }
     }
     arrfree(emitter->voices);
@@ -7812,13 +7880,16 @@ static RValue builtin_audio_play_sound_on(VMContext* ctx, RValue* args, int32_t 
     int32_t instanceId = audio->vtable->playSound(audio, soundIndex, RValue_toInt32(args[3]), RValue_toBool(args[2]));
     if (instanceId < 0) return RValue_makeReal(-1);
 
-    arrput(emitter->voices, instanceId);
+    AudioEmitterVoice voice = {0};
+    voice.instanceId = instanceId; voice.soundIndex = soundIndex;
+    voice.gain = audio->vtable->getSoundGain(audio, instanceId);
+    voice.pitch = audio->vtable->getSoundPitch(audio, instanceId);
     audio->vtable->setSoundSpatial(audio, instanceId, (float)emitter->x, (float)emitter->y, (float)emitter->z,
-                                    (float)emitter->vx, (float)emitter->vy, (float)emitter->z,
+                                    (float)emitter->vx, (float)emitter->vy, (float)emitter->vz,
                                     (float)emitter->falloffRef, (float)emitter->falloffMax, (float)emitter->falloffFactor);
     if (argCount > 4 && args[4].type != RVALUE_UNDEFINED) {
         float gain = (float)GMLReal_fmax(0, RValue_toReal(args[4]));
-        audio->vtable->setSoundGain(audio, instanceId, audio->vtable->getSoundGain(audio, instanceId) * gain, 0);
+        voice.gain *= gain;
     }
     if (argCount > 5 && args[5].type != RVALUE_UNDEFINED) {
         float offset = (float)GMLReal_fmax(0, RValue_toReal(args[5]));
@@ -7826,8 +7897,11 @@ static RValue builtin_audio_play_sound_on(VMContext* ctx, RValue* args, int32_t 
     }
     if (argCount > 6 && args[6].type != RVALUE_UNDEFINED) {
         float pitch = (float)GMLReal_fmax((GMLReal)FLT_MIN, RValue_toReal(args[6]));
-        audio->vtable->setSoundPitch(audio, instanceId, audio->vtable->getSoundPitch(audio, instanceId) * pitch);
+        voice.pitch *= pitch;
     }
+    arrput(emitter->voices, voice);
+    audioEmitterApplyGain(audio, emitter, &voice, 0);
+    audioEmitterApplyPitch(audio, emitter, &voice);
     return RValue_makeReal((GMLReal)instanceId);
 }
 
@@ -7970,7 +8044,22 @@ static RValue builtin_audio_sound_gain(VMContext* ctx, RValue* args, MAYBE_UNUSE
     int32_t soundOrInstance = RValue_toInt32(args[0]);
     float gain = (float) RValue_toReal(args[1]);
     uint32_t timeMs = (uint32_t) RValue_toInt32(args[2]);
+    AudioEmitter* emitter = nullptr;
+    AudioEmitterVoice* voice = audioEmitterFindVoice(ctx->runner, soundOrInstance, &emitter);
+    if (voice != nullptr) {
+        audioEmitterStartGain(ctx->runner, emitter, voice, gain, timeMs);
+        return RValue_makeUndefined();
+    }
     audio->vtable->setSoundGain(audio, soundOrInstance, gain, timeMs);
+    repeat(arrlen(ctx->runner->audioEmitters), i) {
+        AudioEmitter* owner = &ctx->runner->audioEmitters[i];
+        if (!owner->active) continue;
+        repeat(arrlen(owner->voices), j) {
+            AudioEmitterVoice* entry = &owner->voices[j];
+            if (entry->soundIndex != soundOrInstance) continue;
+            audioEmitterStartGain(ctx->runner, owner, entry, gain, timeMs);
+        }
+    }
     return RValue_makeUndefined();
 }
 
@@ -7979,7 +8068,24 @@ static RValue builtin_audio_sound_pitch(VMContext* ctx, RValue* args, MAYBE_UNUS
     if (audio == nullptr) return RValue_makeUndefined();
     int32_t soundOrInstance = RValue_toInt32(args[0]);
     float pitch = (float) RValue_toReal(args[1]);
+    AudioEmitter* emitter = nullptr;
+    AudioEmitterVoice* voice = audioEmitterFindVoice(ctx->runner, soundOrInstance, &emitter);
+    if (voice != nullptr) {
+        voice->pitch = pitch;
+        audioEmitterApplyPitch(audio, emitter, voice);
+        return RValue_makeUndefined();
+    }
     audio->vtable->setSoundPitch(audio, soundOrInstance, pitch);
+    repeat(arrlen(ctx->runner->audioEmitters), i) {
+        AudioEmitter* owner = &ctx->runner->audioEmitters[i];
+        if (!owner->active) continue;
+        repeat(arrlen(owner->voices), j) {
+            AudioEmitterVoice* entry = &owner->voices[j];
+            if (entry->soundIndex != soundOrInstance) continue;
+            entry->pitch = pitch;
+            audioEmitterApplyPitch(audio, owner, entry);
+        }
+    }
     return RValue_makeUndefined();
 }
 
@@ -8097,11 +8203,22 @@ static RValue builtin_audio_music_is_playing(VMContext* ctx, MAYBE_UNUSED RValue
     return RValue_makeBool(false);
 }
 
+static void audioEmitterSetPaused(Runner* runner, int32_t id, bool paused) {
+    repeat(arrlen(runner->audioEmitters), i) {
+        AudioEmitter* emitter = &runner->audioEmitters[i];
+        repeat(arrlen(emitter->voices), j) {
+            AudioEmitterVoice* voice = &emitter->voices[j];
+            if (voice->instanceId == id || voice->soundIndex == id) voice->paused = paused;
+        }
+    }
+}
+
 static RValue builtin_audio_pause_sound(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
     AudioSystem* audio = ctx->runner->audioSystem;
     if (audio == nullptr) return RValue_makeUndefined();
     int32_t soundOrInstance = RValue_toInt32(args[0]);
     audio->vtable->pauseSound(audio, soundOrInstance);
+    audioEmitterSetPaused(ctx->runner, soundOrInstance, true);
     return RValue_makeUndefined();
 }
 
@@ -8110,6 +8227,7 @@ static RValue builtin_audio_resume_sound(VMContext* ctx, RValue* args, MAYBE_UNU
     if (audio == nullptr) return RValue_makeUndefined();
     int32_t soundOrInstance = RValue_toInt32(args[0]);
     audio->vtable->resumeSound(audio, soundOrInstance);
+    audioEmitterSetPaused(ctx->runner, soundOrInstance, false);
     return RValue_makeUndefined();
 }
 
@@ -14663,7 +14781,7 @@ static RValue builtin_date_date_string(VMContext* ctx, MAYBE_UNUSED RValue* args
     
     if (written < 0 || (size_t)written >= sizeof(fullDate)) return RValue_makeString("");
     
-    return RValue_makeOwnedString(fullDate);
+    return RValue_makeOwnedString(safeStrdup(fullDate));
 }
 
 static RValue builtin_date_datetime_string(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
@@ -14687,7 +14805,7 @@ static RValue builtin_date_datetime_string(VMContext* ctx, MAYBE_UNUSED RValue* 
                            
     if (written < 0 || (size_t)written >= sizeof(fullDate)) return RValue_makeString("");
     
-    return RValue_makeOwnedString(fullDate);
+    return RValue_makeOwnedString(safeStrdup(fullDate));
 }
 
 static RValue builtin_action_set_alarm(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {

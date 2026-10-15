@@ -685,7 +685,7 @@ int main(int argc, char* argv[]) {
         float dt = 1.0f / (float) roomSpeed;
         if (0.0f > dt) dt = 0.0f;
         if (dt > 0.1f) dt = 0.1f;
-        runner->audioSystem->vtable->update(runner->audioSystem, dt);
+        Runner_updateAudio(runner, dt);
         u64 audioEndTime = GetTimerSystemTime();
 
         u64 runnerEndTime = GetTimerSystemTime();

@@ -501,12 +501,21 @@ typedef struct {
 } ParticleEmitter;
 
 typedef struct {
+    int32_t instanceId, soundIndex;
+    /* Voice properties before the emitter's independent multipliers. */
+    float gain, pitch;
+    float gainFrom;
+    uint64_t gainFadeStart, gainFadeNanos;
+    bool paused;
+} AudioEmitterVoice;
+
+typedef struct {
     bool active;
     GMLReal x, y, z;
     GMLReal vx, vy, vz;
     GMLReal falloffRef, falloffMax, falloffFactor;
     GMLReal gain, pitch;
-    int32_t* voices; // sound-instance IDs played on this emitter
+    AudioEmitterVoice* voices;
 } AudioEmitter;
 
 typedef struct {
@@ -826,6 +835,7 @@ struct Runner {
     ParticleSystem* particleSystemPool; // stb_ds array of ParticleSystem
     ParticleType* particleTypePool; // stb_ds array of ParticleType
     AudioEmitter* audioEmitters; // stb_ds array, index = audio emitter id
+    uint64_t audioEmitterClockNanos; // advances with backend updates, not while debug-paused
 
     // Motion planning potential field settings
     GMLReal mpPotMaxrot;
@@ -919,6 +929,8 @@ void Runner_reset(Runner* runner);
 Runner* Runner_create(DataWin* dataWin, VMContext* vm, Renderer* renderer, FileSystem* fileSystem, AudioSystem* audioSystem, uint32_t randomSeed);
 void Runner_setGameArgs(Runner* runner, char** argv, int32_t argc);
 void Runner_setPaused(Runner* runner, bool paused);
+// Keep emitter ramp time synchronized with the backend on every platform.
+void Runner_updateAudio(Runner* runner, float deltaTime);
 bool Runner_isPaused(Runner* runner);
 void Runner_initFirstRoom(Runner* runner);
 void Runner_step(Runner* runner);
