@@ -271,6 +271,17 @@ static void testSleepBenchmark(VMContext *ctx) {
     assert(!RunnerKeyboard_check(r->keyboard, VK_ENTER));
     r->pendingRoom = -1; r->frameCount++;
     ofGame.sleepTest(r); assert(r->pendingRoom == -1); /* B doesn't keep reloading. */
+    GameObject mainCharacter = {0}; mainCharacter.name = "obj_mainchara";
+    ctx->dataWin->objt.objects = &mainCharacter; ctx->dataWin->objt.count = 1;
+    Instance *character = Instance_create(2, 0, 0, 0);
+    Instance_setSelfVar(character, VM_getOrAllocateVarID(ctx, "cutscene"), RValue_makeReal(1));
+    arrput(r->instances, character);
+    assert(ofGame.savestateReason(r) == NULL); /* The marker alone isn't an unsupported resource. */
+    ctx->dataWin->gen8.wadVersion = 16;
+    assert(ofGame.savestateReason(r) != NULL);
+    ctx->dataWin->gen8.wadVersion = 17;
+    Instance_free(character); arrfree(r->instances);
+    ctx->dataWin->objt.objects = NULL; ctx->dataWin->objt.count = 0;
     Instance_free(ctx->globalScopeInstance); ctx->globalScopeInstance = NULL;
     RunnerKeyboard_free(r->keyboard); r->keyboard = NULL;
     for (ptrdiff_t i = 0; i < shlen(ctx->varNameMap); i++) free(ctx->varNameMap[i].key);

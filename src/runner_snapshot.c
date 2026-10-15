@@ -654,7 +654,10 @@ static bool eligible(Runner *r, const char **reason, bool forCapture, BlockerLis
     }
     for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
         Instance *inst = r->instances[i];
-        if (!inst || inst->destroyed || inst->objectIndex < 0 ||
+        /* Draw/GUI can destroy a dialogue object after Step's cleanup pass.
+         * Keep this quiescent instance, its values and list membership until
+         * the next ordinary cleanup; capture must not advance its lifetime. */
+        if (!inst || (inst->destroyed && (inst->active || !inst->cleanupEventFired)) || inst->objectIndex < 0 ||
             (uint32_t)inst->objectIndex >= r->dataWin->objt.count || inst->physicsBody)
             REFUSE("Unsupported live instance");
     }
@@ -1708,6 +1711,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
         Instance *inst = Instance_create(p.id, p.object, 0, 0);
         setInstancePlain(inst, &p);
         arrput(s->instances, inst);
+        if (inst->destroyed && (inst->active || !inst->cleanupEventFired)) goto bad;
         getMap(&rd, s, &inst->selfVars, SLOT_INSTANCE, i);
     }
     uint32_t savedRooms = version >= SNAP_SAVED_ROOM_VERSION ? get32(&rd) : 0;

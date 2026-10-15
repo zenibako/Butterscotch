@@ -260,6 +260,80 @@ static void destroyFixture(Runner *r) {
     arrfree(r->cachedDrawables);
 }
 
+static void invalidDestroyedActive(uint8_t *raw, size_t size) {
+    size_t active = 12 + offsetof(Instance, active) - offsetof(Instance, x);
+    size_t destroyed = 12 + offsetof(Instance, destroyed) - offsetof(Instance, x);
+    for (size_t i = 0; i + destroyed < size; i++) {
+        if (le32(raw + i) != 100002) continue;
+        assert(raw[i + destroyed] == 1 && raw[i + active] == 0);
+        raw[i + active] = 1;
+        return;
+    }
+    assert(false);
+}
+
+static void testDestroyedInstanceAwaitingCleanup(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    object.parentId = -1;
+    Instance *first = Instance_create(100001, 0, 11, 22);
+    Instance *dead = Instance_create(100002, 0, 33, 44);
+    Instance *last = Instance_create(100003, 0, 55, 66);
+    dead->destroyed = true; dead->active = false; dead->cleanupEventFired = true;
+    dead->layer = 55;
+    arrput(r.instances, first); arrput(r.instances, dead); arrput(r.instances, last);
+    for (ptrdiff_t i = 0; i < arrlen(r.instances); i++) {
+        hmput(r.instancesById, r.instances[i]->instanceId, r.instances[i]);
+        Runner_addInstanceToObjectLists(&r, r.instances[i]);
+    }
+    GMLArray *shared = GMLArray_create(&dw, 1);
+    GMLArray_set(shared, 0, RValue_makeReal(777));
+    Instance_setSelfVar(first, 3, RValue_makeArray(shared));
+    Instance_setSelfVar(dead, 3, RValue_makeArray(shared));
+    shared->owner = IntRValueHashMap_findSlot(&dead->selfVars, 3);
+    GMLArray_decRef(shared);
+    RuntimeLayer layer = {0}; layer.id = 55;
+    RuntimeLayerElement element = {0};
+    element.id = 56; element.type = RuntimeLayerElementType_Instance; element.instanceId = dead->instanceId;
+    arrput(layer.elements, element); arrput(r.runtimeLayers, layer); r.nextLayerId = 57;
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCheck(&r) == NULL);
+    assert(Runner_snapshotCapture(&r, 95, &bytes, &size, &reason));
+    size_t invalidSize = size;
+    uint8_t *invalid = malloc(size); assert(invalid); memcpy(invalid, bytes, size);
+    repack(&invalid, &invalidSize, invalidDestroyedActive);
+    assert(Runner_snapshotPrepare(&r, 95, invalid, invalidSize, &reason) == NULL);
+    free(invalid);
+    /* Capture and preparation preserve the pending cleanup and its owner. */
+    assert(arrlen(r.instances) == 3 && r.instances[1] == dead);
+    RunnerSnapshot *prepared = Runner_snapshotPrepare(&r, 95, bytes, size, &reason);
+    assert(prepared && r.instances[1] == dead);
+    Runner_snapshotApply(&r, prepared); Runner_snapshotFree(prepared);
+    dead = r.instances[1];
+    assert(arrlen(r.instances) == 3 && dead->instanceId == 100002);
+    assert(dead->destroyed && !dead->active && dead->cleanupEventFired);
+    int32_t deadId = 100002;
+    assert(hmget(r.instancesById, deadId) == dead);
+    assert(arrlen(r.instancesByObject[0]) == 3 && r.instancesByObject[0][1] == dead);
+    assert(arrlen(r.instancesByExactObject[0]) == 3 && r.instancesByExactObject[0][1] == dead);
+    RValue liveArray = Instance_getSelfVar(r.instances[0], 3);
+    RValue deadArray = Instance_getSelfVar(dead, 3);
+    assert(liveArray.array == deadArray.array);
+    assert(liveArray.array->owner == IntRValueHashMap_findSlot(&dead->selfVars, 3));
+    dead->active = true; assert(Runner_snapshotCheck(&r) != NULL); dead->active = false;
+    dead->cleanupEventFired = false; assert(Runner_snapshotCheck(&r) != NULL); dead->cleanupEventFired = true;
+    Runner_cleanupDestroyedInstances(&r);
+    assert(arrlen(r.instances) == 2 && r.instances[0]->instanceId == 100001 && r.instances[1]->instanceId == 100003);
+    assert(hmgeti(r.instancesById, deadId) < 0);
+    assert(arrlen(r.instancesByObject[0]) == 2 && arrlen(r.instancesByExactObject[0]) == 2);
+    assert(arrlen(r.runtimeLayers[0].elements) == 0);
+    assert(GMLArray_get(liveArray.array, 0).real == 777);
+    Runner_cleanupDestroyedInstances(&r); assert(arrlen(r.instances) == 2);
+    Runner_freeRuntimeLayer(&r.runtimeLayers[0]); arrfree(r.runtimeLayers);
+    free(bytes); destroyFixture(&r);
+}
+
 static void testRoundTrip(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -1558,6 +1632,7 @@ static void testDecoderStaticStringExpansionBudget(void) {
 }
 
 int main(void) {
+    testDestroyedInstanceAwaitingCleanup();
     testBlockersListsEveryRefusal();
     testRestoreDiscardsLiveSavedRoomResources();
     testPersistentSavedRoomRoundTrip();

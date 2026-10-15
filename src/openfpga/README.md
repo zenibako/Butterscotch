@@ -137,7 +137,7 @@ sleep. Exact snapshots are accepted in supported overworld scenes, the
 game's own menus, its dialogue, battles, and the intro, title and naming
 screens. A battle state also carries the room the battle was entered from,
 which the game keeps as persistent, so finishing the battle returns there.
-The player's cutscenes, the port's Select menu, and unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+Undertale's player cutscenes, the port's Select menu, unsupported runtime resources, live dynamic sprites, and a debug-paused runner
 produce an on-screen refusal. Select → Save states
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
@@ -147,9 +147,10 @@ separate; loading a save state rewinds its captured progress files.
 
 Both games run under the one core, and the Pocket's sleep and Memories
 switch (`sleep_supported` in `core.json`) belongs to the core, so each game's
-program answers every save and load request. Deltarune (Chapter 1) follows
-the same scene rule as Undertale, refusing only while the player is in a
-cutscene (`obj_mainchara.cutscene`). A state is bound
+program answers every save and load request. Deltarune (Chapter 1) also
+accepts cutscenes when the runner can preserve their live resources. Its
+player-control marker (`obj_mainchara.cutscene`) does not itself prevent a
+snapshot. Undertale retains its cutscene restriction. A state is bound
 to the game and the exact `data.win` it was taken with. The Pocket lists
 every game's Memories together, so loading one into the other game, or after
 the game's data has changed, is refused with "This Memory is from another
@@ -297,9 +298,9 @@ with `--bench-sleep` (its own entry on save-state cards). It keeps progress in m
 leaving the game's save archive alone. Checkpoint A waits in the yard with
 saving allowed: sleep, wake, then press Start. The yard reloads into Toriel's
 real cutscene and waits at its dialogue. At checkpoint B, Select → Save states
-reports "Can't save during cutscenes". Close Select, sleep again, and record
-where wake lands; it may restore the older A state. Don't press confirm in
-the cutscene until this test is complete. The benchmark keeps running so
+should allow capture. Close Select, sleep again, and check that wake returns
+to B in the same dialogue. Repeat sleep/wake at B, then advance the dialogue
+to check that the car ride continues. The benchmark keeps running so
 Memories and sleep requests can be serviced at both checkpoints.
 
 What the software renderer does for Deltarune's rooms and screens (tile
