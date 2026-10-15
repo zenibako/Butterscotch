@@ -19,6 +19,17 @@ int main(void) {
     data[size - 1] ^= 1;
     assert(!ofSnapshotFromOtherGame(0xABC124ull, data, size));
     data[size - 1] ^= 1;
+    /* Bad section lengths under a matching checksum are damage, not
+     * another game. */
+    uint8_t *bad = malloc(size);
+    memcpy(bad, data, size);
+    bad[16] = 9;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < size; i++) h = (h ^ (i >= 36 && i < 40 ? 0 : bad[i])) * 16777619u;
+    for (unsigned i = 0; i < 4; i++) bad[36 + i] = (uint8_t)(h >> (8 * i));
+    assert(!ofSnapshotFromOtherGame(0xABC124ull, bad, size));
+    assert(!ofSnapshotUnpack(0xABC123ull, bad, size, out));
+    free(bad);
     for (size_t i = 0; i < size; i++) assert(!ofSnapshotUnpack(0xABC123ull, data, i, out));
     for (size_t i = 0; i < size; i++) {
         data[i] ^= 1;
