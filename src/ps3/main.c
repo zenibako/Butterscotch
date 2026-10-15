@@ -402,7 +402,7 @@ int main(int argc, char* argv[]) {
             if (0.0f > dt) dt = 0.0f;
             if (dt > 0.1f) dt = 0.1f; // cap delta to avoid huge fades on lag spikes
             double audioStart = PS3_GET_TIME;
-            runner->audioSystem->vtable->update(runner->audioSystem, dt);
+            Runner_updateAudio(runner, dt);
             audioTime = PS3_GET_TIME - audioStart;
         }
 

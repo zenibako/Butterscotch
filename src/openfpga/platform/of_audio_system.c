@@ -1080,6 +1080,10 @@ static void ofResumeAll(AudioSystem *audio) {
     ((OfAudioSystem *) audio)->allPaused = false;
 }
 
+static bool ofIsAllPaused(AudioSystem *audio) {
+    return ((OfAudioSystem *) audio)->allPaused;
+}
+
 static void ofSetSoundGain(AudioSystem *audio, int32_t soundOrInstance, float gain, uint32_t timeMs) {
     OfAudioSystem *ut = (OfAudioSystem *) audio;
     OfStream *stream = streamFor(ut, soundOrInstance);
@@ -1251,11 +1255,27 @@ static bool ofDestroyStream(AudioSystem *audio, int32_t streamIndex) {
     return true;
 }
 
+/* The Pocket mixer is non-spatial. Keep positional APIs usable without
+ * changing the voice's gain, pitch or decoder position. */
+static void ofSetSoundSpatial(AudioSystem *audio, int32_t instanceId,
+                              float x, float y, float z, float vx, float vy, float vz,
+                              float ref, float max, float factor) {
+    (void)audio; (void)instanceId;
+    (void)x; (void)y; (void)z; (void)vx; (void)vy; (void)vz;
+    (void)ref; (void)max; (void)factor;
+}
+
+static void ofSetListenerPosition(AudioSystem *audio, float x, float y, float z) {
+    audio->listenerX = x; audio->listenerY = y; audio->listenerZ = z;
+}
+
 static AudioSystemVtable ofVtable = {
     .init = ofInit,
     .destroy = ofDestroy,
     .update = ofUpdate,
     .playSound = ofPlaySound,
+    .setSoundSpatial = ofSetSoundSpatial,
+    .setListenerPosition = ofSetListenerPosition,
     .stopSound = ofStopSound,
     .stopAll = ofStopAll,
     .isPlaying = ofIsPlaying,
@@ -1279,6 +1299,8 @@ static AudioSystemVtable ofVtable = {
     .groupIsLoaded = ofGroupIsLoaded,
     .createStream = ofCreateStream,
     .destroyStream = ofDestroyStream,
+    .pauseStopsFades = true,
+    .isAllPaused = ofIsAllPaused,
 };
 
 AudioSystem *platformCreateAudioSystem(void) {
