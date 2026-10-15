@@ -115,7 +115,8 @@ static void invalidIniMagic(uint8_t *raw, size_t n) {
 }
 /* Revision 7 added a layout byte (and, for GMS 2.3 games, an owner token) to
  * each array, the method and struct tables after the arrays, and the static
- * block flags before the dormant pools. Strip them from a WAD 16 fixture's
+ * block flags, runtime layers, legacy tile layers and vertex resource slots
+ * before the dormant pools. Strip them from a WAD 16 fixture's
  * body that has no methods, structs or static flags. */
 static void toRevision6(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
     size_t at = roomBlock(raw, *rawLen, rooms) + 4 + rooms;
@@ -132,8 +133,11 @@ static void toRevision6(uint8_t *raw, uint32_t *rawLen, uint32_t rooms) {
     memmove(raw + at, raw + at + 8, *rawLen - at - 8); *rawLen -= 8;
     size_t ini = *rawLen - 8;
     while (ini > 0 && le32(raw + ini) != 0x31494e49u) ini--;
-    assert(ini >= 48 && le32(raw + ini - 48) == 0); /* no static flags */
-    memmove(raw + ini - 48, raw + ini - 44, *rawLen - (ini - 44)); *rawLen -= 4;
+    /* static flags, runtime layers, legacy tile layers, vertex format and
+     * buffer slots: five zero counts before the dormant pools */
+    assert(ini >= 64);
+    for (size_t k = 64; k > 44; k -= 4) assert(le32(raw + ini - k) == 0);
+    memmove(raw + ini - 64, raw + ini - 44, *rawLen - (ini - 44)); *rawLen -= 20;
 }
 /* Revision 6 added the saved persistent rooms after the live instances.
  * Older revisions lack that count; drop it from a body with no instances. */
@@ -369,14 +373,18 @@ static void testBlockersListsEveryRefusal(void) {
 
     /* The vertex buffer table is a plain array sized by vertexBufferCount,
      * not an stb_ds array: the preflight must bound it by that count. */
+    /* Revision 7 keeps the game's own vertex resources across a load, so an
+     * empty pool and an unused buffer are fine; a written one is refused. */
     r.vertexBufferCount = 4;
     r.vertexBuffers = calloc(4, sizeof(*r.vertexBuffers));
     assert(r.vertexBuffers);
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    Buffer_Vertex buffer; memset(&buffer, 0, sizeof(buffer));
+    r.vertexBuffers[3] = &buffer;
+    assert(Runner_snapshotBlockers(&r, why, 8) == 0);
+    buffer.vertexCount = 3;
     assert(Runner_snapshotBlockers(&r, why, 8) == 1);
-    assert(listed(why, 1, "Vertex buffer count is unsupported"));
-    r.vertexBuffers[3] = (Buffer_Vertex *)&r;   /* any non-null entry is a live buffer */
-    assert(Runner_snapshotBlockers(&r, why, 8) == 2);
-    assert(listed(why, 2, "Live vertex buffer is unsupported"));
+    assert(listed(why, 1, "Vertex buffer contents are unsupported"));
     assert(Runner_snapshotCheck(&r) != NULL);
     free(r.vertexBuffers);
     r.vertexBuffers = NULL;
@@ -979,6 +987,97 @@ static void testGms2ValuesRoundTrip(void) {
 }
 #endif
 
+/* Revision 7: the current room's runtime layers. Elements that borrow from
+ * the parsed room (a tilemap, a legacy tile, a sprite's name) come back
+ * pointing at the same room data; an owned tile and a dynamic layer's name
+ * come back as copies; legacy tiles moved after the capture are put back;
+ * the game's own vertex format is kept when it matches. */
+static void testRuntimeLayersRoundTrip(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint32_t cells[4] = {1, 2, 3, 4};
+    RoomLayerTilesData tilemap = {0, 2, 2, cells};
+    RoomTile legacy[2]; memset(legacy, 0, sizeof(legacy));
+    legacy[0].x = 10; legacy[1].x = 20;
+    static const char spriteName[] = "graphic_lamp";
+    SpriteInstance sprites[1]; memset(sprites, 0, sizeof(sprites));
+    sprites[0].name = spriteName;
+    RoomLayerAssetsData assets = {2, legacy, 1, sprites};
+    RoomLayer layers[2]; memset(layers, 0, sizeof(layers));
+    layers[0].type = RoomLayerType_Tiles; layers[0].tilesData = &tilemap;
+    layers[1].type = RoomLayerType_Assets; layers[1].assetsData = &assets;
+    room.layers = layers; room.layerCount = 2;
+
+    RuntimeLayer parsed; memset(&parsed, 0, sizeof(parsed));
+    parsed.id = 5; parsed.depth = 100; parsed.visible = true;
+    parsed.beginScript = parsed.endScript = parsed.shaderIndex = -1;
+    RuntimeLayerElement el; memset(&el, 0, sizeof(el));
+    el.id = 6; el.type = RuntimeLayerElementType_Tilemap; el.visible = true; el.tilemapData = &tilemap;
+    arrput(parsed.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 7; el.type = RuntimeLayerElementType_Tile; el.tileElement = &legacy[1]; el.alpha = 0.5f;
+    arrput(parsed.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 8; el.type = RuntimeLayerElementType_Sprite;
+    el.spriteElement = calloc(1, sizeof(RuntimeSpriteElement));
+    el.spriteElement->name = spriteName; el.spriteElement->x = 33;
+    arrput(parsed.elements, el);
+    arrput(r.runtimeLayers, parsed);
+    RuntimeLayer dynamic; memset(&dynamic, 0, sizeof(dynamic));
+    dynamic.id = 9; dynamic.dynamic = true; dynamic.dynamicName = strdup("_layer_9");
+    dynamic.beginScript = dynamic.endScript = dynamic.shaderIndex = -1;
+    memset(&el, 0, sizeof(el));
+    el.id = 10; el.type = RuntimeLayerElementType_Tile; el.tileElementOwned = true;
+    el.tileElement = calloc(1, sizeof(RoomTile)); el.tileElement->y = 44;
+    arrput(dynamic.elements, el);
+    memset(&el, 0, sizeof(el));
+    el.id = 11; el.type = RuntimeLayerElementType_Instance; el.instanceId = 100001;
+    arrput(dynamic.elements, el);
+    arrput(r.runtimeLayers, dynamic);
+    VmVertexElement elements[1] = {{0, (enum yyVertexType)1, (enum yyVertexUsage)1, 1}};
+    VmVertexFormat format; memset(&format, 0, sizeof(format));
+    format.id = 1; format.count = 1; format.format = elements; format.size = 12;
+    arrsetlen(r.vertexFormats, 2); r.vertexFormats[0] = NULL; r.vertexFormats[1] = &format;
+
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 66, &bytes, &size, &reason));
+    legacy[1].x = 99; /* layer_tile_x after the capture */
+    RunnerSnapshot *snap = Runner_snapshotPrepare(&r, 66, bytes, size, &reason);
+    assert(snap);
+    Runner_snapshotApply(&r, snap); Runner_snapshotFree(snap);
+
+    assert(arrlen(r.runtimeLayers) == 2);
+    RuntimeLayer *a = &r.runtimeLayers[0], *b = &r.runtimeLayers[1];
+    assert(a->id == 5 && a->depth == 100 && a->visible && !a->dynamicName && arrlen(a->elements) == 3);
+    assert(a->elements[0].type == RuntimeLayerElementType_Tilemap && a->elements[0].tilemapData == &tilemap);
+    assert(a->elements[1].tileElement == &legacy[1] && !a->elements[1].tileElementOwned &&
+           a->elements[1].alpha == 0.5f);
+    assert(legacy[1].x == 20 && legacy[0].x == 10); /* put back */
+    assert(a->elements[2].spriteElement && a->elements[2].spriteElement->name == spriteName &&
+           a->elements[2].spriteElement->x == 33);
+    assert(b->dynamic && b->dynamicName && !strcmp(b->dynamicName, "_layer_9") && arrlen(b->elements) == 2);
+    assert(b->elements[0].tileElementOwned && b->elements[0].tileElement->y == 44);
+    assert(b->elements[1].type == RuntimeLayerElementType_Instance && b->elements[1].instanceId == 100001);
+    assert(arrlen(r.vertexFormats) == 2 && r.vertexFormats[1] == &format); /* kept */
+
+    /* A changed vertex format is not the game the state was taken from. */
+    format.size = 16;
+    assert(Runner_snapshotPrepare(&r, 66, bytes, size, &reason) == NULL);
+    format.size = 12;
+    /* An element pointing outside the room's data is not saved. */
+    RoomTile stray; memset(&stray, 0, sizeof(stray));
+    r.runtimeLayers[0].elements[1].tileElement = &stray;
+    assert(Runner_snapshotCheck(&r) != NULL);
+    r.runtimeLayers[0].elements[1].tileElement = &legacy[1];
+    free(bytes);
+    for (ptrdiff_t i = 0; i < arrlen(r.runtimeLayers); i++) Runner_freeRuntimeLayer(&r.runtimeLayers[i]);
+    arrfree(r.runtimeLayers);
+    arrfree(r.vertexFormats); r.vertexFormats = NULL;
+    room.layers = NULL; room.layerCount = 0;
+    destroyFixture(&r);
+}
+
 static void testZstdV4FrameValidation(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -1299,6 +1398,7 @@ int main(void) {
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
     testRevision5WithoutSavedRooms();
+    testRuntimeLayersRoundTrip();
 #if IS_WAD17_OR_HIGHER_ENABLED
     testGms2ValuesRoundTrip();
 #endif
