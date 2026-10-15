@@ -135,9 +135,9 @@ on the host (Homebrew's Bash on macOS).
 Use the Pocket's Memories controls to save or load, or its power button to
 sleep. Exact snapshots are accepted in supported overworld scenes, the
 game's own menus, its dialogue, battles, and the intro, title and naming
-screens. A battle state also carries the room the battle was entered from,
+screens, and cutscenes. A battle state also carries the room the battle was entered from,
 which the game keeps as persistent, so finishing the battle returns there.
-Undertale's player cutscenes, the port's Select menu, unsupported runtime resources, live dynamic sprites, and a debug-paused runner
+The port's Select menu, unsupported runtime resources, live dynamic sprites, and a debug-paused runner
 produce an on-screen refusal. Select → Save states
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
@@ -147,10 +147,9 @@ separate; loading a save state rewinds its captured progress files.
 
 Both games run under the one core, and the Pocket's sleep and Memories
 switch (`sleep_supported` in `core.json`) belongs to the core, so each game's
-program answers every save and load request. Deltarune (Chapter 1) also
-accepts cutscenes when the runner can preserve their live resources. Its
-player-control marker (`obj_mainchara.cutscene`) does not itself prevent a
-snapshot. Undertale retains its cutscene restriction. A state is bound
+program answers every save and load request. Both games accept cutscenes
+when the runner can preserve their live resources; the player-control marker
+(`obj_mainchara.cutscene`) does not itself prevent a snapshot. A state is bound
 to the game and the exact `data.win` it was taken with. The Pocket lists
 every game's Memories together, so loading one into the other game, or after
 the game's data has changed, is refused with "This Memory is from another
