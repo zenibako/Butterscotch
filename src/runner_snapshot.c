@@ -1127,7 +1127,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
     if (!hdr.ok || magic != SNAP_MAGIC ||
-        (version != SNAP_VERSION && version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
+        (version != SNAP_VERSION && version != SNAP_STRING_REF_VERSION &&
+         version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
         id != gameId ||
         bodyLen != size - 24 || crc != checksum(data + 24, bodyLen) ||
         rawLen < sizeof(RunnerPlain) || rawLen > SNAP_LIMIT - 24) {

@@ -866,6 +866,24 @@ static void testOlderCoreV3Trailers(void) {
     free(bytes); destroyFixture(&r);
 }
 
+static void testRevision5WithoutSavedRooms(void) {
+    Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
+    Room room; GameObject object;
+    fixture(&r, &dw, &vm, &renderer, &vtable, &room, &object);
+    uint8_t *bytes = NULL; size_t size = 0; const char *reason = NULL;
+    assert(Runner_snapshotCapture(&r, 59, &bytes, &size, &reason));
+    uint32_t rawLen;
+    uint8_t *raw = decodeRaw(bytes, size, &rawLen);
+    dropSavedRooms(raw, &rawLen, 1);
+    encodeRaw(&bytes, &size, raw, rawLen, 5);
+    free(raw);
+    assert(le32(bytes + 4) == 5);
+    RunnerSnapshot *s = Runner_snapshotPrepare(&r, 59, bytes, size, &reason);
+    assert(s);
+    Runner_snapshotApply(&r, s); Runner_snapshotFree(s);
+    free(bytes); destroyFixture(&r);
+}
+
 static void testZstdV4FrameValidation(void) {
     Runner r; DataWin dw; VMContext vm; Renderer renderer; RendererVtable vtable;
     Room room; GameObject object;
@@ -1184,6 +1202,7 @@ int main(void) {
     testStaticStringExpansionBudget();
     testDecoderStaticStringExpansionBudget();
     testZstdV4FrameValidation();
+    testRevision5WithoutSavedRooms();
     testRoundTrip();
     testRejectsBadInputAndLiveResources();
     testPausedCaptureEligibility();
