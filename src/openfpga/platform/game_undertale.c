@@ -48,23 +48,16 @@ static void patchInstructions(DataWin *dw) {
     }
 }
 
-/* Save states (of_state_requests.c) are taken anywhere except the player's
- * cutscenes: the overworld, the game's own menus, dialogue, battles, and the
- * intro, title and naming screens. Runner_snapshotCheck still refuses
- * anything it cannot store. A battle keeps the room it left as persistent
- * saved state, which snapshots carry since revision 6. Cutscenes are refused
- * because no restore inside one has been checked yet. */
+/* Save states (of_state_requests.c) are taken anywhere the runner can store
+ * exactly (Runner_snapshotCheck refuses the rest): the overworld, the game's
+ * own menus, dialogue, battles, cutscenes, and the intro, title and naming
+ * screens. A battle keeps the room it left as persistent saved state, which
+ * snapshots carry since revision 6. Cutscenes used to be refused; restores
+ * inside Papyrus's first scene (obj_papyrus1, the earliest that sets
+ * obj_mainchara.cutscene) were checked exactly, as Deltarune's were. */
 static const char *savestateReason(Runner *r) {
     if (r->dataWin->gen8.wadVersion != 16 || strcmp(r->dataWin->gen8.name, "UNDERTALE"))
         return "Unsupported game version";
-    for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
-        Instance *inst = r->instances[i];
-        if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
-            (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
-        const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
-        if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
-            return "Can't save during cutscenes";
-    }
     return NULL;
 }
 
