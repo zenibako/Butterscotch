@@ -218,26 +218,29 @@ static const OfBenchSection g_sections[] = {
     { "battle: next turn", 3600, "bnext" },
 };
 
-/* Save states (of_state_requests.c) are taken anywhere the runner can save
- * them exactly, except while the player is in a cutscene: the same rule as
- * Undertale's (game_undertale.c), on the same marker, obj_mainchara.cutscene.
+/* The cutscene marker describes player control, not a missing snapshot
+ * resource. The runner checks the actual live resources at frame boundaries.
  * Only the build this was measured on (Chapter 1, WAD 17) is accepted. */
 static const char *savestateReason(Runner *r) {
     if (r->dataWin->gen8.wadVersion != 17 || strcmp(r->dataWin->gen8.name, "DELTARUNE"))
         return "Unsupported game version";
+    return NULL;
+}
+
+static bool inCutscene(Runner *r) {
     for (ptrdiff_t i = 0; i < arrlen(r->instances); i++) {
         Instance *inst = r->instances[i];
         if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
             (uint32_t)inst->objectIndex >= r->dataWin->objt.count) continue;
         const char *name = r->dataWin->objt.objects[inst->objectIndex].name;
         if (!strcmp(name, "obj_mainchara") && ofStateNumber(r, inst, "cutscene") != 0)
-            return "Can't save during cutscenes";
+            return true;
     }
-    return NULL;
+    return false;
 }
 
-/* The phase lives in a GML global so waking an older A state after a refused
- * sleep at B also rewinds the test itself. The game sets cutscene naturally;
+/* The phase lives in a GML global so loading A after reaching B also rewinds
+ * the test itself. The game sets cutscene naturally;
  * the test changes only the story flag used to enter the real yard scene. */
 static const char *sleepTest(Runner *r) {
     if (r->dataWin->room.count <= 7 ||
@@ -261,7 +264,7 @@ static const char *sleepTest(Runner *r) {
         logInfo("Sleep test: checkpoint %s\n", start ? "A (allowed)" : "B (cutscene)");
     }
     if (RValue_toInt32(phase) == 1) return "A: sleep/wake, then START";
-    return savestateReason(r) ? "B: sleep is refused" : "B: waiting for cutscene";
+    return inCutscene(r) ? "B: sleep/wake in cutscene" : "B: waiting for cutscene";
 }
 
 const OfGame ofGame = {
