@@ -46,7 +46,7 @@ dest=$(cd "$dest" && pwd)
 rsync -a --exclude=.git "$base/" "$dest/"
 make -C "$os" sdk DEST="$dest"
 {
-    echo "Butterscotch Undertale native save-state runtime"
+    echo "Butterscotch native save-state runtime"
     git -C "$os" rev-parse HEAD
     shasum -a 256 "$dest/runtime/pocket/os.bin" "$dest/runtime/pocket/os25.rbf_r"
-} > "$dest/runtime/pocket/UNDERTALE_SAVESTATES"
+} > "$dest/runtime/pocket/SAVESTATES_RUNTIME"

@@ -214,10 +214,12 @@ static const OfBenchSection g_sections[] = {
     { "battle: next turn", 3600, "bnext" },
 };
 
-/* Save states are not supported yet (see of_state_requests.c). */
+/* Save states are not supported yet: every save is refused with this reason.
+ * The program still answers each save and load request (of_state_requests.c),
+ * because it shares a core, and so the Pocket's sleep switch, with Undertale. */
 static const char *savestateReason(Runner *r) {
     (void)r;
-    return "Deltarune saves aren't ready";
+    return "Save states aren't ready for Deltarune yet";
 }
 
 const OfGame ofGame = {

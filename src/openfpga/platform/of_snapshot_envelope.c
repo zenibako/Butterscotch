@@ -42,3 +42,12 @@ bool ofSnapshotUnpack(uint64_t gameId, const uint8_t *data, size_t size, OfSnaps
     }
     return next == size;
 }
+bool ofSnapshotFromOtherGame(uint64_t gameId, const uint8_t *data, size_t size) {
+    if (!data || size < OF_STATE_HEADER || size > OF_SNAPSHOT_LIMIT) return false;
+    OfSnapshotReader r = {data, size, 0, true};
+    if (ofSnapGetU32(&r) != OF_STATE_MAGIC || ofSnapGetU32(&r) != OF_STATE_VERSION) return false;
+    uint64_t id = ofSnapGetU32(&r);
+    id |= (uint64_t)ofSnapGetU32(&r) << 32;
+    for (unsigned i = 0; i < 4; i++) ofSnapGetU32(&r);
+    return id != gameId && ofSnapGetU32(&r) == size && ofSnapGetU32(&r) == checksum(data, size);
+}
