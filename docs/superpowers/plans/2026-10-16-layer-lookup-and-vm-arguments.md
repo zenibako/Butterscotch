@@ -35,13 +35,13 @@
 
 **Interface:** Preserve `Runner_findLayerElementById(Runner*, int32_t, RuntimeLayer**)`. Add a documented invalidation helper for structural writers. Store only a validity flag and layer/element indices; recompute pointers from current arrays.
 
-- [ ] Characterize returned pointers, owner output, misses, empty arrays and duplicate-ID order using real lookup and mutation paths.
-- [ ] Add an operation-count bound that fails for repeated full scans on the baseline.
-- [ ] Validate hint indices and ID before a hit; otherwise perform the unchanged ordered scan and refresh or clear the hint.
-- [ ] Invalidate before all live structural writers: room construction/replacement/restart, instance insertion/removal/depth moves, persistent-room detach, layer creation/destruction, element creation/destruction/movement and snapshot restore.
-- [ ] Test insertion before a cached duplicate, deletion, move, reallocation, replacement, stale/detached hints and actual builtin writer paths. Require both baseline characterization and optimized work-bound checks.
-- [ ] Verify both games, sanitizers, snapshot behavior and legacy compilation. Review writer coverage independently before keeping the cache.
-- [ ] Record memory/layout effects and commit the implementation separately.
+- [x] Characterize returned pointers, owner output, misses, empty arrays and duplicate-ID order using real lookup and mutation paths.
+- [x] Add an operation-count bound that fails for repeated full scans on the baseline.
+- [x] Validate hint indices and ID before a hit; otherwise perform the unchanged ordered scan and refresh or clear the hint.
+- [x] Invalidate before all live structural writers: room construction/replacement/restart, instance insertion/removal/depth moves, persistent-room detach, layer creation/destruction, element creation/destruction/movement and snapshot restore.
+- [x] Test insertion before a cached duplicate, deletion, move, reallocation, replacement, stale/detached hints and actual builtin writer paths. Require both baseline characterization and optimized work-bound checks.
+- [x] Verify both games, sanitizers, snapshot behavior and legacy compilation. Review writer coverage independently before keeping the cache.
+- [x] Record memory/layout effects and commit the implementation separately.
 
 The hint does not infer validity from repeated IDs alone. An unannounced earlier duplicate could preserve a cached slot's ID while changing the correct first match; explicit invalidation is therefore part of its contract.
 
@@ -57,23 +57,23 @@ RValue stackArgs[VM_MAX_STACK_ARGS];
 
 in both `handleCall` and `handleCallV`, replacing their zero-initialized declarations. Do not change the overflow `safeCalloc`, locals, argument growth, independent ownership or return strengthening.
 
-- [ ] Add real-bytecode characterization for CALL/CALLV at zero, 16 and 17+ arguments; check argument order/count and null zero-argument pointer.
-- [ ] Exercise strings/arrays/methods/structs where supported, nested script calls and event re-entry while arguments remain live.
-- [ ] Run characterization on baseline before removing initializers; repeat afterward with both games and sanitizers.
-- [ ] Confirm the baseline RV32's two unconditional 128-byte clears are absent from the actual candidate ELF. Do not use a source-text assertion as a performance test.
-- [ ] Review ownership and all paths accessing arguments; commit this topic separately.
+- [x] Add real-bytecode characterization for CALL/CALLV at zero, 16 and 17+ arguments; check argument order/count and null zero-argument pointer.
+- [x] Exercise strings/arrays/methods/structs where supported, nested script calls and event re-entry while arguments remain live.
+- [x] Run characterization on baseline before removing initializers; repeat afterward with both games and sanitizers.
+- [x] Confirm the baseline RV32's two unconditional 128-byte clears are absent from the actual candidate ELF. Do not use a source-text assertion as a performance test.
+- [x] Review ownership and all paths accessing arguments; commit this topic separately.
 
 ## Coordinator integration and measurement
 
-- [ ] Add and document both fixture targets in `src/openfpga/Makefile` and `README.md` in their respective topic commits.
-- [ ] Review each exact task patch independently, then review the combined implementation.
-- [ ] Rebuild both game configurations after shared header changes; run focused fixtures, strict lint, core legacy syntax and CMake warnings-as-errors checks as applicable.
-- [ ] Create fresh baseline, VM-only, layer-only and combined snapshots. Use supported recorded patches for isolation if the two commits share a parent chain.
-- [ ] Screen Deltarune spades Accuracy timing first. Use the already reviewed private scene adapter that handles removed contrast fields, preserving scene/profiling assertions.
-- [ ] Require repeated QEMU capture, positive same-ELF RTL replay, rejected negative oracles and independent cross-revision raw RGB555/PCM/pair comparison.
-- [ ] Validate the retained combined implementation with Speed spades, traced Deltarune dodge/spades and Undertale Flowey coverage; pair trace/timing evidence where available. Record the actual bounded coverage rather than claiming a full matrix.
-- [ ] If an apparent gain is small, establish removed machine work and use a same-ELF control where necessary; do not infer Pocket FPS.
-- [ ] Build final RV32 ELFs and write a dated results report with exact revisions, hashes, cases, costs and limitations. Physical Pocket testing remains separate.
+- [x] Add and document both fixture targets in `src/openfpga/Makefile` and `README.md` in their respective topic commits.
+- [x] Review each exact task patch independently, then review the combined implementation.
+- [x] Rebuild both game configurations after shared header changes; run focused fixtures, strict lint, core legacy syntax and CMake warnings-as-errors checks as applicable.
+- [x] Create fresh baseline, VM-only, layer-only and combined snapshots. Use a signed baseline-parent measurement commit for layer-only isolation; private nested patch exports silently skipped changes and are excluded. Verify exported source bytes against Git before builds and comparisons.
+- [x] Screen Deltarune spades Accuracy timing first. Use the already reviewed private scene adapter that handles removed contrast fields, preserving scene/profiling assertions.
+- [x] Require repeated QEMU capture, positive same-ELF RTL replay, rejected negative oracles and independent cross-revision raw RGB555/PCM/pair comparison.
+- [x] Validate the retained combined implementation with Speed spades, traced Deltarune dodge/spades and Undertale Flowey coverage; pair trace/timing evidence where available. Record the actual bounded coverage rather than claiming a full matrix.
+- [x] If an apparent gain is small, establish removed machine work and use a same-ELF control where necessary; do not infer Pocket FPS.
+- [x] Build final RV32 ELFs and write a dated results report with exact revisions, hashes, cases, costs and limitations. Physical Pocket testing remains separate.
 
 ## Shared-file preflight
 
