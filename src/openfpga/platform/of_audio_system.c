@@ -572,6 +572,31 @@ out:
     voice->gainNow = gainNow;
 }
 
+/* Preconditions: snapshotPcm exists, queueCapacity > 0, pairs >= 0. */
+static void rememberAcceptedPcm(OfAudioSystem *ut, const int16_t *pcm, int pairs) {
+    if (ut->snapshotWritten > UINT64_MAX - (uint64_t)pairs) {
+        /* Preserve scalar indexing across uint64 wrap for arbitrary capacities. */
+        for (int i = 0; i < pairs; ++i) {
+            size_t at = (size_t)(ut->snapshotWritten++ %
+                                (uint64_t)ut->queueCapacity) * 2;
+            ut->snapshotPcm[at] = pcm[i * 2];
+            ut->snapshotPcm[at + 1] = pcm[i * 2 + 1];
+        }
+        return;
+    }
+    size_t capacity = (size_t)ut->queueCapacity;
+    size_t at = (size_t)(ut->snapshotWritten % (uint64_t)capacity);
+    while (pairs > 0) {
+        size_t count = capacity - at;
+        if (count > (size_t)pairs) count = (size_t)pairs;
+        memcpy(ut->snapshotPcm + at * 2, pcm, count * 2 * sizeof(*pcm));
+        ut->snapshotWritten += (uint64_t)count;
+        pcm += count * 2;
+        pairs -= (int)count;
+        at = 0;
+    }
+}
+
 static void mixAndWrite(OfAudioSystem *ut, int pairs) {
     static int32_t mix[OF_MIX_CHUNK_PAIRS];
     static int16_t out[OF_MIX_CHUNK_PAIRS * 2];
@@ -613,11 +638,7 @@ static void mixAndWrite(OfAudioSystem *ut, int pairs) {
         uint64_t writeStart = timed ? nowNanos() : 0;
         int accepted = of_audio_write(out, chunk);
         if (ut->snapshotPcm && accepted > 0 && accepted <= chunk) {
-            for (int i = 0; i < accepted; i++) {
-                size_t at = (size_t)(ut->snapshotWritten++ % (uint64_t)ut->queueCapacity) * 2;
-                ut->snapshotPcm[at] = out[i * 2];
-                ut->snapshotPcm[at + 1] = out[i * 2 + 1];
-            }
+            rememberAcceptedPcm(ut, out, accepted);
         }
         if (timed) writeNanos += nowNanos() - writeStart;
         pairs -= chunk;
