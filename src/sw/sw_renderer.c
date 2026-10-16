@@ -2863,12 +2863,13 @@ void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites
 {
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
+    uint32_t i;
     free(swr->contrastItems); free(swr->contrastFonts);
     swr->contrastItemCount = dw->tpag.count;
     swr->contrastFontCount = dw->font.count;
-    swr->contrastItems = dw->tpag.count ? safeCalloc(dw->tpag.count, 1) : NULL;
-    swr->contrastFonts = dw->font.count ? safeCalloc(dw->font.count, 1) : NULL;
-    for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+    swr->contrastItems = dw->tpag.count ? (uint8_t*) safeCalloc(dw->tpag.count, 1) : NULL;
+    swr->contrastFonts = dw->font.count ? (uint8_t*) safeCalloc(dw->font.count, 1) : NULL;
+    for (i = 0; i < dw->sprt.count; ++i) {
         const Sprite* sprite = &dw->sprt.sprites[i];
         if (!swrAssetNamed(sprite->name, sprites, spriteCount)) continue;
         for (uint32_t j = 0; j < sprite->textureCount; ++j) {
@@ -2876,7 +2877,7 @@ void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites
             if (item >= 0 && (uint32_t) item < dw->tpag.count) swr->contrastItems[item] = SWR_CONTRAST_BUTTON;
         }
     }
-    for (uint32_t i = 0; i < dw->font.count; ++i)
+    for (i = 0; i < dw->font.count; ++i)
         swr->contrastFonts[i] = swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount) ? SWR_FONT_BUBBLE_CONTRAST : 0;
 }
 
@@ -2885,7 +2886,8 @@ void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sp
 {
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
-    for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+    uint32_t i;
+    for (i = 0; i < dw->sprt.count; ++i) {
         const Sprite* sprite = &dw->sprt.sprites[i];
         if (!swrAssetNamed(sprite->name, sprites, spriteCount)) continue;
         for (uint32_t j = 0; j < sprite->textureCount; ++j) {
@@ -2893,7 +2895,7 @@ void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sp
             if (item >= 0 && (uint32_t) item < swr->contrastItemCount) swr->contrastItems[item] = SWR_CONTRAST_UI_GLYPH;
         }
     }
-    for (uint32_t i = 0; i < swr->contrastFontCount; ++i)
+    for (i = 0; i < swr->contrastFontCount; ++i)
         if (swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount)) swr->contrastFonts[i] |= SWR_FONT_WHITE_CONTRAST;
 }
 
