@@ -1,7 +1,7 @@
 # String read optimization: host evidence, 2026-10-15
 
-Status: host workload and scene validation complete; retention decision awaits
-coordinator harness evidence. No device performance claim is established here.
+Status: host workload, scene validation and bounded integrated replay matrix
+complete. Retain the local candidate; physical Pocket benefit is unmeasured.
 
 ## Revisions and scope
 
@@ -193,19 +193,37 @@ Accepted capture/diagnostic executable SHA-256 values:
 | `task2-v2-ut-candidate` | `7834c2e346fba3b03a643b3ced833db4ae93894e7a705cec717e06685b95d75b` |
 | `task2-v2-ut-diagnostic` | `383c542aad20c192b7cd25bd2fcb5e07624542d1e6d96e06a272dca64ae72410` |
 
-## Harness timing and retain/reject gate — awaiting coordinator
+## Harness timing and retain/reject decision
 
-No QEMU or RTL measurements were run by this host worker. The coordinator owns
-the initial Deltarune dodge screen and, if retention is justified, the complete
-two-game Accuracy/Speed field/menu/dodge/Flowey matrix, repeated captures,
-same-ELF oracles, rejected corrupt-state controls, trace/timing agreement,
-raw RGB555/PCM/pair comparisons, and diagnostic-scanout sensitivity replay.
-Case paths, ELF hashes, per-frame cycles, failures, and retention decision remain
-pending in this section. No simulated cycles or device gain are inferred from
-the host counts. If gains are small, the shared design still requires a separate
-Pocket base/candidate/base experiment before claiming device benefit. Deployment
-remains outside this work.
+The isolated string candidate `8540044` passes the Deltarune dodge Accuracy
+screen against source-equivalent baseline `a6ea5c0`: raw RGB555, PCM and pair
+counts match; repeated captures and same-ELF replay pass; the corrupted-state
+control is rejected. A direct comparison passes all 12 pixel/PCM files across
+two captures and three frames. Mean simulated frame time changes from
+108.289930 to 108.705197 ms (+0.383%). This small difference is inconclusive.
+Exact cases under the private harness's `experiments/cases/`:
 
-Host disposition: the candidate removes measured work in real text/menu routes
-and passes the selected pixel checks. Keep it eligible for harness evaluation;
-these host results alone do not approve retention or establish a speedup.
+```text
+opt-main-a6ea5c0-20261015-deltarune-dodge-accuracy-timing-0b2a2747dd136fbd
+opt-strings-8540044-r1-deltarune-dodge-accuracy-timing-2b0fb44070416f5e
+```
+
+The validating comparison/report files are
+`build/optimization-discovery-20261015/strings-dodge-accuracy-comparison.json`
+and `strings-dodge-accuracy-results.json`.
+
+The integrated `2ee841c` candidate then passes the shared 32-ELF matrix across
+both games, modes and trace/timing builds, all negative controls, raw RGB555/
+PCM/pair comparisons, and eight exact timing-ELF diagnostic scanout replays.
+Timing RTL excludes its in-loop PCM hash; trace RTL checks it and both build
+kinds have compared raw QEMU PCM. These full-matrix timings describe the bundle,
+not an independent string-only gain. The [combined results](2026-10-15-deltarune-optimization-results.md)
+record exact cases through the hashed inventory, per-window results, memory,
+same-source timing variation, interruptions and remaining device limits.
+
+Retain the local borrowed-input candidate: it removes measured allocations in
+real text/menu routes and passes independent ownership/behavior fixtures and
+the shared compatibility gate. No gameplay speedup is inferred from synthetic
+counts, and the isolated timing difference establishes no benefit. A physical
+Pocket base/candidate/base comparison remains necessary before claiming device
+improvement. Deployment is outside this work.

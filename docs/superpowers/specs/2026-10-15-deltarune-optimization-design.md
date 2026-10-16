@@ -1,6 +1,8 @@
 # Deltarune optimization design and execution order
 
-Status: proposed implementation scope; this change contains planning documents only.
+Status: implemented and locally verified at code revision `2ee841c`; audio and
+string candidates retained, collision caching deferred. Physical Pocket benefit
+remains unmeasured. See the [combined results](../../../src/openfpga/docs/2026-10-15-deltarune-optimization-results.md).
 Source baseline: `a6ea5c0532298a14e896a719f3bbb1461ca39141`.
 
 Reduce avoidable CPU work while preserving the current game's pixels, audio,
@@ -23,9 +25,9 @@ work separately before selecting a collision optimization.
   indices. Its original game eligibility limits have since changed; current
   code and [save-state verification](../../../.claude/skills/butterscotch-pocket-verify/references/save-states.md)
   govern present eligibility. These optimizations must not change it.
-- Current `mixAndWrite` calls software `__umoddi3` once per accepted stereo
+- Baseline `mixAndWrite` called software `__umoddi3` once per accepted stereo
   pair. This was verified in the actual RV32 ELF, not just a desktop profile.
-  `string_copy`, `string_char_at` and `string_ord_at` duplicate existing string
+  Baseline `string_copy`, `string_char_at` and `string_ord_at` duplicated existing string
   inputs through `RValue_toString`. Collision dispatch snapshots and sorts a
   target population for each self/event. Their frame-time savings are unmeasured.
 
@@ -46,8 +48,9 @@ work separately before selecting a collision optimization.
    regression coverage and a measured decision. It does not authorize a cache
    design without evidence about its benefit and invalidation requirements.
 
-Audio is first because the redundant operation is compiler-confirmed and its
-replacement is local. String changes are a separate commit/topic. A collision
+Audio was selected first because the redundant operation is compiler-confirmed
+and its replacement is local. The user subsequently authorized parallel work;
+each topic retains separate signed commits and independent review. A collision
 cache has greater semantic risk. VM local/argument pooling is deferred because
 its cost has not been measured and previous allocation experiments were weak.
 
@@ -91,9 +94,12 @@ cost, audio model, scene and build kind. The discovery settings were GCC 16.2.0,
 port profile, 64-byte alignment, natives enabled, BRAM, cached framebuffer,
 1,680-cycle modeled clock reads, fixed audio, and quiet traffic.
 
-Screen first with Deltarune dodge timing. If useful, validate each retained
-candidate with trace and timing builds in Deltarune field/menu/dodge and
-Undertale Flowey, in Accuracy and Speed. Each executable needs repeat captures,
+Screen first with Deltarune dodge timing. Execution ruling: after independent
+audio and string screens, validate the integrated candidate against the common
+baseline in one 32-ELF matrix: trace and timing builds in Deltarune
+field/menu/dodge and Undertale Flowey, in Accuracy and Speed. This avoids
+duplicating identical correctness coverage; only the isolated dodge screens
+attribute timing to individual changes. Each executable needs repeat captures,
 same-ELF RTL oracles, a rejected corrupted-state control, and traced/timing
 output agreement. Cross-revision comparisons independently check raw RGB555,
 raw PCM and pair counts; compare pointer-bearing state only within one ELF.

@@ -42,12 +42,12 @@ void Runner_takeCollisionWork(Runner *runner, RunnerCollisionWork *out);
   Count bbox calculations at the actual self/other call sites. The take
   function copies all fields and zeros the runner's counters.
 
-- [ ] Create an asset-free fixture that includes the real `runner.c` and links
+- [x] Create an asset-free fixture that includes the real `runner.c` and links
   PC objects excluding `main.o` and `up/runner.o`, matching the existing include
   fixture pattern. It can call the private `dispatchCollisionEvents` directly.
   Use `VMContext.nativeCode` test callbacks to record collision `(self, other)`
   IDs while exercising production dispatch and object-list maintenance.
-- [ ] Establish the unmodified dispatch's expected callback sequence for:
+- [x] Establish the unmodified dispatch's expected callback sequence for:
   mixed parent/child targets with reversed insertion order; multiple self
   instances; a callback creating a target; destroying/deactivating a later
   target; changing an object's type; moving/resizing a target before a later
@@ -55,22 +55,22 @@ void Runner_takeCollisionWork(Runner *runner, RunnerCollisionWork *out);
   the snapshot arena. Check the arena's final length as well as callback order.
   Preserve observed later-self visibility; do not impose a new phase-wide
   snapshot policy.
-- [ ] Add zero/one/many-target counter assertions. Require one take operation
+- [x] Add zero/one/many-target counter assertions. Require one take operation
   to clear counters and a second take to return all zeros. Baseline behavioral
   tests should pass; the new counter API tests initially fail to compile.
-- [ ] Implement guarded counters without extra clocks, allocations or log calls
+- [x] Implement guarded counters without extra clocks, allocations or log calls
   inside pair/comparator loops. Never change the production comparator path.
   Diagnostic samples are for counts, not for timing comparisons.
-- [ ] Add `collision-work-fixture` emitting
+- [x] Add `collision-work-fixture` emitting
   `$(PC_BIN)_collision_work_fixture`. Build/run it for WAD16 and WAD17 using
   fresh PC object directories and the existing sanitizer flags. Set the WAD
   version explicitly per fixture build. Run the callback-order cases with the
   macro both enabled and disabled; compile counter-specific assertions only
   when it is enabled.
-- [ ] Run the existing snapshot suite and both games' port lint. Inspect normal
+- [x] Run the existing snapshot suite and both games' port lint. Inspect normal
   ELF symbols/disassembly to confirm profiling calls/strings are absent when
   `OF_COLLISION_WORK_PROFILE` is undefined.
-- [ ] Commit as `test(runner): measure collision dispatch work and ordering`,
+- [x] Commit as `test(runner): measure collision dispatch work and ordering`,
   with a GPG signature.
 
 ### Task 2: Produce the measured decision
@@ -82,31 +82,51 @@ create a dated `src/openfpga/docs/2026-10-15-collision-work-results.md`.
 diagnostic-only build. Produce per-scene counts, bucket-length distributions,
 fixture evidence and a proceed/defer decision; no cache is delivered here.
 
-- [ ] Instrument a private desktop loop adapter to call the take function after
+- [x] Instrument a private desktop loop adapter to call the take function after
   dispatch and save counts for Deltarune field/menu/dodge, the recreated spade
   chase, and Undertale Flowey. Use the existing fixed seed/input/scene setup;
   do not relabel a recreated scene as imported gameplay. Write reports outside
   the timed region. Ordinary timing builds do not include this adapter.
-- [ ] Count repeat populations with a private diagnostic record of target
+- [x] Count repeat populations with a private diagnostic record of target
   object plus the full sorted `(objectIndex, instanceId)` sequence. Compare
   sequences exactly before calling them equal; a hash match alone is not proof.
   Record callbacks between repeats and whether membership/order changed.
-- [ ] Verify diagnostic-on/off frame, PCM and event-order agreement on the
+- [x] Verify diagnostic-on/off frame, PCM and event-order agreement on the
   collected routes. Run the shared first-stage ordinary parent/candidate timing
   control to detect accidental cost in a normal build; no speedup is expected
   from instrumentation that compiles out.
-- [ ] Write a decision supported by counts: defer if work is rare/small; propose
+- [x] Write a decision supported by counts: defer if work is rare/small; propose
   maintained sorted populations if membership changes rarely and sorting is
   frequent; propose a generation-keyed cache only after enumerating every
   relevant mutation/reset/restore entry point, including
   `Runner_addInstanceToObjectLists`, `Runner_removeInstanceFromObjectLists`,
   `Runner_clearAllObjectLists`, object changes, and snapshot rebuilds. Address
   scratch-arena lifetime and cache memory cost explicitly.
-- [ ] Identify the exact workload and isolated cycle experiment that would test
+- [x] Identify the exact workload and isolated cycle experiment that would test
   the selected proposal. A callback-order fixture must remain the reference;
   do not substitute a cached implementation as its own oracle. Bounding-box
   caching remains deferred unless separate evidence establishes its cost and
   every position/sprite/mask mutation can invalidate it correctly.
-- [ ] Commit the report as `docs: record collision dispatch optimization decision`.
+- [x] Commit the report as `docs: record collision dispatch optimization decision`.
   If evidence supports a cache, prepare its concrete follow-up design/plan for
   review; do not silently widen this measurement task into implementation.
+
+Execution note: the user authorized parallel implementation on 2026-10-15.
+Each topic was implemented and independently reviewed in its own worktree.
+The coordinator integrated the code as `2ee841c` and selected one shared
+32-ELF baseline/combined replay matrix after separate audio and string dodge
+screens. Timing outside those isolated screens describes the combined change.
+All local implementation and measurement deliverables are complete. The shared
+32-ELF matrix, eight contention replays and frozen-input verification pass.
+Physical device validation remains separate and no device benefit is claimed.
+
+Final results: [combined outcome and verification limits](../../../src/openfpga/docs/2026-10-15-deltarune-optimization-results.md).
+
+Collision verification ruling: the original diagnostic-on/off PCM-agreement
+check was evaluated but could not establish byte identity. Uncapped host PCM
+varies even on same-ELF repeats, as the repository save-state guide warns.
+Only diagnostic-on/off pixels and exact event/list/count streams are asserted.
+The completed fixed-audio ordinary-build matrix covers integrated compatibility;
+it does not establish macro-on/off desktop PCM identity. The checked item
+records completion of that evaluation with this explicit limitation, not a
+passing host PCM comparison. No collision speedup is inferred.
