@@ -109,6 +109,7 @@ static void setInstancePlain(Instance *inst, const InstancePlain *p) {
     memcpy((uint8_t *)inst + I_C, p->b, sizeof(p->b));
     memcpy((uint8_t *)inst + I_E, p->c, sizeof(p->c));
     inst->spatialGridDirty = false;
+    inst->collisionCellsTrusted = 0;
     inst->lastCollisionQueryId = 0;
 }
 

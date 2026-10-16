@@ -95,6 +95,7 @@ make string-reads-fixture    # builds the asset-free string read/ownership regre
 make collision-work-fixture  # builds asset-free collision order/mutation checks
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
+make spatial-grid-fixture    # builds asset-free grid recovery/update checks
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -105,6 +106,10 @@ explicit `WADS=16` or `WADS=17`; add `PC_EXTRA_CFLAGS=-DOF_COLLISION_WORK_PROFIL
 to also check sort, comparison, target-length and bounding-box counters. Use a
 fresh `PC_OBJ_DIR` when changing flags. These counters are diagnostic counts,
 not timings, and are absent from ordinary builds.
+
+The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
+ordinary updates, stale/partial membership recovery and grid replacement; use
+a fresh `PC_OBJ_DIR` for each game or changed build flags.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).

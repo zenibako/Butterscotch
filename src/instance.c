@@ -92,6 +92,7 @@ void Instance_freeContents(Instance* instance) {
 
     // Free owned strings and decRef owned arrays in selfVars hashmap, then release the entries buffer.
     IntRValueHashMap_freeAllValues(&instance->selfVars);
+    instance->collisionCellsTrusted = 0;
     arrfree(instance->collisionCells);
     instance->collisionCells = nullptr;
 }

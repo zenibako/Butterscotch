@@ -381,6 +381,11 @@ string-reads-fixture: $(PC_OBJS)
 collision-work-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/collision-work.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_collision_work_fixture
 
+# Asset-free spatial membership/recovery and bounded-update-work checks.
+.PHONY: spatial-grid-fixture
+spatial-grid-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/spatial-grid.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/spatial_grid.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_spatial_grid_fixture
+
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
 # Keep this output separate from the ordinary two-game core. Both games share
 # the one core, and the Pocket's sleep switch is per core, so every game built
