@@ -366,6 +366,11 @@ builtin-compat-fixture: $(PC_OBJS)
 string-reads-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/string-reads.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/vm_builtins.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_string_reads_fixture
 
+# Asset-free collision dispatch ordering and optional work-count checks.
+.PHONY: collision-work-fixture
+collision-work-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/collision-work.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_collision_work_fixture
+
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
 # Keep this output separate from the ordinary two-game core. Both games share
 # the one core, and the Pocket's sleep switch is per core, so every game built
