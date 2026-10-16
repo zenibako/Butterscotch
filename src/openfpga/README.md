@@ -96,6 +96,7 @@ make collision-work-fixture  # builds asset-free collision order/mutation checks
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
+make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -110,6 +111,11 @@ not timings, and are absent from ordinary builds.
 The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
 ordinary updates, stale/partial membership recovery and grid replacement; use
 a fresh `PC_OBJ_DIR` for each game or changed build flags.
+
+The VM call fixture is `./<game>_pc_vm_call_args_fixture`. It exercises actual
+CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value
+ownership and nested script/event execution without game assets. Run it once
+for each game with a separate object directory.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
