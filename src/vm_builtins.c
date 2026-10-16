@@ -19416,6 +19416,7 @@ static RValue fontAddSpriteImpl(VMContext* ctx, int32_t spriteIndex, uint16_t* c
     dw->font.fonts = (Font *)safeRealloc(dw->font.fonts, dw->font.count * sizeof(Font));
 
     Font* font = &dw->font.fonts[newFontIndex];
+    font->swrDoubledPixels = 0;
     font->name = "sprite_font";
     font->displayName = "sprite_font";
     font->emSize = (float)((maxHeight > 0) ? maxHeight : sprite->height);

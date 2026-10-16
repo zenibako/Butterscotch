@@ -3,6 +3,7 @@
  */
 
 #include "of_game.h"
+#include "sw_renderer.h"
 
 #include <stdlib.h>
 
@@ -267,7 +268,46 @@ static const char *sleepTest(Runner *r) {
     return inCutscene(r) ? "B: sleep/wake in cutscene" : "B: waiting for cutscene";
 }
 
+static const DataWin *g_battleData;
+static int32_t g_battleController = -1;
+
+static void battleUiInstall(Runner *runner) {
+    static const char *const sprites[] = {
+        "spr_btact", "spr_btdefend", "spr_btfight", "spr_btspare", "spr_btitem", "spr_bttech"
+    };
+    static const char *const glyphSprites[] = {
+        "spr_bnamekris", "spr_bnameralsei", "spr_bnamesusie", "spr_hpname", "spr_hpslash"
+    };
+    static const char *const bubbleFonts[] = { "fnt_dotumche" };
+    SWRenderer_setContrastAssets(runner->renderer, sprites, sizeof(sprites) / sizeof(sprites[0]),
+                                bubbleFonts, sizeof(bubbleFonts) / sizeof(bubbleFonts[0]));
+    SWRenderer_setContrastGlyphAssets(runner->renderer, glyphSprites, sizeof(glyphSprites) / sizeof(glyphSprites[0]),
+                                     NULL, 0);
+    g_battleData = runner->dataWin;
+    g_battleController = -1;
+    for (uint32_t i = 0; i < runner->dataWin->objt.count; ++i) {
+        const char *name = runner->dataWin->objt.objects[i].name;
+        if (name != NULL && strcmp(name, "obj_battlecontroller") == 0) {
+            g_battleController = (int32_t) i;
+            break;
+        }
+    }
+}
+
+static bool battleUiActive(Runner *runner) {
+    bool enabled = false;
+    if (runner->dataWin == g_battleData && runner->instancesByObject != NULL &&
+        g_battleController >= 0 && (uint32_t) g_battleController < runner->dataWin->objt.count) {
+        Instance **instances = runner->instancesByObject[g_battleController];
+        for (ptrdiff_t i = 0; i < arrlen(instances); ++i)
+            enabled |= instances[i]->active && !instances[i]->destroyed;
+    }
+    return enabled;
+}
+
 const OfGame ofGame = {
+    .battleUiInstall = battleUiInstall,
+    .battleUiActive = battleUiActive,
     .natives = g_natives,
     .nativeCount = sizeof(g_natives) / sizeof(g_natives[0]),
     .nativeScripts = g_nativeScripts,

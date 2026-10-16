@@ -543,7 +543,7 @@ static bool swrOverlayHold(SWRenderer* swr, int dx, int dy, int dw, int dh, SWTe
 static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
-    uintpixel_t tintColor, int alpha
+    uintpixel_t tintColor, int alpha, MAYBE_UNUSED bool pointSample, MAYBE_UNUSED int contrast
 );
 
 #ifdef SW_HAS_PREMUL_BLEND
@@ -552,7 +552,7 @@ static void swrDrawSpriteInternal(
 static void swrMirrorReplay(SWRenderer* swr, const SWSpriteCall* call)
 {
     swrDrawSpriteInternal((Renderer*) swr, call->dx, call->dy, call->dw, call->dh, call->texture,
-                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha);
+                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha, false, SWR_CONTRAST_NONE);
 }
 
 static void swrMirrorFillRows(SWRenderer* swr, int x, int y, int w, int h, uintpixel_t color, int alpha)
@@ -891,10 +891,27 @@ void swrOverlayFlush(SWRenderer* swr)
     swr->uniformValid = false; // every caller is about to draw
 }
 
+// Small bubble glyphs need strong edge coverage:
+// (n/4)^0.2, in 256ths. Zero and full coverage stay unchanged.
+// Apply it per draw, never to cached texels; there is no per-pixel pow/sqrt.
+#ifdef SW_HAS_PREMUL_BLEND
+static int swrContrastInk(int covered)
+{
+    static const int strength[5] = { 0, 194, 223, 242, 256 };
+    return strength[covered];
+}
+
+static int swrContrastCoverage(int covered, int alpha, int contrast)
+{
+    if (contrast == SWR_CONTRAST_GLYPH) return (alpha * swrContrastInk(covered)) >> 8;
+    return covered == 4 ? alpha : (alpha * covered) >> 2;
+}
+#endif
+
 static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
-    uintpixel_t tintColor, int alpha
+    uintpixel_t tintColor, int alpha, MAYBE_UNUSED bool pointSample, MAYBE_UNUSED int contrast
 )
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -930,18 +947,27 @@ static void swrDrawSpriteInternal(
     
     if (diffxl != 0 || diffyl != 0 || diffxu != 0 || diffyu != 0)
     {
-        //adjust source coordinates too
-        diffxl = (int)((long)diffxl * osw / odw);
-        diffyl = (int)((long)diffyl * osh / odh);
-        // A flipped draw advances its source start by the clipped amount.
-        // Adding the unflipped path's extra texel here starts one too far in,
-        // so the last flipped sample can read beyond the texture.
-        diffxu = (int)((long)(diffxu + (flipX ? 0 : 1)) * osw / odw);
-        diffyu = (int)((long)(diffyu + (flipY ? 0 : 1)) * osh / odh);
-        sx += flipX ? diffxu : diffxl;
-        sy += flipY ? diffyu : diffyl;
-        sw -= diffxl + diffxu;
-        sh -= diffyl + diffyu;
+        if (contrast != SWR_CONTRAST_NONE) {
+            // This sampler is exactly 2:1. An odd last block has one source
+            // texel, so clipping it must not remove a texel from its neighbour.
+            sx += diffxl * 2; sy += diffyl * 2;
+            sw -= diffxl * 2; sh -= diffyl * 2;
+            if (sw > dw * 2) sw = dw * 2;
+            if (sh > dh * 2) sh = dh * 2;
+        } else {
+            //adjust source coordinates too
+            diffxl = (int)((long)diffxl * osw / odw);
+            diffyl = (int)((long)diffyl * osh / odh);
+            // A flipped draw advances its source start by the clipped amount.
+            // Adding the unflipped path's extra texel here starts one too far in,
+            // so the last flipped sample can read beyond the texture.
+            diffxu = (int)((long)(diffxu + (flipX ? 0 : 1)) * osw / odw);
+            diffyu = (int)((long)(diffyu + (flipY ? 0 : 1)) * osh / odh);
+            sx += flipX ? diffxu : diffxl;
+            sy += flipY ? diffyu : diffyl;
+            sw -= diffxl + diffxu;
+            sh -= diffyl + diffyu;
+        }
         if (sw <= 0 || sh <= 0) return;
     }
     
@@ -965,7 +991,9 @@ static void swrDrawSpriteInternal(
     // not flipped, not too faint to show); the rest carry on below as a plain
     // unscaled draw.
     bool halfScale = (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1);
-    if (swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
+    if (!pointSample && contrast != SWR_CONTRAST_BUTTON &&
+        (contrast == SWR_CONTRAST_NONE || ((osw & 1) == 0 && (osh & 1) == 0)) &&
+        swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
         ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0 &&
         (texture->halfCoverage == NULL || (swr->blendMode == bm_normal && !flipX && !flipY && alpha >= 4)))
     {
@@ -1026,7 +1054,7 @@ static void swrDrawSpriteInternal(
                         lastTinted = tint(tintColor, color);
                         lastColor = color;
                     }
-                    int coverageAlpha = covered == 4 ? alpha : (alpha * (int) covered) >> 2;
+                    int coverageAlpha = swrContrastCoverage((int) covered, alpha, contrast);
                     if (coverageAlpha > 253)
                         dstline[x] = lastTinted;
                     else if (coverageAlpha >= 4)
@@ -1052,6 +1080,9 @@ static void swrDrawSpriteInternal(
 
     fixedp_t ystep = (sh == dh) ? (1 << fp_prec) : ((fixedp_t) osh << fp_prec) / odh;
     fixedp_t xstep = (sw == dw) ? (1 << fp_prec) : ((fixedp_t) osw << fp_prec) / odw;
+#ifdef SW_HAS_PREMUL_BLEND
+    if (contrast != SWR_CONTRAST_NONE && !fromHalf) xstep = ystep = 2 << fp_prec;
+#endif
     fixedp_t oxs2 = oxs * xstep;
     fixedp_t oys2 = oys * ystep;
     fixedp_t ixs2 = ixs * xstep;
@@ -1066,7 +1097,7 @@ static void swrDrawSpriteInternal(
     
     // A quarter of a mirrored layer is held back; anything else lets held layers out first.
     // (A draw from a half-size copy is not offered: a held layer is worked out from the texture it names.)
-    if (!swr->mirrorReplaying && !fromHalf &&
+    if (!pointSample && contrast == SWR_CONTRAST_NONE && !swr->mirrorReplaying && !fromHalf &&
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
         return;
     swr->uniformValid = false;
@@ -1089,11 +1120,65 @@ static void swrDrawSpriteInternal(
     SWR_PROBE_STOP(6);
     
 #ifdef SW_HAS_PREMUL_BLEND
+    if (contrast == SWR_CONTRAST_BUTTON || contrast == SWR_CONTRAST_UI_GLYPH || contrast == SWR_CONTRAST_BUBBLE_GLYPH) {
+        // Blend the source center with an ordinary 2x2 average, equally.
+        // Full blocks stay solid; edge shades follow the centered shape without
+        // the contrast curve's expansion, except for the bubble adjustment below.
+        // Missing texels count as transparent;
+        // the center of an odd last block clamps to its own source rectangle.
+        // Use full texels so the shared half cache remains unchanged.
+        int right = sx + sw - 1, bottom = sy + sh - 1;
+        if (alpha > 256) alpha = 256;
+        uint32_t lastColor = 0xFFFFFFFF;
+        uintpixel_t lastTinted = 0;
+        for (int y = 0; y < dh; ++y) {
+            int row0 = sy + y * 2, row1 = row0 < bottom ? row0 + 1 : bottom;
+            if (row0 > bottom) break;
+            uintpixel_t* dst = swr->fb + (dy + y) * swr->fbPitch + dx;
+            for (int x = 0; x < dw; ++x) {
+                int col0 = sx + x * 2, col1 = col0 < right ? col0 + 1 : right;
+                if (col0 > right) break;
+                uintpixel_t taps[5] = {
+                    texture->buffer[row1 * texture->width + col1],
+                    texture->buffer[row0 * texture->width + col0],
+                    col0 < right ? texture->buffer[row0 * texture->width + col0 + 1] : 0,
+                    row0 < bottom ? texture->buffer[(row0 + 1) * texture->width + col0] : 0,
+                    col0 < right && row0 < bottom ? texture->buffer[(row0 + 1) * texture->width + col0 + 1] : 0
+                };
+                uint32_t redBlue = 0, green = 0, covered = 0;
+                for (int tap = 0; tap < 5; ++tap) {
+                    uintpixel_t color = taps[tap];
+                    if (!swrIsOpaque(color)) continue;
+                    unsigned weight = tap == 0 ? 4 : 1;
+                    if (color != lastColor) {
+                        lastTinted = tint(tintColor, color);
+                        lastColor = color;
+                    }
+                    redBlue += swrSpreadRedBlue(lastTinted) * weight;
+                    green += swrGreen(lastTinted) * weight;
+                    covered += weight;
+                }
+                if (covered != 0) {
+                    unsigned coverageAlpha = (covered * alpha) >> 3;
+                    if (contrast == SWR_CONTRAST_BUBBLE_GLYPH) {
+                        // Black bubble ink splits the difference between this hybrid
+                        // coverage and the earlier bold curve, restoring faint strokes.
+                        unsigned boxCovered = covered - (swrIsOpaque(taps[0]) ? 4 : 0);
+                        coverageAlpha = (coverageAlpha + ((alpha * swrContrastInk(boxCovered)) >> 8)) >> 1;
+                    }
+                    dst[x] = swrBlendPremultiplied(dst[x], (redBlue * alpha) >> 3, (green * alpha) >> 3,
+                                                 256 - coverageAlpha);
+                }
+            }
+        }
+        return;
+    }
+
     // Shrinking by about half with nearest-neighbour sampling drops every
     // other texel, which makes small text unreadable (a 640x480 screen drawn
     // into 320x240). When enabled, average each 2x2 block of texels instead
     // and use the opaque share of the block as coverage.
-    if (swrSmoothMinify && blendmode == bm_normal && !flipX && !flipY &&
+    if (!pointSample && swrSmoothMinify && blendmode == bm_normal && !flipX && !flipY &&
         xstep > (3 << (fp_prec - 1)) && ystep > (3 << (fp_prec - 1)) && alpha >= 4)
     {
         int srcRight = sx + sw - 1, srcBottom = sy + sh - 1;
@@ -1144,7 +1229,7 @@ static void swrDrawSpriteInternal(
                     static const uint32_t reciprocal[5] = { 0, 65536, 32768, 21846, 16384 };
                     uint32_t scale = reciprocal[covered];
                     color = (uintpixel_t)(0x8000 | (((red * scale) >> 16) << 10) | (((green * scale) >> 16) << 5) | ((blue * scale) >> 16));
-                    coverageAlpha = (alpha * (int) covered) >> 2;
+                    coverageAlpha = swrContrastCoverage((int) covered, alpha, contrast);
                 }
                 
                 if (color != lastColor) {
@@ -2173,8 +2258,8 @@ void swrDrawSprite(
         swrTrailDrawing = true;
         if (swrTrailMissed.known) // the trail ends with a stamp left out: it goes down after all, before this
             swrDrawSpriteInternal(renderer, swrTrailMissed.dx, swrTrailMissed.dy, swrTrailMissed.dw, swrTrailMissed.dh, swrTrailMissed.texture,
-                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha);
-        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha);
+                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha, false, SWR_CONTRAST_NONE);
+        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha, false, SWR_CONTRAST_NONE);
         swrTrailDrawing = false;
         swrTrailMissed.known = false;
         swrTrailLast = stamp;
@@ -2193,8 +2278,51 @@ void swrDrawSprite(
         sx, sy,
         sw, sh,
         swrConvertPixel(tintColor),
-        swrIntAlpha(alpha)
+        swrIntAlpha(alpha), false, SWR_CONTRAST_NONE
     );
+}
+
+void swrDrawDoubledGlyph(Renderer* renderer, float dx, float dy, float dw, float dh,
+                         SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    float screenW = dw, screenH = dh;
+    swrTransformSizeIfNeeded(swr, &screenW, &screenH);
+    if (swrCeiling(screenW) * 2 != sw || swrCeiling(screenH) * 2 != sh) {
+        swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha);
+        return;
+    }
+    swrTransformPosIfNeeded(swr, &dx, &dy);
+    swrOverlayFlush(swr);
+    swrDrawSpriteInternal(renderer, swrFloor(dx), swrFloor(dy), sw / 2, sh / 2,
+                          texture, sx, sy, sw, sh, swrConvertPixel(tintColor), swrIntAlpha(alpha), true, SWR_CONTRAST_NONE);
+}
+
+// The platform selects only battle UI assets. Surfaces, rotated/flipped/scaled
+// alternatives and non-normal blending retain their ordinary rendering. Hybrid
+// buttons and HUD ink mix center and box sampling; black bubble ink also
+// increases partial coverage. These paths leave shared texture caches unchanged.
+void swrDrawContrastSprite(Renderer* renderer, float dx, float dy, float dw, float dh,
+                           SWTexture* texture, int sx, int sy, int sw, int sh,
+                           uint32_t tintColor, float alpha, int contrast)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    float screenW = dw, screenH = dh;
+    swrTransformSizeIfNeeded(swr, &screenW, &screenH);
+    bool eligible = swr->contrastEnabled && swrFavorSpeed && swrSmoothMinify && !swr->drawingToSurface &&
+                    swr->scaleX == 0.5f && swr->scaleY == 0.5f &&
+                    texture->immutable && swr->blendMode == bm_normal &&
+                    screenW > 0 && screenH > 0 && screenW * 2 == sw && screenH * 2 == sh &&
+                    (contrast != SWR_CONTRAST_BUBBLE_GLYPH || (tintColor & 0xFFFFFF) == 0);
+    if (!eligible) {
+        swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha);
+        return;
+    }
+    swrTransformPosIfNeeded(swr, &dx, &dy);
+    swrOverlayFlush(swr);
+    bool fullTexels = contrast == SWR_CONTRAST_BUTTON || contrast == SWR_CONTRAST_UI_GLYPH || contrast == SWR_CONTRAST_BUBBLE_GLYPH;
+    swrDrawSpriteInternal(renderer, swrFloor(dx), swrFloor(dy), swrCeiling(screenW), swrCeiling(screenH),
+                          texture, sx, sy, sw, sh, swrConvertPixel(tintColor), swrIntAlpha(alpha), fullTexels, contrast);
 }
 
 // ===[ Tiled sprites ]===
