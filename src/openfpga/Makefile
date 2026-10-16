@@ -367,6 +367,11 @@ battle-contrast-fixture: $(PC_OBJS)
 profiler-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/profiler.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_profiler_fixture
 
+# Asset-free CALL/CALLV argument bounds, ownership and nested execution checks.
+.PHONY: vm-call-args-fixture
+vm-call-args-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/vm-call-args.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_vm_call_args_fixture
+
 # Asset-free builtin ownership and audio compatibility checks.
 .PHONY: builtin-compat-fixture
 builtin-compat-fixture: $(PC_OBJS)
