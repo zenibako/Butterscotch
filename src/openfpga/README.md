@@ -91,6 +91,7 @@ make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make tile-motion-fixture  # builds the asset-free translated tile-cache regression
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
+make string-reads-fixture    # builds the asset-free string read/ownership regression
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
