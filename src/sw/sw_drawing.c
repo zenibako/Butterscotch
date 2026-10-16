@@ -543,7 +543,7 @@ static bool swrOverlayHold(SWRenderer* swr, int dx, int dy, int dw, int dh, SWTe
 static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
-    uintpixel_t tintColor, int alpha
+    uintpixel_t tintColor, int alpha, MAYBE_UNUSED bool pointSample
 );
 
 #ifdef SW_HAS_PREMUL_BLEND
@@ -552,7 +552,7 @@ static void swrDrawSpriteInternal(
 static void swrMirrorReplay(SWRenderer* swr, const SWSpriteCall* call)
 {
     swrDrawSpriteInternal((Renderer*) swr, call->dx, call->dy, call->dw, call->dh, call->texture,
-                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha);
+                          call->sx, call->sy, call->sw, call->sh, call->tintColor, call->alpha, false);
 }
 
 static void swrMirrorFillRows(SWRenderer* swr, int x, int y, int w, int h, uintpixel_t color, int alpha)
@@ -894,7 +894,7 @@ void swrOverlayFlush(SWRenderer* swr)
 static void swrDrawSpriteInternal(
     Renderer* renderer, int dx, int dy, int dw, int dh,
     SWTexture* texture, int sx, int sy, int sw, int sh,
-    uintpixel_t tintColor, int alpha
+    uintpixel_t tintColor, int alpha, MAYBE_UNUSED bool pointSample
 )
 {
     SWRenderer *swr = (SWRenderer*) renderer;
@@ -965,7 +965,7 @@ static void swrDrawSpriteInternal(
     // not flipped, not too faint to show); the rest carry on below as a plain
     // unscaled draw.
     bool halfScale = (osw == 2 * odw || osw == 2 * odw - 1) && (osh == 2 * odh || osh == 2 * odh - 1);
-    if (swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
+    if (!pointSample && swrFavorSpeed && texture->immutable && halfScale && swrHalfTexture(texture, sx, sy) &&
         ((sx + texture->halfPhaseX) & 1) == 0 && ((sy + texture->halfPhaseY) & 1) == 0 &&
         (texture->halfCoverage == NULL || (swr->blendMode == bm_normal && !flipX && !flipY && alpha >= 4)))
     {
@@ -1066,7 +1066,7 @@ static void swrDrawSpriteInternal(
     
     // A quarter of a mirrored layer is held back; anything else lets held layers out first.
     // (A draw from a half-size copy is not offered: a held layer is worked out from the texture it names.)
-    if (!swr->mirrorReplaying && !fromHalf &&
+    if (!pointSample && !swr->mirrorReplaying && !fromHalf &&
         swrMirrorHold(swr, &asked, dx, dy, dw, dh, flipX, flipY, sx, sy, (int) xstep, (int) ystep, 1 << fp_prec))
         return;
     swr->uniformValid = false;
@@ -1093,7 +1093,7 @@ static void swrDrawSpriteInternal(
     // other texel, which makes small text unreadable (a 640x480 screen drawn
     // into 320x240). When enabled, average each 2x2 block of texels instead
     // and use the opaque share of the block as coverage.
-    if (swrSmoothMinify && blendmode == bm_normal && !flipX && !flipY &&
+    if (!pointSample && swrSmoothMinify && blendmode == bm_normal && !flipX && !flipY &&
         xstep > (3 << (fp_prec - 1)) && ystep > (3 << (fp_prec - 1)) && alpha >= 4)
     {
         int srcRight = sx + sw - 1, srcBottom = sy + sh - 1;
@@ -2173,8 +2173,8 @@ void swrDrawSprite(
         swrTrailDrawing = true;
         if (swrTrailMissed.known) // the trail ends with a stamp left out: it goes down after all, before this
             swrDrawSpriteInternal(renderer, swrTrailMissed.dx, swrTrailMissed.dy, swrTrailMissed.dw, swrTrailMissed.dh, swrTrailMissed.texture,
-                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha);
-        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha);
+                                  swrTrailMissed.sx, swrTrailMissed.sy, swrTrailMissed.sw, swrTrailMissed.sh, swrTrailMissed.tint, swrTrailMissed.alpha, false);
+        swrDrawSpriteInternal(renderer, stamp.dx, stamp.dy, stamp.dw, stamp.dh, texture, sx, sy, sw, sh, stamp.tint, stamp.alpha, false);
         swrTrailDrawing = false;
         swrTrailMissed.known = false;
         swrTrailLast = stamp;
@@ -2193,8 +2193,24 @@ void swrDrawSprite(
         sx, sy,
         sw, sh,
         swrConvertPixel(tintColor),
-        swrIntAlpha(alpha)
+        swrIntAlpha(alpha), false
     );
+}
+
+void swrDrawDoubledGlyph(Renderer* renderer, float dx, float dy, float dw, float dh,
+                         SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    float screenW = dw, screenH = dh;
+    swrTransformSizeIfNeeded(swr, &screenW, &screenH);
+    if (swrCeiling(screenW) * 2 != sw || swrCeiling(screenH) * 2 != sh) {
+        swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, tintColor, alpha);
+        return;
+    }
+    swrTransformPosIfNeeded(swr, &dx, &dy);
+    swrOverlayFlush(swr);
+    swrDrawSpriteInternal(renderer, swrFloor(dx), swrFloor(dy), sw / 2, sh / 2,
+                          texture, sx, sy, sw, sh, swrConvertPixel(tintColor), swrIntAlpha(alpha), true);
 }
 
 // ===[ Tiled sprites ]===

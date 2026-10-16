@@ -352,6 +352,11 @@ test: $(PC_BIN) $(GAME_PACKS)
 sprite-clipping-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/sprite-clipping.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_sprite_clipping_fixture
 
+# Asset-free doubled-font sampling and filter-isolation regression check.
+.PHONY: font-sampling-fixture
+font-sampling-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/font-sampling.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_font_sampling_fixture
+
 # Asset-free VM/profiler accounting and between-execution toggle regression check.
 .PHONY: profiler-fixture
 profiler-fixture: $(PC_OBJS)

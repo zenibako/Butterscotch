@@ -21,6 +21,61 @@ SwrFontState;
 
 // ==== Internal functions ====
 
+/* Some pixel fonts have a transparent row before their doubled strokes.
+ * Averaging from the glyph rectangle's first row splits those strokes into
+ * gray edges. Verify every glyph's complete 2x2 pixel grid (either phase on
+ * each axis), so half-size text can use the ordinary point sampler instead.
+ * Checking the whole font avoids mistaking a small font's one doubled glyph
+ * for a doubled font. The font owns this check across texture cache evictions. */
+static bool swrGlyphHasPixelBlocks(const SWTexture* texture, int sx, int sy, int sw, int sh, bool* ink)
+{
+#if PIXEL_SIZE == 16
+    for (int phase = 0; phase < 4; ++phase) {
+        bool matches = true, anyInk = false;
+        for (int y = 0; y < sh && matches; ++y) {
+            int partnerY = y + (((y + (phase >> 1)) & 1) ? -1 : 1);
+            for (int x = 0; x < sw; ++x) {
+                int partnerX = x + (((x + (phase & 1)) & 1) ? -1 : 1);
+                uintpixel_t pixel = texture->buffer[(sy + y) * texture->width + sx + x];
+                uintpixel_t px = partnerX >= 0 && partnerX < sw ?
+                    texture->buffer[(sy + y) * texture->width + sx + partnerX] : 0;
+                uintpixel_t py = partnerY >= 0 && partnerY < sh ?
+                    texture->buffer[(sy + partnerY) * texture->width + sx + x] : 0;
+                anyInk |= (pixel & TRANSPARENT_MASK) != 0;
+                if (!(pixel & TRANSPARENT_MASK)) pixel = 0;
+                if (!(px & TRANSPARENT_MASK)) px = 0;
+                if (!(py & TRANSPARENT_MASK)) py = 0;
+                if (pixel != px || pixel != py) { matches = false; break; }
+            }
+        }
+        if (matches) { *ink |= anyInk; return true; }
+    }
+#else
+    (void) texture; (void) sx; (void) sy; (void) sw; (void) sh; (void) ink;
+#endif
+    return false;
+}
+
+static bool swrFontHasDoubledPixels(Font* font, const TexturePageItem* item, const SWTexture* texture)
+{
+    if (font->swrDoubledPixels != 0) return font->swrDoubledPixels == 1;
+    bool ink = false;
+    for (uint32_t i = 0; i < font->glyphCount; ++i) {
+        const FontGlyph* glyph = &font->glyphs[i];
+        int sx = item->sourceX + glyph->sourceX - texture->originX;
+        int sy = item->sourceY + glyph->sourceY - texture->originY;
+        int sw = glyph->sourceWidth, sh = glyph->sourceHeight;
+        if (sw == 0 || sh == 0) continue;
+        if (sx < 0 || sy < 0 || sx + sw > texture->width || sy + sh > texture->height) return false;
+        if (!swrGlyphHasPixelBlocks(texture, sx, sy, sw, sh, &ink)) {
+            font->swrDoubledPixels = 2;
+            return false;
+        }
+    }
+    font->swrDoubledPixels = ink ? 1 : 2;
+    return ink;
+}
+
 FORCE_INLINE void swrPlotPixel_(Renderer* renderer, int x, int y, uintpixel_t color, int blendmode, int alpha)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
@@ -250,7 +305,14 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                             }
                             else
                             {
-                                swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
+                                bool doubled = swrFavorSpeed && swrSmoothMinify && !font->isSpriteFont &&
+                                    font->antiAliasing == 0 && texture->immutable &&
+                                    xscale * swr->scaleX == 0.5f && yscale * swr->scaleY == 0.5f &&
+                                    swrFontHasDoubledPixels(font, fontState.fontTpag, texture);
+                                if (doubled)
+                                    swrDrawDoubledGlyph(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
+                                else
+                                    swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
                             }
                         
                             drewSuccessfully = true;
