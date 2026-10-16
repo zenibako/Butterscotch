@@ -91,10 +91,18 @@ make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make tile-motion-fixture  # builds the asset-free translated tile-cache regression
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
+make string-reads-fixture    # builds the asset-free string read/ownership regression
+make collision-work-fixture  # builds asset-free collision order/mutation checks
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
 ```
+
+The collision fixture is `./<game>_pc_collision_work_fixture`. Build with one
+explicit `WADS=16` or `WADS=17`; add `PC_EXTRA_CFLAGS=-DOF_COLLISION_WORK_PROFILE`
+to also check sort, comparison, target-length and bounding-box counters. Use a
+fresh `PC_OBJ_DIR` when changing flags. These counters are diagnostic counts,
+not timings, and are absent from ordinary builds.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).

@@ -681,6 +681,16 @@ typedef struct { char* key; int32_t value; } AssetsByNameEntry;
 typedef struct { char* key; int value; } DisabledObjEntry;
 typedef struct { int key; Instance* value; } InstanceIdEntry;
 
+#ifdef OF_COLLISION_WORK_PROFILE
+// Derived diagnostics only; absent from ordinary builds and snapshot payloads.
+typedef struct {
+    uint64_t sorts, targets, comparisons, selfBoxes, otherBoxes;
+    uint64_t targetLengths[5]; // 0, 1, 2..7, 8..31, >=32
+} RunnerCollisionWork;
+
+void Runner_takeCollisionWork(Runner* runner, RunnerCollisionWork* out);
+#endif
+
 struct Runner {
     DataWin* dataWin;
     VMContext* vmContext;
@@ -725,6 +735,9 @@ struct Runner {
     Instance** instanceSnapshots;
     SpatialGrid* spatialGrid;
     uint32_t collisionQueryCounter;
+#ifdef OF_COLLISION_WORK_PROFILE
+    RunnerCollisionWork collisionWork;
+#endif
     int32_t pendingRoom;  // -1 = none
     bool gameStartFired;
     int frameCount;
