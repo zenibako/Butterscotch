@@ -1768,6 +1768,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
         savedState->tileLayerMap = nullptr;
 
         // Restore runtime layers
+        Runner_invalidateLayerElementLookup(runner);
         freeRuntimeLayersArray(&runner->runtimeLayers);
         runner->runtimeLayers = savedState->runtimeLayers;
         savedState->runtimeLayers = nullptr;
@@ -1811,6 +1812,7 @@ static void initRoom(Runner* runner, int32_t roomIndex) {
     runner->tileLayerMap = nullptr;
 
     // Populate runtime layers from parsed room layers (GMS2+ only; empty for GMS1.x).
+    Runner_invalidateLayerElementLookup(runner);
     freeRuntimeLayersArray(&runner->runtimeLayers);
     runner->nextLayerDrawOrder = room->layerCount;
     uint32_t maxLayerId = 0;
@@ -2257,6 +2259,7 @@ static void cleanupState(Runner* runner) {
     runner->instancesById = nullptr;
     hmfree(runner->tileLayerMap);
     runner->tileLayerMap = nullptr;
+    Runner_invalidateLayerElementLookup(runner);
     freeRuntimeLayersArray(&runner->runtimeLayers);
     shfree(runner->disabledObjects);
     runner->disabledObjects = nullptr;
@@ -2899,13 +2902,33 @@ RoomLayer* Runner_findRoomLayerById(Room* room, int32_t id) {
     return nullptr;
 }
 
+void Runner_invalidateLayerElementLookup(Runner* runner) {
+    runner->layerElementLookupValid = false;
+}
+
 RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t elementId, RuntimeLayer** outLayer) {
     size_t layerCount = arrlenu(runner->runtimeLayers);
+    // Only a full first-match search seeds this hint. Every structural writer
+    // invalidates it, including insertions before an otherwise unchanged hit.
+    // Indices avoid dangling pointers after array relocation; bounds and ID
+    // checks reject a detached or stale slot before falling back to the scan.
+    if (runner->layerElementLookupValid && runner->layerElementLookupLayer < layerCount) {
+        RuntimeLayer* layer = &runner->runtimeLayers[runner->layerElementLookupLayer];
+        size_t elementIndex = runner->layerElementLookupElement;
+        if (elementIndex < arrlenu(layer->elements) && (int32_t) layer->elements[elementIndex].id == elementId) {
+            if (outLayer != nullptr) *outLayer = layer;
+            return &layer->elements[elementIndex];
+        }
+    }
+    runner->layerElementLookupValid = false;
     repeat(layerCount, i) {
         RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
         size_t elementCount = arrlenu(runtimeLayer->elements);
         repeat(elementCount, j) {
             if ((int32_t) runtimeLayer->elements[j].id == elementId) {
+                runner->layerElementLookupLayer = i;
+                runner->layerElementLookupElement = j;
+                runner->layerElementLookupValid = true;
                 if (outLayer != nullptr)
                     *outLayer = runtimeLayer;
 
@@ -2931,6 +2954,7 @@ void Runner_addInstanceLayerElement(Runner* runner, int32_t layerId, int32_t ins
     el.alpha = 1.0f;
     el.blend = 0xFFFFFF;
     el.instanceId = instanceId;
+    Runner_invalidateLayerElementLookup(runner);
     arrins(runtimeLayer->elements, 0, el);
     runner->drawableListSortDirty = true;
 }
@@ -2946,6 +2970,7 @@ void Runner_moveInstanceToDepthLayer(Runner* runner, Instance* inst, int32_t dep
         repeat(arrlen(runner->runtimeLayers), i) {
             RuntimeLayer* other = &runner->runtimeLayers[i];
             if (other->id == previous->id || !other->automaticDepth || other->depth != depth) continue;
+            Runner_invalidateLayerElementLookup(runner);
             repeat(arrlen(other->elements), j) {
                 RuntimeLayerElement el = other->elements[j];
                 if (el.type == RuntimeLayerElementType_Instance) {
@@ -2988,6 +3013,7 @@ void Runner_moveInstanceToDepthLayer(Runner* runner, Instance* inst, int32_t dep
         char name[32];
         snprintf(name, sizeof(name), "_layer_%x", layer.id);
         layer.dynamicName = safeStrdup(name);
+        Runner_invalidateLayerElementLookup(runner);
         arrput(runner->runtimeLayers, layer);
         target = &arrlast(runner->runtimeLayers);
         runner->drawableListStructureDirty = true;
@@ -3005,6 +3031,7 @@ void Runner_removeInstanceLayerElement(Runner* runner, int32_t instanceId) {
         repeat(elementCount, j) {
             RuntimeLayerElement* el = &runtimeLayer->elements[j];
             if (el->type == RuntimeLayerElementType_Instance && el->instanceId == instanceId) {
+                Runner_invalidateLayerElementLookup(runner);
                 arrdel(runtimeLayer->elements, j);
                 return;
             }
@@ -4095,6 +4122,7 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
     runner->tileLayerMap = nullptr;
 
     // Transfer runtime layer ownership to saved state
+    Runner_invalidateLayerElementLookup(runner);
     state->runtimeLayers = runner->runtimeLayers;
     runner->runtimeLayers = nullptr;
 

@@ -96,6 +96,7 @@ make collision-work-fixture  # builds asset-free collision order/mutation checks
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
+make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
 make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
@@ -111,6 +112,10 @@ not timings, and are absent from ordinary builds.
 The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
 ordinary updates, stale/partial membership recovery and grid replacement; use
 a fresh `PC_OBJ_DIR` for each game or changed build flags.
+
+The layer lookup fixture is `./<game>_pc_layer_lookup_fixture`. It checks ordered
+ID lookup, missing IDs, structural mutations and bounded repeated-hit work using
+the actual runner and layer builtins. Use a separate object directory per game.
 
 The VM call fixture is `./<game>_pc_vm_call_args_fixture`. It exercises actual
 CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value

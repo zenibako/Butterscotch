@@ -2197,6 +2197,7 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     }
     if (s->hasLayers) {
         s->oldLayers = r->runtimeLayers;
+        Runner_invalidateLayerElementLookup(r);
         r->runtimeLayers = s->layers;
         for (ptrdiff_t i = 0; i < arrlen(s->legacyTiles); i++) {
             SnapshotLegacyTiles *t = &s->legacyTiles[i];
