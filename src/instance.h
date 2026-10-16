@@ -41,6 +41,10 @@ struct Instance {
     bool cleanupEventFired;
     int32_t maskIndex; // collision mask sprite override (-1 = use spriteIndex)
     int32_t* collisionCells; // Used to track where we are
+    /* Derived membership proof, omitted from snapshots with collisionCells.
+     * Four words preserve scalar snapshot ranges and existing alignment. */
+    uint32_t collisionGridGenerationLow, collisionGridGenerationHigh;
+    uint32_t collisionCellCount, collisionCellsTrusted;
     uint32_t lastCollisionQueryId;
 
     // Per-instance self variable storage (sparse open-addressed hashmap, keyed by varID).

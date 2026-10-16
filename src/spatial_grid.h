@@ -19,6 +19,7 @@ typedef struct {
     // The "end" of the grid is a stb_ds array
     int16_t gridWidth;
     int16_t gridHeight;
+    uint32_t generationLow, generationHigh;
     int32_t* dirtyInstances;
     // Flat 2D grid of Instance* stb_ds arrays
     Instance*** grid;

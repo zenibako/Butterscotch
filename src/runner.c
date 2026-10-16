@@ -1609,6 +1609,7 @@ static Instance** takePersistentInstances(Runner* runner) {
 #endif
 
             // The spatial grid is recreated per room, so any cell coordinates the instance was tracking belong to the old grid and must not be reused.
+            inst->collisionCellsTrusted = 0;
             arrsetlen(inst->collisionCells, 0);
             inst->spatialGridDirty = false;
 
@@ -4058,6 +4059,7 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
     {
     repeat(count, i) {
         Instance* inst = runner->instances[i];
+        inst->collisionCellsTrusted = 0;
         if (inst->persistent) {
             arrput(keptInstances, inst);
         } else if (inst->active) {
