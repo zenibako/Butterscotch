@@ -35,7 +35,7 @@ static bool removeTrackedForSync(SpatialGrid* grid, Instance* instance) {
         (grid->generationLow || grid->generationHigh) &&
         instance->collisionGridGenerationLow == grid->generationLow &&
         instance->collisionGridGenerationHigh == grid->generationHigh &&
-        arrlen(instance->collisionCells) == instance->collisionCellCount;
+        (size_t)arrlen(instance->collisionCells) == (size_t)instance->collisionCellCount;
     instance->collisionCellsTrusted = 0;
     if (!trusted) return false;
 
