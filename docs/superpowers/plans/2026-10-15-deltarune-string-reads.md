@@ -46,13 +46,13 @@ static BuiltinStringInput builtinStringInput(RValue value, DataWin *data) {
   `RValue_toString` retains its existing allocation/failure contract for
   non-string conversions; no caller receives a borrowed conversion result.
 
-- [ ] Add a dedicated asset-free fixture invoking the real builtin registry.
+- [x] Add a dedicated asset-free fixture invoking the real builtin registry.
   For the existing strings, check ASCII, multibyte UTF-8, empty/null strings,
   index 0/negative/first/last/past-end, zero/negative/oversized copy length and
   malformed sequences. Check numeric/bool/undefined conversion against current
   outputs. Retain the input, call a builtin, free the input, then validate and
   free the result to prove results do not alias borrowed storage.
-- [ ] Compile the fixture with allocation counting confined to its included
+- [x] Compile the fixture with allocation counting confined to its included
   `vm_builtins.c`, following the existing tile fixture's include/filter pattern:
 
 ```c
@@ -77,14 +77,14 @@ static char *countedStrdup(const char *text) {
   strdup calls for nonempty string-input reads; numeric conversion must still
   allocate its temporary. The fixture must exercise the registered builtins,
   not just the new helper.
-- [ ] First run behavior checks against the original implementation and record
+- [x] First run behavior checks against the original implementation and record
   their outputs. Then enable the zero-input-copy assertions and require them
   to fail on the original implementation. Do not change expected semantics to
   make the optimization pass.
-- [ ] Add `BuiltinStringInput` and use it only in the three named builtins.
+- [x] Add `BuiltinStringInput` and use it only in the three named builtins.
   Replace temporary `free(str)` with `free(input.owned)` on all exits. Preserve
   existing result allocation, `strlen`/UTF-8 scans and return tags.
-- [ ] Build/run the new fixture separately for each game, using fresh objects:
+- [x] Build/run the new fixture separately for each game, using fresh objects:
 
 ```sh
 make -C src/openfpga GAME=deltarune PC_BIN=out/string-dr PC_OBJ_DIR=out/string-dr-obj PC_EXTRA_CFLAGS='-g -O1 -fsanitize=address,undefined -fno-sanitize=alignment,function' string-reads-fixture
@@ -96,9 +96,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ASAN_OPTIONS=detect_leaks=0 src/ope
   The new target must emit the `_string_reads_fixture` binary shown above.
   Set `data.gen8.wadVersion` to 17/16 respectively in the fixture; the existing
   builtin compatibility fixture hard-codes 16, so do not inherit that mistake.
-- [ ] Run existing builtin compatibility and profiler fixtures for both games,
+- [x] Run existing builtin compatibility and profiler fixtures for both games,
   plus port lint. Inspect every changed early return for ownership cleanup.
-- [ ] Commit the implementation/fixtures with a GPG signature as
+- [x] Commit the implementation/fixtures with a GPG signature as
   `perf(vm): borrow string inputs in read-only builtins`.
 
 ### Task 2: Measure relevance to Deltarune and validate gameplay
@@ -110,19 +110,35 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ASAN_OPTIONS=detect_leaks=0 src/ope
 allocation-count evidence, sampled builtin frequencies, channel comparisons and
 a retain/reject decision independently of the audio topic.
 
-- [ ] Use a diagnostic desktop run to count the three builtin calls and input
+- [x] Use a diagnostic desktop run to count the three builtin calls and input
   lengths over the benchmark and dialogue route. Keep counters and report I/O
   out of ordinary timing builds. `BS_PROFILE` can locate scripts, but its times
   do not establish device cost and it does not report input lengths.
-- [ ] Run the shared harness screen and, for a retained candidate, the complete
+- [x] Run the shared harness screen and, for a retained candidate, the complete
   two-game/mode/window matrix. Benchmark against the candidate's actual parent,
   which may already include the accepted audio change.
-- [ ] Compare dialogue/menu captures using the repository verification scripts,
+- [x] Compare dialogue/menu captures using the repository verification scripts,
   both with and without native stand-ins, since a short dodge sample may not
   exercise these builtins. Preserve and compare raw PCM and game-state outputs
   where the existing desktop workflow provides them.
-- [ ] Document allocations removed, actual workload frequency and simulated
+- [x] Document allocations removed, actual workload frequency and simulated
   cycle results separately. If sampled workloads do not reach the changed
   builtins, label the speed effect unmeasured; synthetic allocation savings are
   not a gameplay speedup. Follow the shared gate for a small/device-only result.
-- [ ] Commit the report as `docs: record string read optimization evidence`.
+- [x] Commit the report as `docs: record string read optimization evidence`.
+
+Execution note: the host workflow provides selected pixels and state dumps;
+its wall-clock-driven PCM is not a cross-build audio oracle. Raw PCM and pair
+acceptance is owned by the deterministic shared harness matrix. The report
+records the pointer/time fields excluded from host state comparisons.
+
+Execution note: the user authorized parallel implementation on 2026-10-15.
+Each topic was implemented and independently reviewed in its own worktree.
+The coordinator integrated the code as `2ee841c` and selected one shared
+32-ELF baseline/combined replay matrix after separate audio and string dodge
+screens. Timing outside those isolated screens describes the combined change.
+All local implementation and measurement deliverables are complete. The shared
+32-ELF matrix, eight contention replays and frozen-input verification pass.
+Physical device validation remains separate and no device benefit is claimed.
+
+Final results: [combined outcome and verification limits](../../../src/openfpga/docs/2026-10-15-deltarune-optimization-results.md).

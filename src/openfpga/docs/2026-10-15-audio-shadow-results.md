@@ -78,15 +78,27 @@ opt-audio-b596d43-r1-deltarune-dodge-accuracy-timing-cad4bdb64834b508
 
 Validating comparison and report outputs are
 `build/optimization-discovery-20261015/audio-dodge-accuracy-comparison.json`
-and `audio-dodge-accuracy-results.json`. Actual candidate disassembly is
+and `audio-dodge-accuracy-results-validated.json`. The latter was regenerated
+after both negative controls completed; the earlier `audio-dodge-accuracy-results.json`
+is retained but predates the candidate's negative result. Actual candidate disassembly is
 `audio-candidate-mixAndWrite.disassembly.txt` in the same directory; baseline
 disassembly is `build/audio-shadow-main-a6ea5c0.disassembly.txt`.
 
-The shared Accuracy/Speed, trace/timing, two-game replay matrix is being run on
-integrated code revision `2ee841c`, which also contains string borrowing and
-macro-off collision diagnostics. Those results describe the bundle and must
-not be relabeled as independent audio measurements. The
-[shared design](../../../docs/superpowers/specs/2026-10-15-deltarune-optimization-design.md)
-defines the acceptance checks and limitations. Physical storage, interrupts,
-live audio/display scheduling and Pocket base/candidate/base testing remain
-separate. No core or save file was deployed.
+The shared Accuracy/Speed, trace/timing, two-game matrix passes on integrated
+code revision `2ee841c`: 32 selected executables, repeated captures, 32 rejected
+negative controls, exact raw-channel comparisons and eight timing-ELF diagnostic
+scanout replays. It also contains string borrowing and macro-off collision
+diagnostics. Its timing results describe the bundle and cannot be relabeled as
+independent audio measurements. Timing RTL excludes the in-loop PCM-hash field;
+trace RTL checks it, and raw QEMU PCM is compared for both build kinds.
+
+Retain the local span-copy candidate: the independent scalar oracle, actual
+compiler work reduction and combined compatibility matrix support its limited
+complexity. The isolated -0.364% screen does not establish a Pocket speedup.
+The [combined results](2026-10-15-deltarune-optimization-results.md) record exact
+inventory/evidence hashes, the same-source timing control, memory observations,
+contention results and device limits. Normal/restored queued-audio semantics
+are checked deterministically by the snapshot suite; whole-game desktop PCM
+is wall-clock-driven, as documented in the save-state verification guide.
+Physical storage, interrupts, live audio/display scheduling and Pocket
+base/candidate/base testing remain separate. No core or save file was deployed.

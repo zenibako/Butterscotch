@@ -30,7 +30,7 @@ It consumes a valid positive capacity and an already-validated accepted count;
 it updates only `snapshotPcm` and `snapshotWritten`. Keep the call under
 `ut->snapshotPcm && accepted > 0 && accepted <= chunk`.
 
-- [ ] Add a scalar oracle and compare the entire ring and total after each append:
+- [x] Add a scalar oracle and compare the entire ring and total after each append:
 
 ```c
 static void referenceAppend(int16_t *ring, int capacity, uint64_t *written,
@@ -45,16 +45,16 @@ static void referenceAppend(int16_t *ring, int capacity, uint64_t *written,
   Cover capacities 1/3/7/16/131072, boundary/no-boundary crossings, multiple
   wraps, zero pairs, asymmetric nonzero L/R samples, totals above `UINT32_MAX`,
   and totals immediately before `UINT64_MAX`. Compare untouched ring cells too.
-- [ ] Extend the existing backend stub to support chunks up to 256 pairs and
+- [x] Extend the existing backend stub to support chunks up to 256 pairs and
   configurable returns: full, partial, zero, negative, and greater than chunk.
   Exercise `mixAndWrite`, asserting that only the accepted prefix changes the
   shadow/counter and no invalid return changes either. Keep existing restore
   assertions and add an append after `ofAudioApplySnapshot`.
-- [ ] Run the new helper tests before implementing it; expect the missing-helper
+- [x] Run the new helper tests before implementing it; expect the missing-helper
   compile failure. Existing behavioral cases should pass against the scalar
   path; after implementation, deliberately corrupt one copied channel in a
   temporary test build and require the oracle to reject it.
-- [ ] Implement the helper using this structure; the overflow path deliberately
+- [x] Implement the helper using this structure; the overflow path deliberately
   retains the old scalar semantics for non-power-of-two capacities:
 
 ```c
@@ -82,12 +82,12 @@ while (pairs > 0) {
 }
 ```
 
-- [ ] Run `SDK_ROOT=/Users/chanderson/Projects/undertale-pocket/openfpgaSDK make -C src/openfpga snapshot-tests`.
+- [x] Run `SDK_ROOT=/Users/chanderson/Projects/undertale-pocket/openfpgaSDK make -C src/openfpga snapshot-tests`.
   Expect the new ring checks and existing queued-audio/decoder/restore checks to
   pass under ASan/UBSan. The SDK path is read-only.
-- [ ] Run `make -C src/openfpga GAME=deltarune lint` and the Undertale equivalent.
+- [x] Run `make -C src/openfpga GAME=deltarune lint` and the Undertale equivalent.
   Review the diff for unchanged mixer arithmetic, caller guards and wire format.
-- [ ] Warm signing with `gpg-warm-agent`; commit only the audio implementation
+- [x] Warm signing with `gpg-warm-agent`; commit only the audio implementation
   and tests as `perf(audio): copy accepted PCM shadow in ring spans`.
 
 ### Task 2: Establish removed work and measure the complete-frame effect
@@ -99,20 +99,38 @@ actual execution date if different. No harness pins or production SDK edits.
 **Interfaces:** Inputs are the exact Task 1 parent/candidate commit IDs. Outputs
 are validated case paths, raw-channel comparisons and a retain/reject decision.
 
-- [ ] Export the exact parent and candidate and run the shared protocol's first
+- [x] Export the exact parent and candidate and run the shared protocol's first
   Deltarune dodge Accuracy/timing comparison with matching flags.
-- [ ] Disassemble `mixAndWrite` and `rememberAcceptedPcm` from the actual candidate
+- [x] Disassemble `mixAndWrite` and `rememberAcceptedPcm` from the actual candidate
   ELF using `riscv64-elf-objdump -d`. Require no `__umoddi3` in the normal per-pair
   loop; it may remain once per accepted chunk and in the rare overflow fallback.
   An 800-pair frame split into 256/256/256/32 should need four normal index
   calculations instead of 800. Do not equate that count with a measured speedup.
-- [ ] If worthwhile, complete the shared two-game/mode/window output matrix,
+- [x] If worthwhile, complete the shared two-game/mode/window output matrix,
   negative controls and scanout checks. Run normal and restored desktop audio
   comparisons as described in the repository's save-state verification guide.
-- [ ] Record elapsed cycles, outputs, memory change, compiler evidence and
+- [x] Record elapsed cycles, outputs, memory change, compiler evidence and
   device limits in the dated result. Do not describe fixed 800-pair simulation
   as real slow-frame audio consumption; use a separately labeled realtime model
   only for additional timing sensitivity, never for cross-build PCM acceptance.
-- [ ] Commit the report as `docs: record audio shadow optimization evidence`.
+- [x] Commit the report as `docs: record audio shadow optimization evidence`.
   If software results justify a Pocket test, prepare a separately identifiable
   base/candidate pair; request no SD trip until all local checks are complete.
+
+Execution note: the user authorized parallel implementation on 2026-10-15.
+Each topic was implemented and independently reviewed in its own worktree.
+The coordinator integrated the code as `2ee841c` and selected one shared
+32-ELF baseline/combined replay matrix after separate audio and string dodge
+screens. Timing outside those isolated screens describes the combined change.
+All local implementation and measurement deliverables are complete. The shared
+32-ELF matrix, eight contention replays and frozen-input verification pass.
+Physical device validation remains separate and no device benefit is claimed.
+
+Audio verification ruling: the repository save-state guide says whole-game
+desktop BS_AUDIO_DUMP advances with wall time and cannot establish PCM identity
+across uncapped frame runs. Use the deterministic decoder/queue/mixer snapshot
+suite for ordinary and restored audio semantics (including restore-then-append),
+and fixed-audio QEMU/RTL for cross-build raw PCM. No desktop whole-game PCM
+identity or device listening result is claimed.
+
+Final results: [combined outcome and verification limits](../../../src/openfpga/docs/2026-10-15-deltarune-optimization-results.md).

@@ -138,10 +138,9 @@ produce different accepted-PCM pair/hash records; Flowey also changes
 `obj_time.idle_time`. Thus uncapped desktop audio and this clock field are
 nondeterministic even without a binary change. All six retained on/off PCM
 records differ. Host PCM is excluded, with no byte-identity claim. The
-coordinator's separate fixed-audio QEMU/RTL matrix is required for the ordinary
-shared changes' PCM and full replay claim; that matrix and the ordinary
-parent/candidate timing control are separately pending at this report's commit.
-No cycle numbers or speedup are inferred here.
+coordinator's separate fixed-audio QEMU/RTL matrix supplies the ordinary
+shared changes' raw PCM and bounded replay checks; see the completed combined
+result below. No collision cycle cost or speedup is inferred from host counts.
 
 These real-game sanitizer runs are not sanitizer-clean: both diagnostic settings
 report the same signed-shift warning at vendored `stb_ds.h:1132:67`; the recreated
@@ -183,9 +182,10 @@ Bounding-box caching stays deferred: callback-driven position, sprite, mask,
 scale and related changes already invalidate simple reuse, and these counts do
 not measure their isolated cost.
 
-The next required control for this deliverable is the ordinary macro-off
-parent/candidate dodge 3323–3325 replay in the shared protocol, followed by its
-full correctness matrix. Task 1's RV32 disassembly comparison found identical
+The ordinary macro-off combined candidate passes the parent/candidate dodge
+3323–3325 replay and full shared correctness matrix, described below. This is
+a bundled timing control, not an isolated collision timing measurement.
+Task 1's RV32 disassembly comparison found identical
 2240-byte dispatcher and 128-byte comparator text, so no instrumentation speedup
 is expected. That is scoped machine-code evidence, not a linked-ELF timing result.
 
@@ -234,3 +234,19 @@ After capture, all four temporarily edited production sources were restored from
 preserved copies and compared byte-for-byte with committed `55d9d22` contents.
 No diagnostic adapter, raw game material, cache implementation or SDK change is
 included in the report commit.
+
+## Completed ordinary-build integration gate
+
+The exact combined code `2ee841c` passes the shared 32-ELF matrix against
+source-equivalent baseline `a6ea5c0`: 64 repeat QEMU captures, 32 positive quiet
+RTL replays, 32 rejected negatives, 16 cross-revision and 16 trace/timing raw
+RGB555/PCM/pair comparisons, plus eight exact timing-ELF scanout replays.
+`OF_COLLISION_WORK_PROFILE` is absent from every selected build's source flags.
+Trace RTL checks the dynamic PCM hash; timing excludes that field and checks
+pair counts, with both build kinds' raw QEMU PCM compared. Full results and
+hashed inventory are in the [combined results](2026-10-15-deltarune-optimization-results.md).
+
+This closes the ordinary-build compatibility gate. Because the bundle also
+changes audio and strings, its cycle deltas cannot be assigned to collision.
+Retain the optional counters and semantic fixtures; defer a cache as above.
+No physical Pocket gain or whole-game coverage is established.
