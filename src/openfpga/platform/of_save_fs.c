@@ -33,6 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+#include <errno.h>
+#include <unistd.h>
 #include "of_file.h"
 #include "gettime.h"
 #endif
@@ -150,9 +152,21 @@ static bool storeArchive(OfSaveFs *fs) {
 
     FILE *slot = fopen(OF_SAVE_SLOT_FILE, "wb");
     bool ok = slot != NULL && fwrite(archive, 1, total, slot) == total;
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+    /* fclose publishes CRAM and its size; fsync also writes the archive to SD.
+     * Keep this on ordinary saves: a Memories restore only rewinds CRAM. */
+    if (ok && fflush(slot) != 0) ok = false;
+    if (ok && fsync(fileno(slot)) != 0) {
+        logWarn("Saves: SD sync failed (errno %d).\n", errno);
+        ok = false;
+    }
+#endif
     if (slot != NULL && fclose(slot) != 0) ok = false;
     free(archive);
     if (!ok) logWarn("Saves: could not write the save slot.\n");
+#if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
+    else logInfo("Saves: SD sync ok, %u bytes.\n", (unsigned) total);
+#endif
     return ok;
 }
 
