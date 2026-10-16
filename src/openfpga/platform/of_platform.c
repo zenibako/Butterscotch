@@ -25,6 +25,7 @@
 #include "of_native.h"
 #include "of_state_requests.h"
 #include "of_game.h"
+#include "sw_renderer.h"
 #include "sw_call_notes.h"
 
 #include <stdio.h>
@@ -389,6 +390,7 @@ void platformInitFunctions(Runner *runner) {
     ofFontSetRunner(runner);
     ofPatchStrings(runner->dataWin);
     ofNativeInstall(runner);
+    if (ofGame.battleUiInstall != NULL) ofGame.battleUiInstall(runner);
     ofSavestateInit(runner);
     runner->setCursor = NULL;
     runner->currentCursor = GML_CR_DEFAULT;
@@ -425,6 +427,8 @@ bool platformGetWindowSize(int32_t *outW, int32_t *outH) {
     swrSmoothMinify = g_smoothLowres;
     swrMirrorFaintAlpha = g_faintOverride >= 0 ? g_faintOverride : g_smoothLowres ? OF_SPEED_FAINT_ALPHA : 0;
     swrFavorSpeed = g_smoothLowres;
+    if (g_runner != NULL && g_runner->renderer != NULL && ofGame.battleUiActive != NULL)
+        SWRenderer_setContrastEnabled(g_runner->renderer, g_smoothLowres && ofGame.battleUiActive(g_runner));
     *outW = hires ? OF_HIRES_W : OF_SCREEN_W;
     *outH = hires ? OF_HIRES_H : OF_SCREEN_H;
     return true;

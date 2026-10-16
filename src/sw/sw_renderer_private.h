@@ -5,6 +5,8 @@
 #include "sw_defines.h"
 #include "sw_pixel_convert.h"
 
+enum { SWR_FONT_BUBBLE_CONTRAST = 1, SWR_FONT_WHITE_CONTRAST = 2 };
+
 // Frees the composed tile-run pictures (sw_renderer.c); they are rebuilt on
 // the next draw. Returns false if there were none.
 bool swrTileRunsFree(void);
@@ -104,6 +106,11 @@ typedef struct
     uint16_t fbPitch; // in sizeof(uintpixel_t) units, NOT in bytes!
     
     bool drawingToSurface;
+    // Optional platform-selected UI assets. These flags never belong to a shared texture cache.
+    bool contrastEnabled;
+    uint8_t* contrastItems;
+    uint8_t* contrastFonts;
+    uint32_t contrastItemCount, contrastFontCount;
     uintpixel_t* mainFb;
     uint16_t mainWidth;
     uint16_t mainHeight;

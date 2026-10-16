@@ -428,6 +428,8 @@ typedef struct {
     bool hasAscender;
     bool hasSDFSpread;
     bool hasLineHeight;
+    // Software renderer's immutable pixel-font check: 0 unknown, 1 doubled, 2 other.
+    uint8_t swrDoubledPixels;
     uint32_t glyphCount;
     FontGlyph* glyphs;
     uint32_t maxGlyphHeight; // Computed after glyph parse: max sourceHeight across glyphs; HTML5 runner uses this for line stride (see yyFont.TextHeight)
