@@ -3618,6 +3618,22 @@ static int sortInstancesByObjectIndexThenInstanceIdAscending(const void* element
     return 0;
 }
 
+#ifdef OF_COLLISION_WORK_PROFILE
+// qsort has no context argument and runs no game callbacks. Save/restore this
+// pointer around each sort so nested dispatch retains its runner's accounting.
+static Runner* collisionSortRunner;
+
+static int compareCollisionInstancesProfiled(const void* a, const void* b) {
+    collisionSortRunner->collisionWork.comparisons++;
+    return sortInstancesByObjectIndexThenInstanceIdAscending(a, b);
+}
+
+void Runner_takeCollisionWork(Runner* runner, RunnerCollisionWork* out) {
+    *out = runner->collisionWork;
+    memset(&runner->collisionWork, 0, sizeof(runner->collisionWork));
+}
+#endif
+
 static void dispatchCollisionEvents(Runner* runner) {
     DataWin* dataWin = runner->dataWin;
     // Iterate only the objects that have any collision event in their parent chain.
@@ -3657,7 +3673,19 @@ static void dispatchCollisionEvents(Runner* runner) {
                 int32_t snapEnd = (int32_t) arrlen(runner->instanceSnapshots);
 
                 // The YoYo Runner sorts it by the object index THEN by the instanceId
+#ifdef OF_COLLISION_WORK_PROFILE
+                int32_t targetCount = snapEnd - snapBase;
+                int lengthBin = targetCount == 0 ? 0 : targetCount == 1 ? 1 : targetCount < 8 ? 2 : targetCount < 32 ? 3 : 4;
+                Runner* savedSortRunner = collisionSortRunner;
+                runner->collisionWork.sorts++;
+                runner->collisionWork.targets += (uint64_t) targetCount;
+                runner->collisionWork.targetLengths[lengthBin]++;
+                collisionSortRunner = runner;
+                qsort(runner->instanceSnapshots + snapBase, targetCount, sizeof(Instance*), compareCollisionInstancesProfiled);
+                collisionSortRunner = savedSortRunner;
+#else
                 qsort(runner->instanceSnapshots + snapBase, snapEnd - snapBase, sizeof(Instance*), sortInstancesByObjectIndexThenInstanceIdAscending);
+#endif
 
                 for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
                     Instance* other = runner->instanceSnapshots[snapIdx];
@@ -3669,10 +3697,16 @@ static void dispatchCollisionEvents(Runner* runner) {
 
                     // Compute bboxes
                     if (selfDirty) {
+#ifdef OF_COLLISION_WORK_PROFILE
+                        runner->collisionWork.selfBoxes++;
+#endif
                         bboxSelf = Collision_computeBBox(runner, self);
                         sprSelf = Collision_getSprite(dataWin, self);
                         selfDirty = false;
                     }
+#ifdef OF_COLLISION_WORK_PROFILE
+                    runner->collisionWork.otherBoxes++;
+#endif
                     InstanceBBox bboxOther = Collision_computeBBox(runner, other);
 
 #ifdef ENABLE_VM_TRACING
@@ -3772,6 +3806,10 @@ static void dispatchCollisionEvents(Runner* runner) {
                         // When we are in collision compatibility mode, we need to recheck if the player is STILL colliding after we have moved them
                         // If they are, we revert the collision
                         if (runner->collisionCompatibilityMode) {
+#ifdef OF_COLLISION_WORK_PROFILE
+                            runner->collisionWork.selfBoxes++;
+                            runner->collisionWork.otherBoxes++;
+#endif
                             InstanceBBox bboxSelf2 = Collision_computeBBox(runner, self);
                             InstanceBBox bboxOther2 = Collision_computeBBox(runner, other);
                             if (bboxSelf2.valid && bboxOther2.valid) {
