@@ -305,12 +305,21 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                             }
                             else
                             {
+                                unsigned fontFlags = (uint32_t) renderer->drawFont < swr->contrastFontCount ?
+                                    swr->contrastFonts[renderer->drawFont] : 0;
                                 bool doubled = swrFavorSpeed && swrSmoothMinify && !font->isSpriteFont &&
                                     font->antiAliasing == 0 && texture->immutable &&
                                     xscale * swr->scaleX == 0.5f && yscale * swr->scaleY == 0.5f &&
                                     swrFontHasDoubledPixels(font, fontState.fontTpag, texture);
                                 if (doubled)
                                     swrDrawDoubledGlyph(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
+                                // The platform opts bubble fonts into black ink and HUD fonts into
+                                // white ink independently; other colors retain their ordinary sampling.
+                                else if (!font->isSpriteFont && font->antiAliasing == 0 &&
+                                         (((fontFlags & SWR_FONT_BUBBLE_CONTRAST) && (color & 0xFFFFFF) == 0) ||
+                                          ((fontFlags & SWR_FONT_WHITE_CONTRAST) && (color & 0xFFFFFF) == 0xFFFFFF)))
+                                    swrDrawContrastSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha,
+                                                          (color & 0xFFFFFF) == 0 ? SWR_CONTRAST_BUBBLE_GLYPH : SWR_CONTRAST_UI_GLYPH);
                                 else
                                     swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
                             }

@@ -3,6 +3,7 @@
  */
 
 #include "of_game.h"
+#include "sw_renderer.h"
 
 #include <string.h>
 
@@ -74,7 +75,45 @@ static const OfBenchSection g_sections[] = {
     { "Flowey battle (640x480)", 2600, "battl" },
 };
 
+static void battleUiInstall(Runner *runner) {
+    static const char *const sprites[] = {
+        "spr_fightbt", "spr_fightbt_ja", "spr_fightbt_hollow", "spr_fightbt_hollow_ja",
+        "spr_itembt", "spr_itembt_ja", "spr_itembt_hollow", "spr_itembt_hollow_ja",
+        "spr_sparebt", "spr_sparebt_ja", "spr_sparebt_bandage", "spr_sparebt_bandage_ja",
+        "spr_talkbt", "spr_talkbt_ja", "spr_talkbt_hollow", "spr_talkbt_hollow_ja",
+        "spr_actbt_center", "spr_actbt_center_ja", "spr_actbt_center_hole", "spr_actbt_center_hole_ja",
+        "spr_fightbt_center", "spr_fightbt_center_ja"
+    };
+    static const char *const fonts[] = {
+        "fnt_curs", "fnt_plain", "fnt_plainbig", "fnt_comicsans", "fnt_papyrus",
+        "fnt_ja_curs", "fnt_ja_plain", "fnt_ja_plainbig", "fnt_ja_plainsmall",
+        "fnt_ja_comicsans", "fnt_ja_comicsans_big", "fnt_ja_papyrus", "fnt_ja_papyrus_btl"
+    };
+    SWRenderer_setContrastAssets(runner->renderer, sprites, sizeof(sprites) / sizeof(sprites[0]),
+                                fonts, sizeof(fonts) / sizeof(fonts[0]));
+    // Battle stats use white fnt_curs; the HP label is a transparent-ink sprite.
+    static const char *const glyphSprites[] = { "spr_hpname", "spr_krmeter" };
+    static const char *const whiteFonts[] = { "fnt_curs", "fnt_ja_curs" };
+    SWRenderer_setContrastGlyphAssets(runner->renderer, glyphSprites, sizeof(glyphSprites) / sizeof(glyphSprites[0]),
+                                     whiteFonts, sizeof(whiteFonts) / sizeof(whiteFonts[0]));
+}
+
+static bool battleUiActive(Runner *runner) {
+    bool enabled = false;
+    static const char *const rooms[] = {
+        "room_battle", "room_floweybattle", "room_fastbattle", "room_storybattle",
+        "room_fire_core_freebattle", "room_floweyx"
+    };
+    if (runner->currentRoom != NULL && runner->currentRoom->name != NULL) {
+        for (unsigned i = 0; i < sizeof(rooms) / sizeof(rooms[0]); ++i)
+            enabled |= strcmp(runner->currentRoom->name, rooms[i]) == 0;
+    }
+    return enabled;
+}
+
 const OfGame ofGame = {
+    .battleUiInstall = battleUiInstall,
+    .battleUiActive = battleUiActive,
     .strings = g_strings,
     .stringCount = sizeof(g_strings) / sizeof(g_strings[0]),
     .patchCode = patchInstructions,

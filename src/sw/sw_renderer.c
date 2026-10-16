@@ -225,6 +225,8 @@ static void SWRenderer_destroy(Renderer* renderer)
     swr->textureCount = 0;
     swr->totalTextureCount = 0;
     free(swr->vertexData);
+    free(swr->contrastItems);
+    free(swr->contrastFonts);
     
     if (!swr->fbIsPlatform) free(swr->mainFb);
     swr->fb = swr->mainFb = NULL;
@@ -480,7 +482,10 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
     {
         // Only a plain sprite draw may be held back for merging; see swrOverlayFlush.
         swr->overlayMergeAllowed = true;
-        swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
+        if ((uint32_t) tpagIndex < swr->contrastItemCount && swr->contrastItems[tpagIndex])
+            swrDrawContrastSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha, swr->contrastItems[tpagIndex]);
+        else
+            swrDrawSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha);
         swr->overlayMergeAllowed = false;
     }
 }
@@ -2844,6 +2849,58 @@ static void SWRenderer_profDrawRectangle(Renderer* renderer, float x1, float y1,
 }
 #endif
 
+
+static bool swrAssetNamed(const char* name, const char* const* names, size_t count)
+{
+    if (name == NULL) return false;
+    for (size_t i = 0; i < count; ++i)
+        if (strcmp(name, names[i]) == 0) return true;
+    return false;
+}
+
+void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites, size_t spriteCount,
+                                 const char* const* fonts, size_t fontCount)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    free(swr->contrastItems); free(swr->contrastFonts);
+    swr->contrastItemCount = dw->tpag.count;
+    swr->contrastFontCount = dw->font.count;
+    swr->contrastItems = dw->tpag.count ? safeCalloc(dw->tpag.count, 1) : NULL;
+    swr->contrastFonts = dw->font.count ? safeCalloc(dw->font.count, 1) : NULL;
+    for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+        const Sprite* sprite = &dw->sprt.sprites[i];
+        if (!swrAssetNamed(sprite->name, sprites, spriteCount)) continue;
+        for (uint32_t j = 0; j < sprite->textureCount; ++j) {
+            int32_t item = sprite->tpagIndices[j];
+            if (item >= 0 && (uint32_t) item < dw->tpag.count) swr->contrastItems[item] = SWR_CONTRAST_BUTTON;
+        }
+    }
+    for (uint32_t i = 0; i < dw->font.count; ++i)
+        swr->contrastFonts[i] = swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount) ? SWR_FONT_BUBBLE_CONTRAST : 0;
+}
+
+void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sprites, size_t spriteCount,
+                                      const char* const* fonts, size_t fontCount)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+        const Sprite* sprite = &dw->sprt.sprites[i];
+        if (!swrAssetNamed(sprite->name, sprites, spriteCount)) continue;
+        for (uint32_t j = 0; j < sprite->textureCount; ++j) {
+            int32_t item = sprite->tpagIndices[j];
+            if (item >= 0 && (uint32_t) item < swr->contrastItemCount) swr->contrastItems[item] = SWR_CONTRAST_UI_GLYPH;
+        }
+    }
+    for (uint32_t i = 0; i < swr->contrastFontCount; ++i)
+        if (swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount)) swr->contrastFonts[i] |= SWR_FONT_WHITE_CONTRAST;
+}
+
+void SWRenderer_setContrastEnabled(Renderer* renderer, bool enabled)
+{
+    ((SWRenderer*) renderer)->contrastEnabled = enabled;
+}
 
 Renderer* SWRenderer_create(void)
 {

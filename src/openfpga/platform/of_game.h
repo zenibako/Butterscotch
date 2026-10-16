@@ -60,6 +60,10 @@ typedef struct {
     /* Called for each new VM (a game_change gives one), to forget its ids (or NULL). */
     void (*nativesForgetVm)(void);
 
+    /* Derived battle appearance: selected assets and whether the scene is active. */
+    void (*battleUiInstall)(Runner *runner);
+    bool (*battleUiActive)(Runner *runner);
+
     /* The built-in benchmark (see of_bench.h). */
     const char *benchTitle;
     const char *benchScript;
