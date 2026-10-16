@@ -113,11 +113,11 @@ are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md
 
 The save-state build requires a matching os25 runtime with
 `INCLUDE_SAVESTATE`. The ordinary SDK runtime does not support it. Build the
-os25 variant from `main` of our openfpgaOS fork,
-[zenibako/openfpgaCore](https://github.com/zenibako/openfpgaCore) (`6a9594f`,
-where the save-state work merged, or later), then stage it into a separate
-SDK. The staging script refuses an OS checkout that does not contain
-`6a9594f`.
+os25 variant from our openfpgaOS fork,
+[zenibako/openfpgaCore](https://github.com/zenibako/openfpgaCore) (`52abf78bde0446bc4af8e23631f41ff950e5a535`,
+which includes the reviewed save-slot `fsync` fixes, or a descendant), then
+stage it into a separate SDK. The staging script refuses an OS checkout that does not contain
+that fsync-capable revision.
 
 There os25 runs the CPU and RAM at 100 MHz with the save-state controller
 (seed 1). That build misses setup timing at the slow 85C corner (WNS
@@ -129,6 +129,13 @@ the worst slack either way:
 tools/stage-savestate-sdk.sh --allow-timing-miss /path/to/built-openfpgaCore /path/to/base-SDK /path/to/new-SDK
 make SDK_ROOT=/path/to/new-SDK save-states
 ```
+
+Staging requires committed firmware/build inputs and a built Pocket `os.bin`
+no older than its tracked Pocket compile/link inputs (tests and docs are
+excluded). It verifies that SDK export copied that exact OS, then records SHA-256 hashes for `os.bin`, `os25.rbf_r`, and `loader.bin` in
+`SAVESTATES_RUNTIME.json`. Save-state packaging validates this marker and all
+three files before image assembly; legacy text markers require restaging.
+Native card assembly requires `VARIANT=os25`. This is a local provenance and corruption guard, not a signed build attestation.
 
 After an OS source change, rebuild its firmware and patch the matching bootloader into
 the bitstream before staging. The output is
@@ -469,9 +476,13 @@ s16le) and `BS_AUDIO_LOG=1` logs every effect, for checking without speakers.
 
 Undertale keeps its progress in a few small files (`file0`, `file9`,
 `undertale.ini`, ...). `platform/of_save_fs.c` stores them all as one small
-archive in the first save slot (`undertale_0.sav`). The Pocket writes save
-slots back to the SD card when the core is closed from its menu. The
-benchmark neither reads nor writes saves.
+archive in the first save slot (`undertale_0.sav`, or `deltarune_0.sav`).
+Native Memories builds flush ordinary progress saves directly to SD with
+`fsync`; they require the runtime with save-slot `fsync` support shipped
+alongside the game update. Older runtimes report `SD sync failed` and still
+rely on the Pocket's exit writeback. A Memories restore rewinds the captured
+progress in save RAM; it does not itself flush to SD. The benchmark neither
+reads nor writes saves.
 
 To carry a save over from the desktop game, `make import-save
 SAVE_DIR=<folder>` packs a desktop save folder into `undertale_0.sav`
