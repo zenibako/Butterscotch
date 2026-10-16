@@ -93,6 +93,7 @@ make tile-motion-fixture  # builds the asset-free translated tile-cache regressi
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
+make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -387,9 +388,15 @@ mode is switched to match (`of_video_set_mode`). If the OS refuses the mode
 everything stays at 320x240.
 
 L switches to the alternative: every room at 320x240, with the renderer
-averaging each 2x2 block of texels when it shrinks a 640x480 screen. Small
-text is slightly soft but readable, and those screens cost about a quarter
-of the pixels.
+averaging each 2x2 block of texels when it shrinks a 640x480 screen. Fonts
+verified to contain doubled pixels use sharp sampling at exact half size,
+keeping dialogue and menu text crisp. Smaller fonts retain averaging so thin
+strokes remain readable. Those screens cost about a quarter of the pixels.
+
+`make font-sampling-fixture` builds `./<game>_pc_font_sampling_fixture` without
+game assets. It checks either pixel phase, clipping, tint, alpha, cache reuse
+and texture reloads, plus unchanged filtering for other fonts, odd glyph
+sizes, alternate scales, mirrored text and rotation.
 
 ## Frame skipping
 
