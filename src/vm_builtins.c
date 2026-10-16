@@ -2490,6 +2490,25 @@ static RValue builtin_string_trim_start(VMContext* ctx, RValue* args, int32_t ar
     return RValue_makeOwnedString(result);
 }
 
+/* Borrow existing strings only for the duration of a synchronous read.
+ * Other values retain RValue_toString's owned conversion contract. */
+typedef struct {
+    const char* text;
+    char* owned;
+} BuiltinStringInput;
+
+static BuiltinStringInput builtinStringInput(RValue value, DataWin* data) {
+    BuiltinStringInput input;
+    if (value.type == RVALUE_STRING) {
+        input.owned = NULL;
+        input.text = value.string ? value.string : "";
+    } else {
+        input.owned = RValue_toString(value, data);
+        input.text = input.owned;
+    }
+    return input;
+}
+
 static RValue builtin_string_copy(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("string_copy", 3, RValue_makeOwnedString(safeStrdup("")));
     int32_t len = RValue_toInt32(args[2]);
@@ -2497,7 +2516,8 @@ static RValue builtin_string_copy(MAYBE_UNUSED VMContext* ctx, RValue* args, int
         return RValue_makeOwnedString(safeStrdup(""));
     }
 
-    char* str = RValue_toString(args[0], ctx->runner->dataWin);
+    BuiltinStringInput input = builtinStringInput(args[0], ctx->runner->dataWin);
+    const char* str = input.text;
     int32_t pos = RValue_toInt32(args[1]) - 1; // GMS is 1-based
     int32_t strLen = (int32_t) strlen(str);
 
@@ -2505,7 +2525,7 @@ static RValue builtin_string_copy(MAYBE_UNUSED VMContext* ctx, RValue* args, int
 
     int32_t byteStart = TextUtils_utf8AdvanceCodepoints(str, strLen, pos);
     if (byteStart >= strLen) {
-        free(str);
+        free(input.owned);
         return RValue_makeOwnedString(safeStrdup(""));
     }
 
@@ -2517,7 +2537,7 @@ static RValue builtin_string_copy(MAYBE_UNUSED VMContext* ctx, RValue* args, int
     memcpy(result, str + byteStart, (size_t) nbytes);
     result[nbytes] = '\0';
 
-    free(str);
+    free(input.owned);
 
     return RValue_makeOwnedString(result);
 }
@@ -2737,17 +2757,18 @@ static RValue builtin_string_split(MAYBE_UNUSED VMContext* ctx, RValue* args, in
 
 static RValue builtin_string_char_at(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("string_char_at", 2, RValue_makeOwnedString(safeStrdup("")));
-    char* str = RValue_toString(args[0], ctx->runner->dataWin);
+    BuiltinStringInput input = builtinStringInput(args[0], ctx->runner->dataWin);
+    const char* str = input.text;
     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
     int32_t strLen = (int32_t) strlen(str);
     if (pos >= strLen) {
-        free(str);
+        free(input.owned);
         return RValue_makeOwnedString(safeStrdup(""));
     }
     if (pos < 0) pos = 0;
     int32_t byteStart = TextUtils_utf8AdvanceCodepoints(str, strLen, pos);
     if (byteStart >= strLen) {
-        free(str);
+        free(input.owned);
         return RValue_makeOwnedString(safeStrdup(""));
     }
     int32_t byteNext = byteStart;
@@ -2756,28 +2777,29 @@ static RValue builtin_string_char_at(MAYBE_UNUSED VMContext* ctx, RValue* args, 
     char* out = (char *)safeMalloc(nbytes + 1);
     memcpy(out, str + byteStart, (size_t) nbytes);
     out[nbytes] = '\0';
-    free(str);
+    free(input.owned);
     return RValue_makeOwnedString(out);
 }
 
 static RValue builtin_string_ord_at(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("string_ord_at", 2, RValue_makeReal(-1.0));
-    char* str = RValue_toString(args[0], ctx->runner->dataWin);
+    BuiltinStringInput input = builtinStringInput(args[0], ctx->runner->dataWin);
+    const char* str = input.text;
     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
     int32_t strLen = (int32_t) strlen(str);
     if (strLen == 0) {
-        free(str);
+        free(input.owned);
         return RValue_makeReal(-1.0);
     }
     if (0 > pos) pos = 0; // native clamps negative indices to the first character
     int32_t byteStart = TextUtils_utf8AdvanceCodepoints(str, strLen, pos);
     if (byteStart >= strLen) {
-        free(str);
+        free(input.owned);
         return RValue_makeReal(-1.0);
     }
     int32_t offset = byteStart;
     uint16_t codepoint = TextUtils_decodeUtf8(str, strLen, &offset);
-    free(str);
+    free(input.owned);
     return RValue_makeReal((GMLReal) codepoint);
 }
 
