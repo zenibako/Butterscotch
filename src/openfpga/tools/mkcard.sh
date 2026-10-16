@@ -22,11 +22,12 @@ GAMES=(
     "deltarune|Deltarune.json|games/deltarune|deltarune.win|dr_textures.bin|dr_music.bin"
 )
 if [ "${SAVESTATES:-0}" = 1 ]; then
-    # Staging writes SAVESTATES_RUNTIME; SDKs staged before 2026-10-15 have
-    # the old UNDERTALE_SAVESTATES name.
-    [ -f "$ROOT/runtime/pocket/SAVESTATES_RUNTIME" ] || [ -f "$ROOT/runtime/pocket/UNDERTALE_SAVESTATES" ] || {
-        echo "mkcard: use an SDK staged with the save-state-enabled os25 runtime"; exit 1;
-    }
+    if [ "${VARIANT:-os25}" != os25 ]; then
+        echo "mkcard: save-state runtime requires VARIANT=os25" >&2
+        exit 1
+    fi
+    export VARIANT=os25
+    python3 "$(dirname "$0")/runtime-provenance.py" check "$ROOT/runtime/pocket" || exit 1
 fi
 
 first=""
