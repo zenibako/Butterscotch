@@ -72,6 +72,15 @@ jobs:
             fi
           done
 
+      # Fixture WAD flags can invalidate the device object directories.
+      - name: Preserve the checked Pocket programs for upload
+        working-directory: butterscotch/src/openfpga
+        run: |
+          mkdir -p out/artifacts
+          for game in undertale deltarune; do
+            cp "out/.obj/$game/app.elf" "out/artifacts/$game.elf"
+          done
+
       - name: Build the desktop test binaries
         working-directory: butterscotch/src/openfpga
         run: |
@@ -148,6 +157,6 @@ jobs:
         with:
           name: butterscotch-pocket-programs
           path: |
-            butterscotch/src/openfpga/out/.obj/undertale/app.elf
-            butterscotch/src/openfpga/out/.obj/deltarune/app.elf
+            butterscotch/src/openfpga/out/artifacts/undertale.elf
+            butterscotch/src/openfpga/out/artifacts/deltarune.elf
           if-no-files-found: error
