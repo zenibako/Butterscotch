@@ -73,9 +73,11 @@ its cost has not been measured and previous allocation experiments were weak.
 
 Read the repository's build/performance/verification skills and the harness's
 `AGENTS.md`, `bench/README.md` and `fullframe/README.md` at execution time.
-The established local harness is
-`/Users/chanderson/Projects/undertale-pocket/openfpga-os25-opt-20261015`.
-Run `python3 run.py verify` there and check `df -h .` before creating cases.
+Use `$HARNESS_ROOT` for the verified private os25 harness checkout and
+`$CHECKOUT` for the Butterscotch source checkout. Set both to absolute paths;
+exact machine-specific locations remain in private evidence.
+From `$HARNESS_ROOT`, run `python3 run.py verify` and check `df -h .` before
+creating cases.
 Only about 0.5 GiB was free during discovery. Arrange more space if required;
 do not delete historical cases, alter pins, or use the progress checkout's
 three mismatched frozen assets.
@@ -106,11 +108,16 @@ raw PCM and pair counts; compare pointer-bearing state only within one ELF.
 Replay the exact retained dodge and Flowey timing ELFs with diagnostic scanout
 to check sensitivity to contention. Keep all failures and source/ELF hashes.
 
-Use the maintained launcher, for example from the harness root:
+Use the maintained launcher from the harness root. Set `RISCV_GCC` to the
+absolute path of the GCC 16.2.0 `riscv64-elf-gcc` executable used for comparison:
 
 ```sh
-python3 experiments.py snapshot --name audio-parent-a6ea5c0-r1 --revision a6ea5c0 --repo /Users/chanderson/Projects/undertale-pocket/butterscotch-pr20-fixes
-python3 experiments.py run --snapshot audio-parent-a6ea5c0-r1 --game deltarune --window dodge --mode accuracy --kind timing --compiler /opt/homebrew/bin/riscv64-elf-gcc --alignment --native enabled --variant bram --framebuffer cached --clock-cost 1680 --audio fixed
+: "${HARNESS_ROOT:?Set HARNESS_ROOT to the verified os25 harness checkout}"
+: "${CHECKOUT:?Set CHECKOUT to the Butterscotch source checkout}"
+: "${RISCV_GCC:?Set RISCV_GCC to the GCC 16.2.0 compiler executable}"
+cd "$HARNESS_ROOT"
+python3 experiments.py snapshot --name audio-parent-a6ea5c0-r1 --revision a6ea5c0 --repo "$CHECKOUT"
+python3 experiments.py run --snapshot audio-parent-a6ea5c0-r1 --game deltarune --window dodge --mode accuracy --kind timing --compiler "$RISCV_GCC" --alignment --native enabled --variant bram --framebuffer cached --clock-cost 1680 --audio fixed
 ```
 
 For the candidate use its committed revision and a new snapshot name. Read

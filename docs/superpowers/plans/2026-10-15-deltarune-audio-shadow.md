@@ -82,7 +82,8 @@ while (pairs > 0) {
 }
 ```
 
-- [x] Run `SDK_ROOT=/Users/chanderson/Projects/undertale-pocket/openfpgaSDK make -C src/openfpga snapshot-tests`.
+- [x] Run `make -C src/openfpga SDK_ROOT="$SDK_ROOT" snapshot-tests`.
+  Set `SDK_ROOT` to the absolute path of the staged SDK before running it.
   Expect the new ring checks and existing queued-audio/decoder/restore checks to
   pass under ASan/UBSan. The SDK path is read-only.
 - [x] Run `make -C src/openfpga GAME=deltarune lint` and the Undertale equivalent.

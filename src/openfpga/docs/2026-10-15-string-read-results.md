@@ -139,10 +139,10 @@ are not described as completely sanitizer-clean.
 
 ## Build controls, cleanup, and reproduction
 
-Worktree: `/Users/chanderson/Projects/undertale-pocket/butterscotch-opt-strings`.
-Private evidence root:
-`/Users/chanderson/Projects/undertale-pocket/butterscotch-pr20-fixes/.superpowers/sdd/2026-10-15-deltarune-string-reads/task-2-logs`.
-Accepted evidence is in its `v2/` directory; scripts are in the root.
+`$CHECKOUT` denotes the source worktree containing candidate `8540044`.
+`$EVIDENCE` denotes the retained private string-read Task 2 evidence directory
+(`task-2-logs`). Accepted evidence is in its `v2/` directory; scripts are in the
+root. Exact worktree and evidence locations remain in private run records.
 
 The first rapid source-swap build attempt silently reused stale objects for two
 variants. Compile logs and `nm` exposed this before acceptance. Every first-attempt
@@ -162,7 +162,9 @@ another worktree, asset modification, Docker, or RTL command occurred here.
 Reproduction, with the authorized private inputs in place, from this worktree:
 
 ```sh
-EVIDENCE=/Users/chanderson/Projects/undertale-pocket/butterscotch-pr20-fixes/.superpowers/sdd/2026-10-15-deltarune-string-reads/task-2-logs
+: "${CHECKOUT:?Set CHECKOUT to the candidate source worktree}"
+: "${EVIDENCE:?Set EVIDENCE to the retained private task-2-logs directory}"
+cd "$CHECKOUT"
 python3 "$EVIDENCE/prepare-builds-v2.py"
 python3 "$EVIDENCE/run-desktop-v2.py" counters
 python3 "$EVIDENCE/run-desktop-v2.py" captures
@@ -171,6 +173,10 @@ python3 "$EVIDENCE/diagnostic-scenes.py"
 python3 "$EVIDENCE/analyze.py"
 python3 "$EVIDENCE/restore-objects.py"
 ```
+
+Private scripts retain the original machine paths; configure their path
+settings before reproducing on another machine. Historical records are kept
+unchanged.
 
 The run scripts deliberately require new directories (`exist_ok=False`); archive
 or select a fresh evidence root before reproducing. `analyze.py` also expects the
