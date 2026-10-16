@@ -2,7 +2,7 @@
 # Copy a built, matching os25 save-state runtime into an isolated SDK.
 # The runtime comes from our openfpgaOS fork, zenibako/openfpgaCore.
 set -euo pipefail
-os_required=6a9594f4c6add2cb33034b08cf4d18df684f11e2
+tools=$(cd "$(dirname "$0")" && pwd)
 # --allow-timing-miss packages a build whose setup or hold slack is negative,
 # such as the fork's os25 at 100 MHz. Without it, such a build is refused.
 allow_miss=0
@@ -17,10 +17,7 @@ fi
 os=$(cd "$1" && pwd)
 base=$(cd "$2" && pwd)
 dest="$3"
-git -C "$os" merge-base --is-ancestor "$os_required" HEAD 2>/dev/null || {
-    echo "Build zenibako/openfpgaCore at $os_required or later; $os does not contain it" >&2
-    exit 1
-}
+python3 "$tools/runtime-provenance.py" source "$os"
 [ ! -e "$dest" ] || { echo "Use a new destination; the base SDK stays read-only" >&2; exit 1; }
 build="$os/src/fpga/targets/pocket/bld/os25"
 python3 - "$build" "$allow_miss" <<'PY'
@@ -44,7 +41,12 @@ PY
 mkdir -p "$dest"
 dest=$(cd "$dest" && pwd)
 rsync -a --exclude=.git "$base/" "$dest/"
-make -C "$os" sdk DEST="$dest"
+# A skipped/failed export must not recertify any inherited base SDK bytes.
+rm -f "$dest/runtime/pocket/SAVESTATES_RUNTIME.json" \
+    "$dest/runtime/pocket/os.bin" "$dest/runtime/pocket/os25.rbf_r" \
+    "$dest/runtime/pocket/loader.bin"
+make -C "$os" sdk TARGET=pocket VARIANT=os25 DEST="$dest"
+python3 "$tools/runtime-provenance.py" write "$os" "$dest/runtime/pocket"
 {
     echo "Butterscotch native save-state runtime"
     git -C "$os" rev-parse HEAD
