@@ -485,9 +485,13 @@ s16le) and `BS_AUDIO_LOG=1` logs every effect, for checking without speakers.
 
 Undertale keeps its progress in a few small files (`file0`, `file9`,
 `undertale.ini`, ...). `platform/of_save_fs.c` stores them all as one small
-archive in the first save slot (`undertale_0.sav`). The Pocket writes save
-slots back to the SD card when the core is closed from its menu. The
-benchmark neither reads nor writes saves.
+archive in the first save slot (`undertale_0.sav`, or `deltarune_0.sav`).
+Native Memories builds flush ordinary progress saves directly to SD with
+`fsync`; they require the runtime with save-slot `fsync` support shipped
+alongside the game update. Older runtimes report `SD sync failed` and still
+rely on the Pocket's exit writeback. A Memories restore rewinds the captured
+progress in save RAM; it does not itself flush to SD. The benchmark neither
+reads nor writes saves.
 
 To carry a save over from the desktop game, `make import-save
 SAVE_DIR=<folder>` packs a desktop save folder into `undertale_0.sav`
