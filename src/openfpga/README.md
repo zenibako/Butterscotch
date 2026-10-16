@@ -94,6 +94,7 @@ make builtin-compat-fixture  # builds the asset-free date/audio builtin regressi
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
+make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -397,6 +398,17 @@ strokes remain readable. Those screens cost about a quarter of the pixels.
 game assets. It checks either pixel phase, clipping, tint, alpha, cache reuse
 and texture reloads, plus unchanged filtering for other fonts, odd glyph
 sizes, alternate scales, mirrored text and rotation.
+
+Speed mode also adjusts selected battle names, buttons and enemy speech for
+readability at half resolution. Both games use the shared sampler in
+`../sw/sw_drawing.c`; `game_undertale.c` and `game_deltarune.c` select the
+assets and active battle context. Accuracy and non-battle screens keep their
+ordinary sampling.
+
+`make battle-contrast-fixture` builds `./<game>_pc_battle_contrast_fixture`
+without game assets. Run it once for each `GAME` to check game-specific
+selection as well as shared coverage, clipping, cache isolation and fallback
+modes. Use separate object directories when changing `GAME` or compiler flags.
 
 ## Frame skipping
 

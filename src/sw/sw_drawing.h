@@ -54,6 +54,9 @@ bool swrFillCoversMain(SWRenderer* swr, float x1, float y1, float x2, float y2, 
 bool swrFillCoversWhole(SWRenderer* swr, float x1, float y1, float x2, float y2);
 void swrOverlayFlushForState(SWRenderer* swr);
 void swrDrawSprite(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha);
+enum { SWR_CONTRAST_NONE, SWR_CONTRAST_GLYPH, SWR_CONTRAST_BUTTON, SWR_CONTRAST_UI_GLYPH, SWR_CONTRAST_BUBBLE_GLYPH };
+void swrDrawContrastSprite(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture,
+                           int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, int contrast);
 // Point-samples a verified doubled font at exact half size; otherwise draws normally.
 void swrDrawDoubledGlyph(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha);
 void swrDrawSpriteRotated(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, float angleDeg, float pivotX, float pivotY);
