@@ -53,7 +53,7 @@ echo "runner snapshot (WAD 17): passed"
     "$repo/tests/of_pc_audio_snapshot_test.c" $(pkg-config --libs sdl2) -lm -o "$out/pc-audio"
 "$out/pc-audio"
 export SDK_ROOT
-for test in test_game_fingerprint test_snapshot_notice test_save_fs_native_close test_save_fs_sync \
+for test in test_runtime_packaging test_game_fingerprint test_snapshot_notice test_save_fs_native_close test_save_fs_sync \
     test_snapshot_completion test_restore_commit test_state_coverage test_state_probe; do
     python3 "$port/tests/$test.py"
 done
