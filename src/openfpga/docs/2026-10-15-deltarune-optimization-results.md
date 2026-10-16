@@ -150,9 +150,11 @@ and pair counts; pointer-bearing state is not compared across binaries.
 
 ## Evidence, storage and limits
 
-The independent private harness is
-`/Users/chanderson/Projects/undertale-pocket/openfpga-os25-opt-20261015`.
-Its 1,631 frozen input checks pass; SDK, private assets and pins were not edited.
+`$HARNESS_ROOT` denotes the independent private os25 harness checkout
+containing `experiments.py` and the verified frozen inputs. Evidence paths
+below are relative to that root; exact machine locations remain in private
+manifests.
+All 1,631 frozen input checks pass; SDK, private assets and pins were not edited.
 Isolated evidence is under `build/optimization-discovery-20261015/`; the shared
 matrix and incident log are under `build/optimization-matrix-20261015/`.
 Its `inventory.json` records all 32 exact case paths, source revisions, ELF,

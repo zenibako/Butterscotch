@@ -203,9 +203,10 @@ A microbenchmark gain alone cannot establish a scene speedup.
 
 ## Private evidence and reproduction
 
-Private evidence is outside Git at:
-`butterscotch-pr20-fixes/.superpowers/sdd/2026-10-15-deltarune-collision-measurement/task-2-evidence/`
-under the shared project root. Retained cases are `r5-{deltarune-route,
+`$EVIDENCE` denotes the retained private collision Task 2 evidence directory
+(`task-2-evidence`), outside Git. Exact machine-specific locations remain in
+private command records. Paths below are relative to that directory.
+Retained cases are `r5-{deltarune-route,
 deltarune-spades,undertale-flowey}-{accuracy,speed}-{on,off}`; same-ELF repeats
 are `repeat-1-r5-...-accuracy-on` for each route. Assets are read-only symlinks
 to the verified harness inputs, never staged. The directory contains:

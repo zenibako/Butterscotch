@@ -86,11 +86,14 @@ static char *countedStrdup(const char *text) {
   existing result allocation, `strlen`/UTF-8 scans and return tags.
 - [x] Build/run the new fixture separately for each game, using fresh objects:
 
+On macOS, set `SDL_LIBRARY_DIR` to the directory containing the SDL runtime
+libraries. Omit the `DYLD_FALLBACK_LIBRARY_PATH` assignment when it is not needed.
+
 ```sh
 make -C src/openfpga GAME=deltarune PC_BIN=out/string-dr PC_OBJ_DIR=out/string-dr-obj PC_EXTRA_CFLAGS='-g -O1 -fsanitize=address,undefined -fno-sanitize=alignment,function' string-reads-fixture
-DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ASAN_OPTIONS=detect_leaks=0 src/openfpga/out/string-dr_string_reads_fixture
+DYLD_FALLBACK_LIBRARY_PATH="$SDL_LIBRARY_DIR" ASAN_OPTIONS=detect_leaks=0 src/openfpga/out/string-dr_string_reads_fixture
 make -C src/openfpga GAME=undertale PC_BIN=out/string-ut PC_OBJ_DIR=out/string-ut-obj PC_EXTRA_CFLAGS='-g -O1 -fsanitize=address,undefined -fno-sanitize=alignment,function' string-reads-fixture
-DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ASAN_OPTIONS=detect_leaks=0 src/openfpga/out/string-ut_string_reads_fixture
+DYLD_FALLBACK_LIBRARY_PATH="$SDL_LIBRARY_DIR" ASAN_OPTIONS=detect_leaks=0 src/openfpga/out/string-ut_string_reads_fixture
 ```
 
   The new target must emit the `_string_reads_fixture` binary shown above.

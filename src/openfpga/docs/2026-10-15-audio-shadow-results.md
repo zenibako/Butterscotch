@@ -67,9 +67,9 @@ lint pass. Independent specification and quality review reports no findings.
 
 ## Private evidence and further validation
 
-Harness root:
-`/Users/chanderson/Projects/undertale-pocket/openfpga-os25-opt-20261015`.
-Exact case directories under `experiments/cases/`:
+`$HARNESS_ROOT` denotes the verified private os25 harness checkout. Exact
+machine-specific locations remain in the private case manifests. The following
+paths are relative to that root; exact cases are under `experiments/cases/`:
 
 ```text
 opt-main-a6ea5c0-20261015-deltarune-dodge-accuracy-timing-0b2a2747dd136fbd
