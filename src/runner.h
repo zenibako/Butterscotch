@@ -784,6 +784,11 @@ struct Runner {
     int32_t cursorSpriteSubimage; // storages the current sprite subimage
     TileLayerMapEntry* tileLayerMap; // stb_ds hashmap: depth -> tile layer state
     RuntimeLayer* runtimeLayers; // stb_ds array, index-parallel to currentRoom->layers for parsed entries; dynamic entries appended
+    // Derived last successful lookup; never serialized. Structural writers must
+    // invalidate before changing layer/element order, membership, or IDs.
+    size_t layerElementLookupLayer;
+    size_t layerElementLookupElement;
+    bool layerElementLookupValid;
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
     uint32_t nextLayerDrawOrder;
     SavedRoomState* savedRoomStates; // array of size dataWin->room.count, for persistent room support
@@ -1025,6 +1030,7 @@ void Runner_free(Runner* runner);
 RuntimeLayer* Runner_findRuntimeLayerByName(Runner* runner, char* name);
 RuntimeLayer* Runner_findRuntimeLayerById(Runner* runner, int32_t id);
 RoomLayer* Runner_findRoomLayerById(Room* room, int32_t id);
+void Runner_invalidateLayerElementLookup(Runner* runner);
 RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t elementId, RuntimeLayer** outLayer);
 void Runner_addInstanceLayerElement(Runner* runner, int32_t layerId, int32_t instanceId);
 void Runner_moveInstanceToDepthLayer(Runner* runner, Instance* inst, int32_t depth);
