@@ -54,11 +54,11 @@ RV32 GCC, staged openfpgaSDK, independent os25 replay.
 
 **Interfaces:** Consume Task 2's retained revision. Preserve `RValue` input/result ownership, conversion contract, UTF-8 and malformed-input semantics; no persistent string cache.
 
-- [ ] Count repeated byte/codepoint traversal on the retained revision in dialogue and battle text, controlling counters and deterministic input. Rank reached routines; do not substitute old profile times for current measurements.
-- [ ] Record one selected routine/optimization with a concrete design and expected work removal, or reject with measured evidence.
-- [ ] Add boundary, malformed UTF-8, non-string conversion and ownership cases plus a work-bound check; observe the intended pre-change failure.
-- [ ] Implement the local scan reduction, run both games' string/builtin/snapshot checks under sanitizers, and review ownership/encoding before timing.
-- [ ] Run affected real-text pixel/state comparisons and a relevant fixed-audio replay screen where covered. Record missing workload coverage honestly and sign the retained/rejected result before Task 4.
+- [x] Count repeated byte/codepoint traversal on the retained revision in dialogue and battle text, controlling counters and deterministic input. Rank reached routines; do not substitute old profile times for current measurements.
+- [x] Record one selected routine/optimization with a concrete design and expected work removal, or reject with measured evidence.
+- [x] Add boundary, malformed UTF-8, non-string conversion and ownership cases plus a work-bound check; observe the intended pre-change failure.
+- [x] Implement the local scan reduction, run both games' string/builtin/snapshot checks under sanitizers, and review ownership/encoding before timing.
+- [x] Run affected real-text pixel/state comparisons and a relevant fixed-audio replay screen where covered. Record missing workload coverage honestly and sign the retained/rejected result before Task 4.
 
 ### Task 4: Reduce loading hitches
 
