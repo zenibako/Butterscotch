@@ -28,13 +28,13 @@ RV32 GCC, staged openfpgaSDK, independent os25 replay.
 
 **Interfaces:** Consume existing `Collision_pointInInstance(Sprite*, Instance*, GMLReal, GMLReal)` as unchanged scalar behavior, and `Collision_instancesOverlapPrecise(Runner*, Instance*, Instance*, InstanceBBox, InstanceBBox)` as the public pair interface. Produce pair-local preparation only; no persistent state or snapshot interface changes.
 
-- [ ] Add the real pair-vs-scalar differential fixture described by the spec; establish baseline behavior in both games before changing the production loop.
-- [ ] Add a meaningful work-bound check that fails baseline repeated mask setup (test-only observation; no timing reads), then observe the intended failure.
-- [ ] Add lazy stack-local preparation and replace only the pair loop's point evaluations. Keep division/arithmetic/casts and all short-circuit gates.
-- [ ] Run the fixture with ASan/UBSan for both WADs, existing collision-order and snapshot checks; inspect legacy compilation and RV32 emitted code.
-- [ ] Review the exact task diff. Fix findings before timing. Controller handles commits after verification; implementer leaves production/test changes ready for review.
-- [ ] Export baseline/candidate committed revisions. Screen Deltarune dodge Accuracy timing with exact existing configuration, repeated captures and positive/negative controls. Compare raw RGB555/PCM/pairs independently.
-- [ ] For a retained candidate, add Speed dodge and affected traced/shared-game checks. Record cost/memory, inconclusive effects and limitations. Keep or reject based on evidence; sign the topic and report commits.
+- [x] Add the real pair-vs-scalar differential fixture described by the spec; establish baseline behavior in both games before changing the production loop.
+- [x] Add a meaningful work-bound check that fails baseline repeated mask setup (test-only observation; no timing reads), then observe the intended failure.
+- [x] Add lazy stack-local preparation and replace only the pair loop's point evaluations. Keep division/arithmetic/casts and all short-circuit gates.
+- [x] Run the fixture with ASan/UBSan for both WADs, existing collision-order and snapshot checks; inspect legacy compilation and RV32 emitted code.
+- [x] Review the exact task diff. Fix findings before timing. Controller handles commits after verification; implementer leaves production/test changes ready for review.
+- [x] Export baseline/candidate committed revisions. Screen Deltarune dodge Accuracy timing with exact existing configuration, repeated captures and positive/negative controls. Compare raw RGB555/PCM/pairs independently.
+- [x] For a retained candidate, add Speed dodge and affected traced/shared-game checks. Record cost/memory, inconclusive effects and limitations. Keep or reject based on evidence; sign the topic and report commits.
 
 ### Task 2: Reduce remaining tile-shift work
 
