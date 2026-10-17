@@ -406,6 +406,11 @@ layer-lookup-fixture: $(PC_OBJS)
 tile-shift-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/tile-shift.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_shift_fixture
 
+# Asset-free tile composition and copy-call regression oracle.
+.PHONY: tile-stripes-fixture
+tile-stripes-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/tile-stripes.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/sw_renderer.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_stripes_fixture
+
 # Real-asset state/RNG/command oracle for the guarded battle writer.
 .PHONY: writer-draw-fixture
 writer-draw-fixture: $(PC_OBJS)
