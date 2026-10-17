@@ -351,6 +351,15 @@ static void battleUiInstall(Runner *runner) {
                                 bubbleFonts, sizeof(bubbleFonts) / sizeof(bubbleFonts[0]));
     SWRenderer_setContrastGlyphAssets(runner->renderer, glyphSprites, sizeof(glyphSprites) / sizeof(glyphSprites[0]),
                                      NULL, 0);
+    // Half-size names are not doubled pixel art (15 source rows). Point sampling
+    // keeps their counters open; a five-pixel R gives its leg a distinct diagonal.
+    // Fingerprints reject modified/localized labels before deriving any pixels.
+    static const SWHintedGlyphAsset hintedNames[] = {
+        {"spr_bnamekris", 43, 15, 0x8c29ca15u, 6, 5, {30, 17, 17, 30, 20, 18, 17, 17}},
+        {"spr_bnameralsei", 61, 15, 0xd514b019u, 0, 5, {30, 17, 17, 30, 20, 18, 17, 17}},
+        {"spr_bnamesusie", 48, 15, 0x6af54445u, 0, 0, {0}}
+    };
+    SWRenderer_setHintedGlyphAssets(runner->renderer, hintedNames, sizeof(hintedNames) / sizeof(hintedNames[0]));
     g_battleData = runner->dataWin;
     g_battleController = -1;
     for (uint32_t i = 0; i < runner->dataWin->objt.count; ++i) {

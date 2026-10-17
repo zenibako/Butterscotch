@@ -39,6 +39,7 @@ static void setup(SWRenderer *swr, SWTexture *texture, DataWin *data, SWTexture 
 static void finish(SWRenderer *swr, SWTexture *texture) {
     swrOverlayFlush(swr);
     free(swr->fb);
+    free(swr->hintedGlyphs);
     free(swr->contrastItems); free(swr->contrastFonts);
     free(texture->halfBuffer); free(texture->rowBounds); free(texture->buffer);
 }
@@ -239,6 +240,156 @@ static void hudSpriteDispatch(void) {
     ++checked; finish(&swr, &texture);
 }
 
+/* A synthetic tall R must retain its counter and acquire a diagonal leg at
+ * native 5x8 size. Literal rows are the desired readable output, not a filter oracle. */
+static void hintedName(void) {
+    SWRenderer swr;
+    SWTexture texture = {0}; DataWin data = {0}; SWTexture *pages[] = {&texture};
+    setup(&swr, &texture, &data, pages);
+    free(texture.buffer);
+    texture.width = texture.height = 16;
+    texture.buffer = calloc(256, sizeof(uintpixel_t));
+    assert(texture.buffer);
+    /* Deliberately ambiguous original: a stem and almost vertical right leg. */
+    for (int y = 0; y < 15; ++y)
+        for (int x = 0; x < 9; ++x)
+            if (x < 2 || x > 6 || y < 2 || (y >= 6 && y <= 8)) texture.buffer[y * 16 + x] = 0xffff;
+    uint32_t hash = 2166136261u;
+    for (int y = 0; y < 15; ++y)
+        for (int x = 0; x < 9; ++x) {
+            unsigned pixel = texture.buffer[y * 16 + x];
+            hash = (hash ^ (pixel & 255)) * 16777619u;
+            hash = (hash ^ (pixel >> 8)) * 16777619u;
+        }
+    SWHintedGlyphAsset hint = {"synthetic_name", 9, 15, hash, 0, 5,
+                              {30, 17, 17, 30, 20, 18, 17, 17}};
+    TexturePageItem item = {.sourceWidth = 9, .sourceHeight = 15, .targetWidth = 9, .targetHeight = 15};
+    int32_t target = 0;
+    Sprite sprite = {.name = "synthetic_name", .textureCount = 1, .tpagIndices = &target};
+    data.tpag.count = data.sprt.count = 1; data.tpag.items = &item; data.sprt.sprites = &sprite;
+    const char *names[] = {"synthetic_name"};
+    SWRenderer_setContrastAssets(&swr.base, NULL, 0, NULL, 0);
+    SWRenderer_setContrastGlyphAssets(&swr.base, names, 1, NULL, 0);
+    SWRenderer_setHintedGlyphAssets(&swr.base, &hint, 1);
+    uintpixel_t original[256]; memcpy(original, texture.buffer, sizeof(original));
+    swrDrawSprite(&swr.base, 0, 0, 16, 16, &texture, 0, 0, 16, 16, 0xffffff, 1);
+    swrOverlayFlush(&swr);
+    assert(texture.halfBuffer);
+    uintpixel_t *halfBefore = texture.halfBuffer, half[64];
+    memcpy(half, halfBefore, sizeof(half));
+    static const unsigned expected[8] = {30, 17, 17, 30, 20, 18, 17, 17};
+    for (int warm = 0; warm < 2; ++warm) {
+        for (int clip = 0; clip < 20; ++clip) {
+            swr.portX = clip & 1 ? 3 : 0; swr.portY = clip & 2 ? 3 : 0;
+            swr.portW = (clip & 4 ? 6 : SIZE) - swr.portX;
+            swr.portH = (clip & 8 ? 9 : SIZE) - swr.portY;
+            if (clip >= 16) {
+                swr.portX = clip == 17 ? 6 : 2; swr.portY = clip == 19 ? 9 : 2;
+                swr.portW = clip <= 17 ? 1 : 5; swr.portH = clip >= 18 ? 1 : 8;
+            }
+            swr.viewX = swr.portX * 2; swr.viewY = swr.portY * 2;
+            swr.maxX = swr.portX + swr.portW; swr.maxY = swr.portY + swr.portH;
+            for (int opacity = 1; opacity <= 2; ++opacity) {
+                clear(&swr, 0x8000);
+                swr.base.vtable->drawSprite(&swr.base, 0, 4, 4, 0, 0, 1, 1, 0, 0xffffff, opacity * 0.5f);
+                swrOverlayFlush(&swr);
+                for (int y = 0; y < SIZE; ++y)
+                    for (int x = 0; x < SIZE; ++x) {
+                        bool visible = x >= swr.portX && x < swr.portX + swr.portW &&
+                                       y >= swr.portY && y < swr.portY + swr.portH;
+                        bool ink = x >= 2 && x < 7 && y >= 2 && y < 10 && (expected[y-2] & (1u << (6-x)));
+                        uintpixel_t want = visible && ink ? (opacity == 2 ? 0xffff : 0xbdef) : 0x8000;
+                        if (swr.fb[y * SIZE + x] != want) {
+                            fprintf(stderr, "hinted warm=%d clip=%d opacity=%d at=%d/%d: %04x != %04x\n",
+                                    warm, clip, opacity, x, y, swr.fb[y * SIZE + x], want);
+                            abort();
+                        }
+                    }
+                ++checked;
+            }
+        }
+    }
+    assert(memcmp(original, texture.buffer, sizeof(original)) == 0);
+    assert(halfBefore == texture.halfBuffer && memcmp(half, texture.halfBuffer, sizeof(half)) == 0);
+    SWGlyphHintCache *cached = texture.glyphHints;
+    assert(cached && !cached->next && cached->valid);
+    /* Every rejected configuration must match the existing selected-UI path. */
+    for (int guard = 0; guard < 12; ++guard) {
+        swr.portX = swr.portY = swr.viewX = swr.viewY = 0; swr.portW = swr.portH = swr.maxX = swr.maxY = SIZE;
+        swr.contrastEnabled = guard != 0; swrFavorSpeed = guard != 1;
+        swrSmoothMinify = guard != 2; swr.drawingToSurface = guard == 3;
+        swr.scaleX = guard == 4 ? 1 : 0.5f; swr.scaleY = 0.5f;
+        swr.blendMode = guard == 5 ? bm_add : bm_normal;
+        texture.immutable = guard != 6;
+        float scale = guard == 7 ? 2 : guard == 8 ? -1 : 1;
+        float angle = guard == 9 ? 20 : 0;
+        item.targetWidth = guard == 10 ? 10 : 9;
+        sprite.name = guard == 11 ? "localized_name" : "synthetic_name";
+        SWRenderer_setHintedGlyphAssets(&swr.base, &hint, 1);
+        clear(&swr, 0x8000);
+        swr.base.vtable->drawSprite(&swr.base, 0, 4, 4, 0, 0, scale, 1, angle, 0xffffff, 1);
+        swrOverlayFlush(&swr);
+        uintpixel_t reference[SIZE * SIZE]; memcpy(reference, swr.fb, sizeof(reference));
+        SWRenderer_setHintedGlyphAssets(&swr.base, NULL, 0);
+        clear(&swr, 0x8000);
+        swr.base.vtable->drawSprite(&swr.base, 0, 4, 4, 0, 0, scale, 1, angle, 0xffffff, 1);
+        swrOverlayFlush(&swr);
+        assert(memcmp(reference, swr.fb, sizeof(reference)) == 0);
+        ++checked;
+    }
+    SWRenderer_setHintedGlyphAssets(&swr.base, NULL, 0);
+    swr.portX = swr.portY = swr.viewX = swr.viewY = 0;
+    swr.portW = swr.portH = swr.maxX = swr.maxY = SIZE;
+    swr.scaleX = swr.scaleY = 0.5f; swr.blendMode = bm_normal;
+    swr.contrastEnabled = texture.immutable = swrFavorSpeed = swrSmoothMinify = true;
+    swr.drawingToSurface = false;
+    for (int phase = 0; phase < 4; ++phase) {
+        swrFreeGlyphHints(&texture);
+        memset(texture.buffer, 0, 256 * sizeof(uintpixel_t));
+        int sx = phase & 1, sy = phase >> 1;
+        for (int y = 0; y < 15; ++y)
+            memcpy(texture.buffer + (sy+y)*16+sx, original+y*16, 9*sizeof(uintpixel_t));
+        for (int red = 0; red < 2; ++red) {
+            clear(&swr, 0x8000);
+            assert(swrDrawHintedGlyph(&swr.base, 4, 4, 9, 15, &texture, sx, sy, 9, 15,
+                                     red ? 0x0000ff : 0xffffff, 0.5f, &hint));
+            swrOverlayFlush(&swr);
+            for (int y = 0; y < 8; ++y)
+                for (int x = 0; x < 5; ++x)
+                    assert(swr.fb[(y+2)*SIZE+x+2] == ((expected[y] & (1u << (4-x))) ?
+                           (red ? 0xbc00 : 0xbdef) : 0x8000));
+            ++checked;
+        }
+        assert(texture.glyphHints && !texture.glyphHints->next);
+    }
+    for (int guard = 0; guard < 7; ++guard) {
+        swrFreeGlyphHints(&texture);
+        memcpy(texture.buffer, original, sizeof(original));
+        SWHintedGlyphAsset rejected = hint;
+        if (guard == 0) rejected.sourceHash ^= 1;
+        if (guard == 1) rejected.patchWidth = 9;
+        if (guard == 2) rejected.patchX = 5;
+        if (guard == 3) texture.buffer[0] ^= 0xffff;
+        if (guard == 4) {
+            texture.buffer[0] = 0x83e0; // Matching fingerprint still cannot opt in colored ink.
+            rejected.sourceHash = 2166136261u;
+            for (int y = 0; y < 15; ++y)
+                for (int x = 0; x < 9; ++x) {
+                    unsigned pixel = texture.buffer[y*16+x];
+                    rejected.sourceHash = (rejected.sourceHash ^ (pixel & 255)) * 16777619u;
+                    rejected.sourceHash = (rejected.sourceHash ^ (pixel >> 8)) * 16777619u;
+                }
+        }
+        clear(&swr, 0x8000);
+        assert(!swrDrawHintedGlyph(&swr.base, 4, 4, 9, 15, &texture, guard == 5 ? -1 : 0,
+                                  guard == 6 ? 2 : 0, 9, 15, 0xffffff, 1, &rejected));
+        for (int i = 0; i < SIZE*SIZE; ++i) assert(swr.fb[i] == 0x8000);
+        ++checked;
+    }
+    swrFreeGlyphHints(&texture);
+    finish(&swr, &texture);
+}
+
 static void textDispatch(void) {
     SWRenderer swr;
     SWTexture texture = {0}; DataWin data = {0}; SWTexture *pages[] = {&texture};
@@ -389,6 +540,7 @@ int main(void) {
     metadata();
     textDispatch();
     hudSpriteDispatch();
+    hintedName();
     for (int kind = SWR_CONTRAST_GLYPH; kind <= SWR_CONTRAST_BUBBLE_GLYPH; ++kind)
         for (int clip = 0; clip < 16; ++clip)
             for (int warm = 0; warm < 2; ++warm) oddEdges(warm, clip, kind);

@@ -57,6 +57,10 @@ void swrDrawSprite(Renderer* renderer, float dx, float dy, float dw, float dh, S
 enum { SWR_CONTRAST_NONE, SWR_CONTRAST_GLYPH, SWR_CONTRAST_BUTTON, SWR_CONTRAST_UI_GLYPH, SWR_CONTRAST_BUBBLE_GLYPH };
 void swrDrawContrastSprite(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture,
                            int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, int contrast);
+// Returns false without drawing if the selected source or transform is unsupported.
+bool swrDrawHintedGlyph(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture,
+                        int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha,
+                        const SWHintedGlyphAsset* asset);
 // Point-samples a verified doubled font at exact half size; otherwise draws normally.
 void swrDrawDoubledGlyph(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha);
 void swrDrawSpriteRotated(Renderer* renderer, float dx, float dy, float dw, float dh, SWTexture* texture, int sx, int sy, int sw, int sh, uint32_t tintColor, float alpha, float angleDeg, float pivotX, float pivotY);
