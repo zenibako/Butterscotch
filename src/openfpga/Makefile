@@ -401,6 +401,11 @@ spatial-grid-fixture: $(PC_OBJS)
 layer-lookup-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/layer-lookup.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_layer_lookup_fixture
 
+# Real-asset oracle for the guarded tile-shift native; pass data.win to the binary.
+.PHONY: tile-shift-fixture
+tile-shift-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/tile-shift.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_shift_fixture
+
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
 # Keep this output separate from the ordinary two-game core. Both games share
 # the one core, and the Pocket's sleep switch is per core, so every game built

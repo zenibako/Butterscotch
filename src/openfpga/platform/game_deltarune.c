@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include "instance.h"
+#include "gml_array.h"
 #include "log.h"
 #include "renderer.h"
 #include "runner.h"
@@ -164,7 +165,72 @@ static bool get84Sprite(VMContext *ctx, RValue *args, int32_t argCount, RValue *
     return true;
 }
 
+/* gml_Script_tile_layer_shift(depth, x, y), callable body at offset 4.
+ * All ten variables are locals; the separate global-init wrapper installs the
+ * method. Keep the builtin order and their owned arrays: duplicate IDs, omitted
+ * dead instances, missing tiles and integer coordinate conversion belong to the
+ * existing builtins. This removes VM dispatch, not layer-element searches. */
+static bool tileLayerShift(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    if (ctx->runner == NULL || args == NULL || argCount < 3) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!isNumber(args[i]) || !isfinite(RValue_toReal(args[i]))) return false;
+    GMLReal epsilon = ctx->runner->mathEpsilon;
+    if (!isfinite(epsilon) || epsilon < 0) return false;
+
+    static const char *const names[] = {
+        "layer_get_all", "array_length_1d", "layer_get_depth", "layer_get_all_elements",
+        "layer_get_element_type", "layer_tile_get_x", "layer_tile_x", "layer_tile_get_y", "layer_tile_y",
+    };
+    BuiltinFunc functions[9];
+    for (int i = 0; i < 9; ++i) {
+        functions[i] = VM_findBuiltin(ctx, names[i]);
+        if (functions[i] == NULL) return false;
+    }
+
+    /* No fallback after this point: replaying the bytecode would shift twice. */
+    GMLReal depth = RValue_toReal(args[0]);
+    GMLReal x = RValue_toReal(args[1]), y = RValue_toReal(args[2]);
+    RValue layers = functions[0](ctx, NULL, 0);
+    RValue layerCount = functions[1](ctx, &layers, 1);
+    for (int32_t i = 0; lessThan((GMLReal)i, RValue_toReal(layerCount), epsilon); ++i) {
+        RValue layer = GMLArray_getOnArrayRef(&layers, i);
+        RValue layerDepth = functions[2](ctx, &layer, 1);
+        /* IDs returned as REAL may round to a missing ID. Undefined is
+         * unequal to every supported numeric depth, including zero. */
+        bool different = layerDepth.type == RVALUE_UNDEFINED ||
+                         !(GMLReal_fabs(RValue_toReal(layerDepth) - depth) <= epsilon);
+        RValue_free(&layerDepth);
+        if (different) continue;
+        RValue elements = functions[3](ctx, &layer, 1);
+        RValue elementCount = functions[1](ctx, &elements, 1);
+        for (int32_t j = 0; lessThan((GMLReal)j, RValue_toReal(elementCount), epsilon); ++j) {
+            RValue element = GMLArray_getOnArrayRef(&elements, j);
+            RValue type = functions[4](ctx, &element, 1);
+            bool tile = GMLReal_fabs(RValue_toReal(type) - (GMLReal)7) <= epsilon;
+            RValue_free(&type);
+            if (!tile) continue;
+            RValue oldX = functions[5](ctx, &element, 1);
+            RValue setX[2] = { element, RValue_makeReal(RValue_toReal(oldX) + x) };
+            RValue_free(&oldX);
+            RValue unused = functions[6](ctx, setX, 2);
+            RValue_free(&unused);
+            RValue oldY = functions[7](ctx, &element, 1);
+            RValue setY[2] = { element, RValue_makeReal(RValue_toReal(oldY) + y) };
+            RValue_free(&oldY);
+            unused = functions[8](ctx, setY, 2);
+            RValue_free(&unused);
+        }
+        RValue_free(&elementCount);
+        RValue_free(&elements);
+    }
+    RValue_free(&layerCount);
+    RValue_free(&layers);
+    *result = RValue_makeUndefined();
+    return true;
+}
+
 static const OfNativeScript g_nativeScripts[] = {
+    { "gml_Script_tile_layer_shift", 608, 0x7ba14ffb5cf975f3ull, tileLayerShift },
     { "gml_Script___view_get", 1260, 0xeff822f793176fb9ull, viewGet },
     { "gml_Script_scr_84_get_sprite", 84, 0x4121b98b835bc977ull, get84Sprite },
 };
