@@ -93,6 +93,7 @@ make tile-motion-fixture  # builds the asset-free translated tile-cache regressi
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
+make collision-precise-fixture # checks precise pairs against scalar point sampling
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
@@ -108,6 +109,22 @@ explicit `WADS=16` or `WADS=17`; add `PC_EXTRA_CFLAGS=-DOF_COLLISION_WORK_PROFIL
 to also check sort, comparison, target-length and bounding-box counters. Use a
 fresh `PC_OBJ_DIR` when changing flags. These counters are diagnostic counts,
 not timings, and are absent from ordinary builds.
+
+The precise-pair fixture is `./<game>_pc_collision_precise_fixture`. Build
+`collision-precise-fixture` with one explicit `WADS=16` or `WADS=17` and the
+matching `GAME`. It compiles the real collision header directly, without game
+assets or platform objects. Literal edge cases and a scalar sampling oracle
+cover compatibility sampling, signed/degenerate scales, tiny/negative angles,
+frame masks, cropped rows, fractional positions and lazy setup. Fixture-only
+function instrumentation and math wrappers bound repeated setup work; they do
+not measure time and add no production diagnostics. `--behavior-only` skips
+work-bound failures for characterizing an unoptimized baseline. For sanitizers,
+use `PC_CC=clang` and
+`PC_EXTRA_CFLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize=alignment,function -fno-omit-frame-pointer"`.
+On macOS run with `ASAN_OPTIONS=detect_leaks=0` and, when needed,
+`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`. Use fresh named `ROOT`,
+`PC_OBJ_DIR` and `PC_BIN` paths when changing configurations; header checksum
+invalidation applies to those selected directories.
 
 The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
 ordinary updates, stale/partial membership recovery and grid replacement; use
