@@ -22,6 +22,19 @@ bool swrTileRunsFree(void);
 #define M_PI 3.1415926535897932384626
 #endif
 
+// Cached masks are private derivatives; original and half-size texels stay intact.
+typedef struct SWGlyphHintCache {
+    struct SWGlyphHintCache* next;
+    SWHintedGlyphAsset asset;
+    int sx, sy;
+    bool valid;
+    uintpixel_t pixels[32 * 8];
+} SWGlyphHintCache;
+typedef struct {
+    int32_t item;
+    const SWHintedGlyphAsset* asset;
+} SWHintedGlyphBinding;
+
 // Struct Definitions
 typedef struct
 {
@@ -36,6 +49,7 @@ typedef struct
     // drawn at half scale with swrFavorSpeed set (see swrHalfTexture), so
     // that such draws need no averaging. Only for a texture whose pixels never
     // change (immutable: one loaded from the game's data, not a surface).
+    SWGlyphHintCache* glyphHints; // freed with the immutable source texture
     uintpixel_t* halfBuffer;
     uint8_t* halfCoverage;  // how many of its four texels each copied one stands for, 0..4; NULL when every one is 0 or 4
     bool immutable;
@@ -108,6 +122,8 @@ typedef struct
     bool drawingToSurface;
     // Optional platform-selected UI assets. These flags never belong to a shared texture cache.
     bool contrastEnabled;
+    SWHintedGlyphBinding* hintedGlyphs;
+    size_t hintedGlyphCount;
     uint8_t* contrastItems;
     uint8_t* contrastFonts;
     uint32_t contrastItemCount, contrastFontCount;

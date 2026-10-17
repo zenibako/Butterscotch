@@ -225,6 +225,7 @@ static void SWRenderer_destroy(Renderer* renderer)
     swr->textureCount = 0;
     swr->totalTextureCount = 0;
     free(swr->vertexData);
+    free(swr->hintedGlyphs);
     free(swr->contrastItems);
     free(swr->contrastFonts);
     
@@ -482,6 +483,15 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
     {
         // Only a plain sprite draw may be held back for merging; see swrOverlayFlush.
         swr->overlayMergeAllowed = true;
+        bool hinted = false;
+        for (size_t i = 0; i < swr->hintedGlyphCount; ++i) {
+            if (swr->hintedGlyphs[i].item == tpagIndex) {
+                hinted = swrDrawHintedGlyph(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh,
+                                             color, alpha, swr->hintedGlyphs[i].asset);
+                break;
+            }
+        }
+        if (hinted) { swr->overlayMergeAllowed = false; return; }
         if ((uint32_t) tpagIndex < swr->contrastItemCount && swr->contrastItems[tpagIndex])
             swrDrawContrastSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha, swr->contrastItems[tpagIndex]);
         else
@@ -1247,6 +1257,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     SWRenderer* swr = (SWRenderer*) renderer;
     SWTexture* surface, localSurface;
     localSurface.halfBuffer = NULL;
+    localSurface.glyphHints = NULL;
     localSurface.rowBounds = NULL;
     localSurface.halfRowBounds = NULL;
     localSurface.halfFullBounds = NULL;
@@ -2864,6 +2875,7 @@ void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
     uint32_t i;
+    free(swr->hintedGlyphs); swr->hintedGlyphs = NULL; swr->hintedGlyphCount = 0;
     free(swr->contrastItems); free(swr->contrastFonts);
     swr->contrastItemCount = dw->tpag.count;
     swr->contrastFontCount = dw->font.count;
@@ -2897,6 +2909,29 @@ void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sp
     }
     for (i = 0; i < swr->contrastFontCount; ++i)
         if (swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount)) swr->contrastFonts[i] |= SWR_FONT_WHITE_CONTRAST;
+}
+
+void SWRenderer_setHintedGlyphAssets(Renderer* renderer, const SWHintedGlyphAsset* assets, size_t count)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    free(swr->hintedGlyphs); swr->hintedGlyphs = NULL; swr->hintedGlyphCount = 0;
+    if (!assets || count == 0 || count > 16) return;
+    swr->hintedGlyphs = (SWHintedGlyphBinding*) safeCalloc(count, sizeof(SWHintedGlyphBinding));
+    for (size_t a = 0; a < count; ++a) {
+        if (!assets[a].spriteName) continue;
+        for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+            const Sprite* sprite = &dw->sprt.sprites[i];
+            if (!sprite->name || strcmp(sprite->name, assets[a].spriteName) != 0 || sprite->textureCount != 1) continue;
+            int32_t item = sprite->tpagIndices[0];
+            if (item < 0 || (uint32_t) item >= dw->tpag.count) continue;
+            const TexturePageItem* tpag = &dw->tpag.items[item];
+            if (tpag->sourceWidth != assets[a].width || tpag->sourceHeight != assets[a].height ||
+                tpag->targetWidth != tpag->sourceWidth || tpag->targetHeight != tpag->sourceHeight) continue;
+            swr->hintedGlyphs[swr->hintedGlyphCount++] = (SWHintedGlyphBinding) {item, &assets[a]};
+            break;
+        }
+    }
 }
 
 void SWRenderer_setContrastEnabled(Renderer* renderer, bool enabled)
