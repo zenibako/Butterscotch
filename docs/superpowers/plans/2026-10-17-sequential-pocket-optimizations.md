@@ -42,11 +42,11 @@ RV32 GCC, staged openfpgaSDK, independent os25 replay.
 
 **Interfaces:** Consume Task 1's retained commit as baseline. Preserve `Runner_findLayerElementById`, its invalidation contract, existing native registration length/hash guards, and interpreted fallback.
 
-- [ ] Count post-merge first searches/comparisons, native/interpreted script calls and work in spades 490–492 on the retained predecessor. Keep counter-on/off output controls.
-- [ ] Record the measured choice and concrete local design in the ledger before implementation. If neither direction has enough work to justify complexity, record rejection with counts and commit its report.
-- [ ] For an index, test ordered duplicates/misses and every writer/restore invalidation; for a native script, compare real script state/outputs with `BS_NO_NATIVE=1`, including wrong hash/length fallback. Add a failing work-bound test before production edits.
-- [ ] Implement only the selected candidate, validate semantics with both affected game configurations and sanitizers, and review before timing.
-- [ ] Screen spades Accuracy, then Speed and affected trace/shared-game regressions if retained. Preserve raw outputs and independent source provenance. Record and sign the result before Task 3.
+- [x] Count post-merge first searches/comparisons, native/interpreted script calls and work in spades 490–492 on the retained predecessor. Keep counter-on/off output controls.
+- [x] Record the measured choice and concrete local design in the ledger before implementation. If neither direction has enough work to justify complexity, record rejection with counts and commit its report.
+- [x] For an index, test ordered duplicates/misses and every writer/restore invalidation; for a native script, compare real script state/outputs with `BS_NO_NATIVE=1`, including wrong hash/length fallback. Add a failing work-bound test before production edits.
+- [x] Implement only the selected candidate, validate semantics with both affected game configurations and sanitizers, and review before timing.
+- [x] Screen spades Accuracy, then Speed and affected trace/shared-game regressions if retained. Preserve raw outputs and independent source provenance. Record and sign the result before Task 3.
 
 ### Task 3: Reduce dialogue/string traversal
 
