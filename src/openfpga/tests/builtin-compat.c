@@ -290,13 +290,69 @@ static void testSleepBenchmark(VMContext *ctx) {
 }
 #endif
 
+#ifdef GAME_DELTARUNE
+static int grassColumns, grassRows;
+static bool recordGrassGrid(Renderer *renderer, int32_t sprite, const int32_t *images,
+                            int32_t columns, int32_t rows, float x, float y,
+                            float stepX, float stepY) {
+    (void)renderer; (void)sprite; (void)images; (void)x; (void)y; (void)stepX; (void)stepY;
+    grassColumns = columns; grassRows = rows;
+    return true;
+}
+
+static void testNativeComparisonTolerance(VMContext *ctx) {
+    Runner *r = ctx->runner;
+    GMLReal oldEpsilon = r->mathEpsilon;
+    int32_t oldPortWidth = r->views[0].portWidth;
+    RValue epsilon = RValue_makeReal(0.125);
+    call(ctx, "math_set_epsilon", &epsilon, 1);
+    VMNativeScript view = NULL;
+    VMNativeCode grass = NULL;
+    for (size_t i = 0; i < ofGame.nativeScriptCount; i++)
+        if (!strcmp(ofGame.nativeScripts[i].name, "gml_Script___view_get"))
+            view = ofGame.nativeScripts[i].native;
+    for (size_t i = 0; i < ofGame.nativeCount; i++)
+        if (!strcmp(ofGame.natives[i].name, "gml_Object_obj_purplegrass_Draw_0"))
+            grass = ofGame.natives[i].native;
+    assert(view && grass);
+    r->views[0].portWidth = 317;
+    RValue args[] = {RValue_makeReal(12.875), RValue_makeInt32(0)};
+    RValue result = RValue_makeUndefined();
+    assert(view(ctx, args, 2, &result));
+    assert(RValue_toInt32(result) == 317);
+    RValue_free(&result);
+
+    RendererVtable vtable = {0}; vtable.drawSpriteGrid = recordGrassGrid;
+    Renderer renderer = {0}; renderer.vtable = &vtable;
+    Instance *self = Instance_create(100001, 0, 0, 0);
+    Instance_setSelfVar(self, VM_getOrAllocateVarID(ctx, "index"), RValue_makeReal(0));
+    Instance_setSelfVar(self, VM_getOrAllocateVarID(ctx, "length"), RValue_makeReal(1.125));
+    Instance_setSelfVar(self, VM_getOrAllocateVarID(ctx, "height"), RValue_makeReal(1.125));
+    Renderer *oldRenderer = r->renderer; Instance *oldInstance = ctx->currentInstance;
+    r->renderer = &renderer; ctx->currentInstance = self;
+    assert(grass(ctx));
+    assert(grassColumns == 1 && grassRows == 1);
+    epsilon = RValue_makeReal(GML_MATH_EPSILON);
+    call(ctx, "math_set_epsilon", &epsilon, 1);
+    assert(!view(ctx, args, 2, &result)); /* Let bytecode handle a nonmatching property. */
+    assert(grass(ctx));
+    assert(grassColumns == 2 && grassRows == 2);
+    r->renderer = oldRenderer; ctx->currentInstance = oldInstance;
+    Instance_free(self); r->mathEpsilon = oldEpsilon;
+    r->views[0].portWidth = oldPortWidth;
+    puts("PASS: native Deltarune comparisons follow the VM's current tolerance");
+}
+#endif
+
 int main(int argc, char **argv) {
     DataWin data = {0}; Runner runner = {0}; VMContext ctx = {0};
     data.gen8.wadVersion = 16;
     runner.dataWin = &data;
+    runner.mathEpsilon = GML_MATH_EPSILON;
     ctx.dataWin = &data; ctx.runner = &runner;
     VMBuiltins_registerAll(&ctx);
 #ifdef GAME_DELTARUNE
+    if (argc == 1 || !strcmp(argv[1], "epsilon")) testNativeComparisonTolerance(&ctx);
     if (argc == 1 || !strcmp(argv[1], "sleep")) testSleepBenchmark(&ctx);
 #endif
     if (argc == 1 || !strcmp(argv[1], "sprite")) testDynamicSpriteName(&ctx);
