@@ -51,3 +51,29 @@ No original game pixels or extracted game assets are checked in. There is no
 physical Pocket or native timing claim from these desktop checks. Packaging uses
 the existing verified paired runtime, retaining Memories, sleep and save-slot
 flush behavior; new OS or FPGA sources are outside this change.
+
+## Native update
+
+Both Pocket programs build from signed source revision
+`0b07bc46160ca12a4737bf48be9ecf0b05f6043f` with the paired GCC 13.2 image
+`sha256:1a19d2cf8ec69ca00835cebcffd224492a28fa59efa65ecc977b3e1c724b1d19`.
+Snapshot entry points, executeLoop at 0x4000 and fsync syscall 82 are verified.
+The paired runtime remains pinned to `902a8adc`; all 1,126 staged SDK files and
+both original data.win files match their recorded hashes.
+
+| Game ELF | SHA-256 |
+| --- | --- |
+| Undertale | `7bc86d133083cf87e65252f6c3a4d56b4d37905b7a9900977d2c4c9980a1cf2f` |
+| Deltarune | `06382ed7a4546da944d9d10b4281c2b20aa40e2d5b95f8de34c2ec047e2e8a2a` |
+
+The local update is
+`out/pocket-hud-hinted-0b07bc4-20261017/butterscotch-hud-hinted-0b07bc4-20261017-update.zip`
+(5,810,713 bytes), SHA-256
+`31c5b0b30b0cef7416649be22126409a8c63b3c24e902ff2bc2a79f44776c841`.
+ZIP CRC and every member's full bytes are verified. Of its 23 members, only the
+two game executables differ from the prior sequential-optimization update;
+all 21 runtime/configuration members match exactly. Memories, sleep and the
+Sleep Test instance remain enabled. No assets or saves are included.
+This report's delivery addition is documentation only; the build source identity
+above remains exact. Physical Pocket testing is outstanding. No image imports,
+VM changes, project deletions, push or SD writes occurred.
