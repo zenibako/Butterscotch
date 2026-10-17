@@ -127,6 +127,15 @@ On macOS run with `ASAN_OPTIONS=detect_leaks=0` and, when needed,
 `PC_OBJ_DIR` and `PC_BIN` paths when changing configurations; header checksum
 invalidation applies to those selected directories.
 
+The string-read fixture is `./<game>_pc_string_reads_fixture`. It checks UTF-8,
+malformed byte groups, embedded NULs, index boundaries, non-string conversions
+and owned results through the real builtin registry. A scalar oracle covers
+short byte sequences; fixture-only `strlen` accounting verifies that
+`string_char_at` no longer traverses the whole input to determine its length.
+`--behavior-only` skips allocation/work assertions when comparing an older
+implementation. Run both games with separate object directories and the
+sanitizer flags above.
+
 The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
 ordinary updates, stale/partial membership recovery and grid replacement; use
 a fresh `PC_OBJ_DIR` for each game or changed build flags.

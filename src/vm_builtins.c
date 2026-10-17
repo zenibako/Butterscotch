@@ -2792,20 +2792,25 @@ static RValue builtin_string_char_at(MAYBE_UNUSED VMContext* ctx, RValue* args, 
     BuiltinStringInput input = builtinStringInput(args[0], ctx->runner->dataWin);
     const char* str = input.text;
     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
-    int32_t strLen = (int32_t) strlen(str);
-    if (pos >= strLen) {
-        free(input.owned);
-        return RValue_makeOwnedString(safeStrdup(""));
-    }
     if (pos < 0) pos = 0;
-    int32_t byteStart = TextUtils_utf8AdvanceCodepoints(str, strLen, pos);
-    if (byteStart >= strLen) {
+    // Match utf8AdvanceCodepoints, including malformed continuation groups,
+    // without scanning the suffix to find the whole string's length first.
+    int32_t byteStart = 0;
+    while (str[byteStart] != '\0' && pos > 0) {
+        do { byteStart++; }
+        while (((uint8_t) str[byteStart] & 0xC0) == 0x80);
+        pos--;
+    }
+    if (str[byteStart] == '\0') {
         free(input.owned);
         return RValue_makeOwnedString(safeStrdup(""));
     }
-    int32_t byteNext = byteStart;
-    TextUtils_decodeUtf8(str, strLen, &byteNext);
-    int32_t nbytes = byteNext - byteStart;
+    // The unchanged decoder needs at most four bytes. Stop at NUL so a
+    // truncated sequence at the end keeps its original one-byte result.
+    int32_t available = 1;
+    while (available < 4 && str[byteStart + available] != '\0') available++;
+    int32_t nbytes = 0;
+    TextUtils_decodeUtf8(str + byteStart, available, &nbytes);
     char* out = (char *)safeMalloc(nbytes + 1);
     memcpy(out, str + byteStart, (size_t) nbytes);
     out[nbytes] = '\0';
