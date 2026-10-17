@@ -21,9 +21,9 @@
 #define DELTARUNE_GRASS_MAX_CELLS 4096
 
 /* a < b as the VM's Cmp does it. */
-static bool lessThan(GMLReal a, GMLReal b) {
+static bool lessThan(GMLReal a, GMLReal b, GMLReal epsilon) {
     GMLReal diff = a - b;
-    return GMLReal_fabs(diff) > GML_MATH_EPSILON && diff < 0;
+    return GMLReal_fabs(diff) > epsilon && diff < 0;
 }
 
 static bool isNumber(RValue value) {
@@ -61,13 +61,14 @@ static bool purpleGrassDraw(VMContext *ctx) {
     GMLReal length = RValue_toReal(lengthValue), height = RValue_toReal(heightValue);
     GMLReal x = (GMLReal) self->x, y = (GMLReal) self->y;
     int32_t sprite = self->spriteIndex;
+    GMLReal epsilon = runner->mathEpsilon;
 
     /* The loops' counters come out the same however many cells are drawn. */
     GMLReal i = 0, j = 0;
     int32_t cols = 0, rows = 0;
-    for (; lessThan(i, length); i = i + 1) cols++;
+    for (; lessThan(i, length, epsilon); i = i + 1) cols++;
     bool innerRan = cols > 0;
-    if (innerRan) for (; lessThan(j, height); j = j + 1) rows++;
+    if (innerRan) for (; lessThan(j, height, epsilon); j = j + 1) rows++;
 
     /* The image of each cell, in the order the script draws them; then the
      * whole grid in one call if the renderer takes it, else cell by cell. */
@@ -128,9 +129,10 @@ static bool viewGet(VMContext *ctx, RValue *args, int32_t argCount, RValue *resu
 
     /* Cmp EQ against 0, 1, 2, ... in turn, as the bytecode does it. */
     GMLReal prop = RValue_toReal(args[0]);
+    GMLReal epsilon = ctx->runner ? ctx->runner->mathEpsilon : GML_MATH_EPSILON;
     int which = -1;
     for (int k = 0; k < 17 && which < 0; k++) {
-        if (GMLReal_fabs(prop - (GMLReal) k) <= GML_MATH_EPSILON) which = k;
+        if (GMLReal_fabs(prop - (GMLReal) k) <= epsilon) which = k;
     }
     if (which < 0) return false;
 

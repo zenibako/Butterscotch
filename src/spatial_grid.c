@@ -5,6 +5,65 @@
 #include "runner.h"
 #include "utils.h"
 
+/* Never reuse an identity, including across resets and snapshot preparation.
+ * Exhaustion permanently disables trusted updates for newly created grids. */
+static uint32_t nextGridGenerationLow = 1;
+static uint32_t nextGridGenerationHigh;
+static void assignGridGeneration(SpatialGrid* grid) {
+    grid->generationLow = nextGridGenerationLow;
+    grid->generationHigh = nextGridGenerationHigh;
+    if (nextGridGenerationLow || nextGridGenerationHigh) {
+        ++nextGridGenerationLow;
+        if (!nextGridGenerationLow) ++nextGridGenerationHigh;
+    }
+}
+
+static void rememberGridMembership(SpatialGrid* grid, Instance* instance) {
+    instance->collisionGridGenerationLow = grid->generationLow;
+    instance->collisionGridGenerationHigh = grid->generationHigh;
+    instance->collisionCellCount = (uint32_t)arrlen(instance->collisionCells);
+    instance->collisionCellsTrusted = (grid->generationLow || grid->generationHigh) ? 1 : 0;
+}
+
+/* Only ordinary sync uses this proof. Insertion below is the sole writer of
+ * grid membership and appends its matching coordinate at the same time.
+ * Lifecycle/cache clears invalidate trust; public removal still scans all cells.
+ * Detectable tracking/content mismatches use full recovery. An untracked
+ * insertion with otherwise correct tracking is outside this paired-writer proof. */
+static bool removeTrackedForSync(SpatialGrid* grid, Instance* instance) {
+    bool trusted = instance->collisionCellsTrusted &&
+        (grid->generationLow || grid->generationHigh) &&
+        instance->collisionGridGenerationLow == grid->generationLow &&
+        instance->collisionGridGenerationHigh == grid->generationHigh &&
+        (size_t)arrlen(instance->collisionCells) == (size_t)instance->collisionCellCount;
+    instance->collisionCellsTrusted = 0;
+    if (!trusted) return false;
+
+    repeat(arrlen(instance->collisionCells), i) {
+        uint32_t coordinates = instance->collisionCells[i];
+        int32_t x = SpatialGrid_unpackGridX(coordinates);
+        int32_t y = SpatialGrid_unpackGridY(coordinates);
+        if (x >= grid->gridWidth || y >= grid->gridHeight) return false;
+        Instance** cell = grid->grid[SpatialGrid_cellIndex(grid, x, y)];
+        int32_t length = (int32_t)arrlen(cell);
+        int32_t removed = 0;
+        for (int32_t j = 0; j < length;) {
+            if (cell[j] == instance) {
+                if (j < length - 1) memmove(&cell[j], &cell[j + 1], (size_t)(length - 1 - j) * sizeof(Instance*));
+                arrsetlen(cell, length - 1);
+                --length;
+                ++removed;
+            } else {
+                ++j;
+            }
+        }
+        if (removed != 1) return false;
+    }
+    arrsetlen(instance->collisionCells, 0);
+    instance->spatialGridDirty = false;
+    return true;
+}
+
 /* Grid dimensions are int16_t; legacy C++ headers may omit INT16_MAX. */
 enum { SPATIAL_GRID_COORDINATE_MAX = 32767 };
 
@@ -25,6 +84,7 @@ SpatialGrid* SpatialGrid_tryCreate(uint32_t roomWidth, uint32_t roomHeight) {
     grid->gridHeight = (int16_t)height;
     grid->grid = (Instance ***)calloc((size_t)width * height, sizeof(Instance **));
     if (!grid->grid) { free(grid); return NULL; }
+    assignGridGeneration(grid);
     return grid;
 }
 
@@ -42,6 +102,7 @@ SpatialGrid* SpatialGrid_create(uint32_t roomWidth, uint32_t roomHeight) {
     grid->gridHeight = gridHeight;
 
     grid->grid = (Instance ***)safeCalloc(gridWidth * gridHeight, sizeof(Instance**));
+    assignGridGeneration(grid);
 
     return grid;
 }
@@ -57,6 +118,7 @@ void SpatialGrid_free(SpatialGrid* grid) {
 }
 
 void SpatialGrid_removeInstance(SpatialGrid* grid, Instance* instance) {
+    instance->collisionCellsTrusted = 0;
     int32_t totalCells = (int32_t)grid->gridWidth * (int32_t)grid->gridHeight;
     bool removedAny = false;
 
@@ -125,15 +187,18 @@ void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid) {
 
         instance->spatialGridDirty = false;
 
-        // Remove from old cells
-        SpatialGrid_removeInstance(grid, instance);
+        // Remove from old cells, retaining full recovery when proof is absent.
+        if (!removeTrackedForSync(grid, instance))
+            SpatialGrid_removeInstance(grid, instance);
 
         InstanceBBox bbox = Collision_computeBBox(runner, instance);
 
         arrsetlen(instance->collisionCells, 0);
 
-        if (!bbox.valid)
+        if (!bbox.valid) {
+            rememberGridMembership(grid, instance);
             continue;
+        }
 
         SpatialGridRange range = SpatialGrid_computeCellRange(grid, bbox.left, bbox.top, bbox.right, bbox.bottom);
 
@@ -144,7 +209,7 @@ void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid) {
             }
         }
 
-        // And that's it for now!
+        rememberGridMembership(grid, instance);
     }
 
     arrsetlen(grid->dirtyInstances, 0);

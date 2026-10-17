@@ -15998,6 +15998,7 @@ static RValue builtin_layer_create(VMContext* ctx, RValue* args, int32_t argCoun
     runtimeLayer.beginScript = -1;
     runtimeLayer.endScript = -1;
     runtimeLayer.shaderIndex = -1;
+    Runner_invalidateLayerElementLookup(runner);
     arrput(runner->runtimeLayers, runtimeLayer);
     runner->drawableListStructureDirty = true;
     return RValue_makeReal((GMLReal) id);
@@ -16022,6 +16023,7 @@ static RValue builtin_layer_destroy(VMContext* ctx, RValue* args, MAYBE_UNUSED i
             Runner_destroyInstance(runner, inst, true);
         }
 
+        Runner_invalidateLayerElementLookup(runner);
         Runner_freeRuntimeLayer(&runner->runtimeLayers[i]);
         arrdel(runner->runtimeLayers, i);
 
@@ -16087,6 +16089,7 @@ static RValue builtin_layer_background_create(VMContext* ctx, RValue* args, MAYB
     el.alpha = 1.0f;
     el.blend = 0xFFFFFFu;
     el.backgroundElement = bg;
+    Runner_invalidateLayerElementLookup(runner);
     arrput(runtimeLayer->elements, el);
     return RValue_makeReal((GMLReal) el.id);
 }
@@ -16376,6 +16379,7 @@ static RValue builtin_layer_tile_create(VMContext* ctx, RValue* args, MAYBE_UNUS
     el.blend = 0xFFFFFFu;
     el.tileElement = tile;
     el.tileElementOwned = true;
+    Runner_invalidateLayerElementLookup(runner);
     arrput(runtimeLayer->elements, el);
     return RValue_makeReal((GMLReal) el.id);
 }
@@ -16395,6 +16399,7 @@ static RValue builtin_layer_tile_destroy(VMContext* ctx, RValue* args, MAYBE_UNU
     size_t count = arrlenu(owningLayer->elements);
     repeat(count, i) {
         if (&owningLayer->elements[i] == el) {
+            Runner_invalidateLayerElementLookup(runner);
             arrdel(owningLayer->elements, i);
             break;
         }
@@ -16530,6 +16535,7 @@ static RValue builtin_layer_element_move(VMContext* ctx, RValue* args, MAYBE_UNU
     RuntimeLayer* oldRl = nullptr;
     RuntimeLayerElement* el = Runner_findLayerElementById(runner, elementId, &oldRl);
 
+    Runner_invalidateLayerElementLookup(runner);
     arrput(rl->elements, *el);
 
     size_t count = arrlenu(oldRl->elements);
@@ -16592,6 +16598,7 @@ static RValue builtin_layer_sprite_create(VMContext* ctx, RValue* args, MAYBE_UN
     el.alpha = 1.0f;
     el.blend = 0xFFFFFFu;
     el.spriteElement = spr;
+    Runner_invalidateLayerElementLookup(runner);
     arrput(runtimeLayer->elements, el);
     return RValue_makeReal((GMLReal) el.id);
 }
@@ -16844,6 +16851,7 @@ static RValue builtin_layer_sprite_destroy(VMContext* ctx, RValue* args, MAYBE_U
     size_t count = arrlenu(owningLayer->elements);
     repeat(count, i) {
         if (&owningLayer->elements[i] == el) {
+            Runner_invalidateLayerElementLookup(runner);
             arrdel(owningLayer->elements, i);
             break;
         }
@@ -16870,6 +16878,7 @@ static RValue builtin_layer_background_destroy(VMContext* ctx, RValue* args, MAY
     size_t count = arrlenu(owningLayer->elements);
     repeat(count, i) {
         if (&owningLayer->elements[i] == el) {
+            Runner_invalidateLayerElementLookup(runner);
             arrdel(owningLayer->elements, i);
             break;
         }

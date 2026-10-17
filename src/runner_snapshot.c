@@ -18,7 +18,9 @@
 
 /* This is a same-build, WAD16/17 wire format. Never write live pointers. */
 #define SNAP_MAGIC 0x31504e53u /* SNP1 */
-#define SNAP_VERSION 8u
+#define SNAP_VERSION 9u
+#define SNAP_EPSILON_VERSION 9u
+#define SNAP_TILEMAP_VERSION 8u
 #define SNAP_GMS2_VERSION 7u
 #define SNAP_SAVED_ROOM_VERSION 6u
 #define SNAP_STRING_REF_VERSION 5u
@@ -109,6 +111,7 @@ static void setInstancePlain(Instance *inst, const InstancePlain *p) {
     memcpy((uint8_t *)inst + I_C, p->b, sizeof(p->b));
     memcpy((uint8_t *)inst + I_E, p->c, sizeof(p->c));
     inst->spatialGridDirty = false;
+    inst->collisionCellsTrusted = 0;
     inst->lastCollisionQueryId = 0;
 }
 
@@ -227,6 +230,7 @@ typedef struct { uint32_t room, layer, count; uint32_t *cells; } SnapshotTilemap
 struct RunnerSnapshot {
     bool applied;
     RunnerPlain plain;
+    GMLReal mathEpsilon;
     Room *room;
     Instance *global;
     Instance **instances;
@@ -938,6 +942,8 @@ bool Runner_snapshotCapture(Runner *r, uint64_t gameId, uint8_t **data,
     put32(&w, SNAP_MAGIC); put32(&w, SNAP_VERSION); put64(&w, gameId);
     put32(&w, 0); put32(&w, 0); /* length and checksum filled below */
     RunnerPlain plain = makePlain(r); put(&w, &plain, sizeof(plain));
+    /* Keep RunnerPlain unchanged so revisions 3-8 retain their POD layout. */
+    put(&w, &r->mathEpsilon, sizeof(r->mathEpsilon));
     put32(&w, r->dataWin->room.count);
     for (uint32_t i = 0; i < r->dataWin->room.count; i++) {
         uint8_t initialized = r->savedRoomStates && r->savedRoomStates[i].initialized;
@@ -1495,7 +1501,8 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     uint32_t bodyLen = get32(&hdr), crc = get32(&hdr);
     uint32_t rawLen = get32(&hdr), rawCrc = get32(&hdr);
     if (!hdr.ok || magic != SNAP_MAGIC ||
-        (version != SNAP_VERSION && version != SNAP_GMS2_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
+        (version != SNAP_VERSION && version != SNAP_TILEMAP_VERSION &&
+         version != SNAP_GMS2_VERSION && version != SNAP_SAVED_ROOM_VERSION &&
          version != SNAP_STRING_REF_VERSION &&
          version != SNAP_ZSTD_LEGACY_VERSION && version != SNAP_LEGACY_VERSION) ||
         id != gameId ||
@@ -1548,6 +1555,10 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
     Room *shadowRooms = NULL;
     const char *failure = NULL;
     get(&rd, &s->plain, sizeof(s->plain));
+    s->mathEpsilon = GML_MATH_EPSILON;
+    if (version >= SNAP_EPSILON_VERSION)
+        get(&rd, &s->mathEpsilon, sizeof(s->mathEpsilon));
+    if (!(s->mathEpsilon >= 0 && s->mathEpsilon < 1)) goto bad;
     if (!rd.ok || s->plain.roomIndex < 0 ||
         (uint32_t)s->plain.roomIndex >= r->dataWin->room.count ||
         s->plain.pendingRoom != -1) goto bad;
@@ -1902,7 +1913,7 @@ RunnerSnapshot *Runner_snapshotPrepare(Runner *r, uint64_t gameId,
             get(&rd, t.tiles, (size_t)count * sizeof(RoomTile));
             arrput(s->legacyTiles, t);
         }
-        if (version >= SNAP_VERSION) {
+        if (version >= SNAP_TILEMAP_VERSION) {
             uint32_t tilemapCount = get32(&rd);
             if (!rd.ok || !countOK(tilemapCount)) goto bad;
             uint32_t previousRoom = 0, previousLayer = 0;
@@ -2196,6 +2207,7 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
     }
     if (s->hasLayers) {
         s->oldLayers = r->runtimeLayers;
+        Runner_invalidateLayerElementLookup(r);
         r->runtimeLayers = s->layers;
         for (ptrdiff_t i = 0; i < arrlen(s->legacyTiles); i++) {
             SnapshotLegacyTiles *t = &s->legacyTiles[i];
@@ -2232,6 +2244,7 @@ void Runner_snapshotApply(Runner *r, RunnerSnapshot *s) {
         st->initialized = s->roomInitialized[i];
     }
     applyPlain(r, &s->plain);
+    r->mathEpsilon = s->mathEpsilon;
     /* Capture refuses paused runners, so every supported snapshot resumes.
      * The caller restores audio after this core commit. */
     r->paused = false;
