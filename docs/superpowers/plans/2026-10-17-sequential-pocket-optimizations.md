@@ -76,9 +76,9 @@ RV32 GCC, staged openfpgaSDK, independent os25 replay.
 
 **Files:** Complete dated topic reports and a combined result index; no runtime/SDK edits.
 
-- [ ] Independently review the complete retained diff, resolving actionable findings.
-- [ ] Run affected aggregate fixtures and the snapshot suite once on the final tree; build Undertale and Deltarune native ELFs with the paired compiler/SDK.
-- [ ] Verify clean signed commits, unchanged runtime/asset hashes, no user changes lost, and retained exact evidence. Report completed, rejected and unmeasured scope without claiming Pocket speedups.
+- [x] Independently review the complete retained diff, resolving actionable findings.
+- [x] Run affected aggregate fixtures and the snapshot suite once on the final tree; build Undertale and Deltarune native ELFs with the paired compiler/SDK.
+- [x] Verify clean signed commits, unchanged runtime/asset hashes, no user changes lost, and retained exact evidence. Report completed, rejected and unmeasured scope without claiming Pocket speedups.
 
 ## Shared-file preflight
 
