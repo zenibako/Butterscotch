@@ -99,6 +99,7 @@ make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
 make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
 make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
+make tile-shift-fixture GAME=deltarune # compares the guarded native with supplied real bytecode
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -138,6 +139,13 @@ The VM call fixture is `./<game>_pc_vm_call_args_fixture`. It exercises actual
 CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value
 ownership and nested script/event execution without game assets. Run it once
 for each game with a separate object directory.
+
+The tile-shift fixture is `./deltarune_pc_tile_shift_fixture`. Pass the path to
+your own Chapter 1 `data.win` as its argument. It compares the interpreted
+script and the guarded native, including ordered builtin calls, coordinates,
+caller state and fallback controls; no game bytecode is included in the test.
+Its interpreter-work bound is fixture-only instrumentation. The Undertale
+configuration checks that the Deltarune-only script is not installed there.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
