@@ -66,11 +66,11 @@ RV32 GCC, staged openfpgaSDK, independent os25 replay.
 
 **Interfaces:** Consume Task 3's retained revision; retain existing uncompressed/packed asset compatibility and original files. New packed representation, if justified, is opt-in and verified against exact original decoded bytes.
 
-- [ ] Measure actual startup/read/decode byte counts and redundant reads; estimate cold-read benefit separately from decode cost and peak memory.
-- [ ] Record the smallest supported design. Prefer a local redundant-read/decode removal; assess compression with RV32 cycles if packing is necessary. Do not claim host-only compression ratios prove a win.
-- [ ] Add exact-byte and malformed/truncated input tests and a failing bound for the selected waste before production edits. If no candidate meets storage/CPU/memory constraints, preserve measurements and commit a rejection report.
-- [ ] Implement and verify lossless output, existing format fallback, failure cleanup, startup/room behavior and unchanged original assets. Review before any optional pack generation.
-- [ ] Run relevant loader/texture/snapshot regressions and both native builds for any retained shared change. Record the lack of physical SD latency evidence and sign the result.
+- [x] Measure actual startup/read/decode byte counts and redundant reads; estimate cold-read benefit separately from decode cost and peak memory.
+- [x] Record the smallest supported design. Prefer a local redundant-read/decode removal; assess compression with RV32 cycles if packing is necessary. Do not claim host-only compression ratios prove a win.
+- [x] Add exact-byte and malformed/truncated input tests and a failing bound for the selected waste before production edits. If no candidate meets storage/CPU/memory constraints, preserve measurements and commit a rejection report.
+- [x] Implement and verify lossless output, existing format fallback, failure cleanup, startup/room behavior and unchanged original assets. Review before any optional pack generation.
+- [x] Run relevant loader/texture/snapshot regressions and both native builds for any retained shared change. Record the lack of physical SD latency evidence and sign the result.
 
 ### Task 5: Final verification and review
 
