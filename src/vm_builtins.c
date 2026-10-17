@@ -1908,6 +1908,20 @@ static RValue builtin_show_debug_message(MAYBE_UNUSED VMContext* ctx, RValue* ar
     return RValue_makeUndefined();
 }
 
+static RValue builtin_show_error(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("show_error", 1, RValue_makeUndefined());
+    char* str = RValue_toDebugMessageString(args[0], ctx->runner->dataWin);
+    bool abort = true; // Supposed to be taken from an argument but it's not
+    logError("[%s] %s\n", ctx->currentCodeName, str);
+    free(str);
+
+    if (abort) {
+        exit(EXIT_FAILURE);
+    }
+
+    return RValue_makeUndefined();
+}
+
 static RValue builtin_string_length(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("string_length", 1, RValue_makeInt32(0));
     // GML converts non-string arguments to string before measuring length
@@ -2025,11 +2039,12 @@ static RValue builtin_string(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t 
 // - When both values are numbers (any GML numeric type; they are all plain JS numbers there),
 //   they match when |a - b| <= GML_MATH_EPSILON.
 // - Otherwise values must be equal by content (strings) or identity (the rest).
-static bool rValuesLooselyEqual(RValue a, RValue b) {
+static bool rValuesLooselyEqual(VMContext* ctx, RValue a, RValue b) {
     bool aNumeric = a.type == RVALUE_REAL || a.type == RVALUE_INT32 || a.type == RVALUE_INT64 || a.type == RVALUE_BOOL || a.type == RVALUE_ASSETREF;
     bool bNumeric = b.type == RVALUE_REAL || b.type == RVALUE_INT32 || b.type == RVALUE_INT64 || b.type == RVALUE_BOOL || b.type == RVALUE_ASSETREF;
+    GMLReal epsilon = (ctx != nullptr && ctx->runner != nullptr) ? ctx->runner->mathEpsilon : GML_MATH_EPSILON;
     if (aNumeric && bNumeric) {
-        return GML_MATH_EPSILON >= GMLReal_fabs(RValue_toReal(a) - RValue_toReal(b));
+        return epsilon >= GMLReal_fabs(RValue_toReal(a) - RValue_toReal(b));
     }
     switch (a.type) {
         case RVALUE_STRING:
@@ -2088,7 +2103,7 @@ static RValue builtin_array_contains(VMContext* ctx, RValue* args, int32_t argCo
     int32_t offset, loops, step;
     computeArrayIterationValues(maxLength, rawOffset, rawLength, &offset, &loops, &step);
     while (loops > 0) {
-        if (offset >= 0 && offset < maxLength && rValuesLooselyEqual(GMLArray_get(args[0].array, offset), args[1]))
+        if (offset >= 0 && offset < maxLength && rValuesLooselyEqual(ctx, GMLArray_get(args[0].array, offset), args[1]))
             return RValue_makeBool(true);
         offset += step;
         loops--;
@@ -2215,6 +2230,23 @@ static RValue builtin_sign(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t ar
     GMLReal val = RValue_toReal(args[0]);
     GMLReal result = (val > 0.0) ? 1.0 : ((0.0 > val) ? -1.0 : 0.0);
     return RValue_makeReal(result);
+}
+
+static RValue builtin_math_set_epsilon(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("math_set_epsilon", 1, RValue_makeUndefined());
+    GMLReal v = RValue_toReal(args[0]);
+    if ((v >= 0.0) && (v < 1.0)) {
+        if (v == 0.0) v = 1e-11;
+        if (ctx != nullptr && ctx->runner != nullptr) {
+            ctx->runner->mathEpsilon = v;
+        }
+    }
+    return RValue_makeUndefined();
+}
+
+static RValue builtin_math_get_epsilon(MAYBE_UNUSED VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
+    GMLReal epsilon = (ctx != nullptr && ctx->runner != nullptr) ? ctx->runner->mathEpsilon : GML_MATH_EPSILON;
+    return RValue_makeReal(epsilon);
 }
 
 static RValue builtin_max(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
@@ -3868,6 +3900,10 @@ static RValue builtin_room_set_persistent(VMContext* ctx, RValue* args, MAYBE_UN
     return RValue_makeUndefined();
 }
 
+// Extensions
+
+STUB_RETURN_FALSE(extension_exists)
+
 // GMS2 camera compatibility - we treat view index as camera ID
 static RValue builtin_view_get_camera(VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("view_get_camera", 1, RValue_makeReal(-1));
@@ -4616,6 +4652,50 @@ static RValue builtin_struct_get_names(VMContext* ctx, RValue* args, int32_t arg
     return RValue_makeArray(array);
 }
 
+static int32_t countInstanceVariableNames(Instance* targetInstance) {
+    if (targetInstance == nullptr) return 0;
+    int32_t count = 0;
+    repeat(targetInstance->selfVars.capacity, i) {
+        if (targetInstance->selfVars.entries[i].key != INT_RVALUE_HASHMAP_EMPTY_KEY) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static RValue builtin_variable_instance_names_count(VMContext* ctx, RValue* args, int32_t argCount) {
+    REQUIRE_ARGC_AT_LEAST("variable_instance_names_count", 1, RValue_makeInt32(0));
+
+    Instance* targetInstance = nullptr;
+    if (args[0].type == RVALUE_STRUCT) {
+        targetInstance = args[0].structInst;
+    } else {
+        int32_t targetInstanceId = RValue_toInt32(args[0]);
+        if (targetInstanceId == INSTANCE_GLOBAL) {
+            targetInstance = ctx->globalScopeInstance;
+        } else if (targetInstanceId >= INSTANCE_ID_BASE) {
+            targetInstance = hmget(ctx->runner->instancesById, targetInstanceId);
+        } else {
+            int32_t snapBase = Runner_pushInstancesOfObject(ctx->runner, targetInstanceId);
+            int32_t snapEnd = (int32_t) arrlen(ctx->runner->instanceSnapshots);
+            if (snapEnd > snapBase) {
+                targetInstance = ctx->runner->instanceSnapshots[snapBase];
+            }
+            Runner_popInstanceSnapshot(ctx->runner, snapBase);
+        }
+    }
+
+    return RValue_makeInt32(countInstanceVariableNames(targetInstance));
+}
+
+static RValue builtin_variable_struct_names_count(VMContext* ctx, RValue* args, int32_t argCount) {
+    return builtin_variable_instance_names_count(ctx, args, argCount);
+}
+
+static RValue builtin_struct_names_count(VMContext* ctx, RValue* args, int32_t argCount) {
+    return builtin_variable_instance_names_count(ctx, args, argCount);
+}
+
 // ===[ METHOD ]===
 
 #if IS_WAD17_OR_HIGHER_ENABLED
@@ -5234,8 +5314,7 @@ static RValue builtin_ds_list_add(VMContext* ctx, RValue* args, int32_t argCount
 }
 
 static RValue builtin_ds_list_set(VMContext* ctx, RValue* args, int32_t argCount) {
-    REQUIRE_ARGC_AT_LEAST("ds_list_set", 1, RValue_makeUndefined());
-    REQUIRE_ARGC_AT_MOST("ds_list_set", 2, RValue_makeUndefined());
+    REQUIRE_ARGC_AT_LEAST("ds_list_set", 3, RValue_makeUndefined());
     Runner* runner = ctx->runner;
     int32_t id = RValue_toInt32(args[0]);
     int32_t pos = RValue_toInt32(args[1]);
@@ -6627,7 +6706,7 @@ static RValue builtin_ds_priority_change_priority(MAYBE_UNUSED VMContext* ctx, R
     if (pQueue == nullptr) return RValue_makeUndefined();
     for (int32_t i = 0; i < (int32_t) arrlen(pQueue->items); i++) {
         DsPriorityItem* item = &pQueue->items[i];
-        if (rValuesLooselyEqual(item->item, val)) {
+        if (rValuesLooselyEqual(ctx, item->item, val)) {
             DsPriorityItem moved = *item;
             arrdel(pQueue->items, i);
             moved.depth = prio;
@@ -6645,7 +6724,7 @@ static RValue builtin_ds_priority_find_priority(VMContext* ctx, RValue* args, MA
     RValue value = args[1];
     for (int32_t i = 0; i < (int32_t) arrlen(pQueue->items); i++) {
         DsPriorityItem* item = &pQueue->items[i];
-        if (rValuesLooselyEqual(item->item, value)) {
+        if (rValuesLooselyEqual(ctx, item->item, value)) {
             return RValue_makeReal(item->depth);
         }
     }
@@ -6659,7 +6738,7 @@ static RValue builtin_ds_priority_delete_value(VMContext* ctx, RValue* args, MAY
     RValue value = args[1];
     for (int32_t i = 0; i < (int32_t) arrlen(pQueue->items); i++) {
         DsPriorityItem* item = &pQueue->items[i];
-        if (rValuesLooselyEqual(item->item, value)) {
+        if (rValuesLooselyEqual(ctx, item->item, value)) {
             arrdel(pQueue->items, i);
             return RValue_makeUndefined();
         }
@@ -7221,7 +7300,7 @@ static RValue builtin_array_sort(MAYBE_UNUSED VMContext* ctx, RValue* args, int3
     return RValue_makeUndefined();
 }
 
-static bool arrayElementsEqual(RValue* a, RValue* b) {
+static bool arrayElementsEqual(VMContext* ctx, RValue* a, RValue* b) {
     if (a->type != b->type) return false;
     if (a->type == RVALUE_ARRAY) {
         GMLArray* arrA = a->array;
@@ -7231,12 +7310,12 @@ static bool arrayElementsEqual(RValue* a, RValue* b) {
         int32_t lenB = GMLArray_length1D(arrB);
         if (lenA != lenB) return false;
         for (int32_t i = 0; i < lenA; i++) {
-            if (!arrayElementsEqual(GMLArray_slot(arrA, i), GMLArray_slot(arrB, i)))
+            if (!arrayElementsEqual(ctx, GMLArray_slot(arrA, i), GMLArray_slot(arrB, i)))
                 return false;
         }
         return true;
     }
-    return rValuesLooselyEqual(*a, *b);
+    return rValuesLooselyEqual(ctx, *a, *b);
 }
 
 static RValue builtin_array_equals(VMContext* ctx, RValue* args, int32_t argCount) {
@@ -7251,7 +7330,7 @@ static RValue builtin_array_equals(VMContext* ctx, RValue* args, int32_t argCoun
     for (int32_t i = 0; i < len1; i++) {
         RValue* slotA = GMLArray_slot(arr1, i);
         RValue* slotB = GMLArray_slot(arr2, i);
-        if (!arrayElementsEqual(slotA, slotB)) return RValue_makeBool(false);
+        if (!arrayElementsEqual(ctx, slotA, slotB)) return RValue_makeBool(false);
     }
     return RValue_makeBool(true);
 }
@@ -23328,6 +23407,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
 
     // Core output
     VM_registerBuiltin(ctx, "show_debug_message", builtin_show_debug_message);
+    VM_registerBuiltin(ctx, "show_error", builtin_show_error);
 
     // String functions
     VM_registerBuiltin(ctx, "string_length", builtin_string_length);
@@ -23387,6 +23467,8 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "abs", builtin_abs);
     VM_registerBuiltin(ctx, "frac", builtin_frac);
     VM_registerBuiltin(ctx, "sign", builtin_sign);
+    VM_registerBuiltin(ctx, "math_set_epsilon", builtin_math_set_epsilon);
+    VM_registerBuiltin(ctx, "math_get_epsilon", builtin_math_get_epsilon);
     VM_registerBuiltin(ctx, "max", builtin_max);
     VM_registerBuiltin(ctx, "max3", builtin_max3);
     VM_registerBuiltin(ctx, "min", builtin_min);
@@ -23479,6 +23561,9 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "room_previous", builtin_room_previous);
     VM_registerBuiltin(ctx, "room_set_persistent", builtin_room_set_persistent);
 
+    // Extension
+    VM_registerBuiltin(ctx, "extension_exists", builtin_extension_exists);
+
     // GMS2 camera compatibility
     VM_registerBuiltin(ctx, "view_get_camera", builtin_view_get_camera);
     VM_registerBuiltin(ctx, "view_get_visible", builtin_view_get_visible);
@@ -23537,8 +23622,11 @@ void VMBuiltins_registerAll(VMContext* ctx) {
     VM_registerBuiltin(ctx, "struct_exists_from_hash", builtin_struct_exists_from_hash);
     VM_registerBuiltin(ctx, "struct_exists", builtin_struct_exists);
     VM_registerBuiltin(ctx, "struct_get_names", builtin_struct_get_names);
+    VM_registerBuiltin(ctx, "struct_names_count", builtin_struct_names_count);
     VM_registerBuiltin(ctx, "variable_instance_get_names", builtin_struct_get_names); // I couldn't find any noticeable different behavior when testing this
+    VM_registerBuiltin(ctx, "variable_instance_names_count", builtin_variable_instance_names_count);
     VM_registerBuiltin(ctx, "variable_struct_get_names", builtin_struct_get_names); // Deprecated variant of struct_get_names (https://github.com/YoYoGames/GameMaker-Bugs/issues/6105)
+    VM_registerBuiltin(ctx, "variable_struct_names_count", builtin_variable_struct_names_count); // Deprecated variant of struct_names_count
 
     // Script
     VM_registerBuiltin(ctx, "script_execute", builtin_script_execute);
