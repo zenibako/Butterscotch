@@ -1,6 +1,7 @@
 /* Asset-free checks through the real registry. Count strdup only in this
  * translation unit's builtin implementation, including its inline helpers. */
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 static unsigned inputCopies;
@@ -12,11 +13,21 @@ static char *countedStrdup(const char *text) {
     ++inputCopies;
     return copy;
 }
+/* Count actual whole-string traversals made by the builtin translation unit.
+ * Conversion/allocation checks below remain independent of this work bound. */
+static size_t lengthScanBytes;
+static size_t countedStrlen(const char *text) {
+    size_t bytes = strlen(text);
+    lengthScanBytes += bytes;
+    return bytes;
+}
+#define strlen countedStrlen
 #define strdup countedStrdup
 #include "../../vm_builtins.c"
 #undef strdup
+#undef strlen
 
-static unsigned checked, allocationFailures;
+static unsigned checked, allocationFailures, workFailures;
 static bool behaviorOnly;
 
 static RValue call(VMContext *ctx, const char *name, RValue *args, int count,
@@ -24,6 +35,7 @@ static RValue call(VMContext *ctx, const char *name, RValue *args, int count,
     BuiltinFunc builtin = VM_findBuiltin(ctx, name);
     assert(builtin != NULL);
     inputCopies = 0;
+    lengthScanBytes = 0;
     RValue result = builtin(ctx, args, count);
     if (!behaviorOnly && inputCopies != expectedCopies) {
         fprintf(stderr, "%s: expected %u strdup calls, got %u\n",
@@ -91,6 +103,12 @@ static const StringCase stringCases[] = {
     {"\xc0\xafQ", 1, 1, "\xc0\xaf", 47, "\xc0\xaf"},
     {"\xed\xa0\x80Q", 1, 1, "\xed\xa0\x80", 55296, "\xed\xa0\x80"},
     {"\xffQ", 1, 1, "\xff", 65533, "\xff"},
+    {"A", INT_MAX, 1, "", -1, ""},
+    {"\xf0\x9f\x98", 1, 1, "\xf0", 65533, "\xf0\x9f\x98"},
+    {"\xf4\xbf\xbf\xbfQ", 1, 1, "\xf4\xbf\xbf\xbf", 65533, "\xf4\xbf\xbf\xbf"},
+    {"\x80\x81", 2, 1, "", -1, ""},
+    {"\xc2Z", 1, 1, "\xc2", 65533, "\xc2"},
+    {"A\0B", 2, 1, "", -1, ""},
 };
 
 static RValue ownedInput(const char *text) {
@@ -168,6 +186,70 @@ static void testAllocationProbes(VMContext *ctx) {
     }
 }
 
+/* The original length-bounded traversal is a scalar behavioral oracle. The
+ * unchanged decoder intentionally accepts overlong sequences and surrogates. */
+static void oracleCharacter(const char *text, int index, char out[5]) {
+    int length = (int)strlen(text);
+    int position = index - 1;
+    if (position < 0) position = 0;
+    int start = TextUtils_utf8AdvanceCodepoints(text, length, position);
+    int end = start;
+    if (start < length) TextUtils_decodeUtf8(text, length, &end);
+    memcpy(out, text + start, (size_t)(end - start));
+    out[end - start] = '\0';
+}
+
+static void testByteSequences(VMContext *ctx) {
+    const unsigned char bytes[] = {0, 'A', 0x80, 0xbf, 0xc0, 0xc2,
+                                   0xe0, 0xed, 0xf0, 0xf4, 0xff};
+    const int indices[] = {-3, 0, 1, 2, 3, 4, 9, INT_MAX};
+    for (size_t a = 0; a < sizeof(bytes); ++a)
+    for (size_t b = 0; b < sizeof(bytes); ++b)
+    for (size_t c = 0; c < sizeof(bytes); ++c) {
+        char text[] = {(char)bytes[a], (char)bytes[b], (char)bytes[c], 0};
+        char before[sizeof(text)];
+        memcpy(before, text, sizeof(text));
+        for (size_t i = 0; i < sizeof(indices) / sizeof(indices[0]); ++i) {
+            char expected[5];
+            oracleCharacter(text, indices[i], expected);
+            RValue args[] = {RValue_makeString(text), RValue_makeInt32(indices[i])};
+            RValue result = call(ctx, "string_char_at", args, 2, expected[0] ? 0 : 1);
+            assert(result.string != text);
+            assert(!memcmp(text, before, sizeof(text)));
+            expectString(&result, expected);
+        }
+    }
+}
+
+static void testTraversalWork(VMContext *ctx) {
+    char text[2049];
+    memset(text, 'A', sizeof(text) - 1);
+    text[sizeof(text) - 1] = '\0';
+    const int indices[] = {-3, 0, 1, 1024, 2048, 2049, INT_MAX};
+    for (size_t i = 0; i < sizeof(indices) / sizeof(indices[0]); ++i) {
+        RValue args[] = {RValue_makeString(text), RValue_makeInt32(indices[i])};
+        bool inRange = indices[i] <= 2048;
+        RValue result = call(ctx, "string_char_at", args, 2, inRange ? 0 : 1);
+        size_t scanned = lengthScanBytes;
+        expectString(&result, inRange ? "A" : "");
+        printf("char_at index %d: %zu whole-length bytes\n", indices[i], scanned);
+        if (!behaviorOnly && scanned != 0) {
+            fprintf(stderr, "char_at index %d: expected no whole-length scan, got %zu bytes\n",
+                    indices[i], scanned);
+            ++workFailures;
+        }
+    }
+    /* Borrow an embedded-NUL buffer, including bytes beyond that NUL. */
+    char embedded[] = {'A', 0, (char)0xf0, (char)0x9f, (char)0x98, (char)0x80, 0};
+    RValue args[] = {RValue_makeString(embedded), RValue_makeInt32(1)};
+    RValue result = call(ctx, "string_char_at", args, 2, 0);
+    embedded[0] = 'B';
+    expectString(&result, "A");
+    args[1] = RValue_makeInt32(2);
+    result = call(ctx, "string_char_at", args, 2, 1);
+    expectString(&result, "");
+}
+
 int main(int argc, char **argv) {
     DataWin data = {0};
     Runner runner = {0};
@@ -192,9 +274,11 @@ int main(int argc, char **argv) {
     testConversion(&ctx, RValue_makeUndefined(), "undefined");
     testMissingArguments(&ctx);
     testAllocationProbes(&ctx);
+    testByteSequences(&ctx);
+    testTraversalWork(&ctx);
     shfree(ctx.builtinMap);
-    printf("WAD %u: %u behavior/ownership checks, %u allocation failures (%s)\n",
-           (unsigned)data.gen8.wadVersion, checked, allocationFailures,
+    printf("WAD %u: %u behavior/ownership checks, %u allocation failures, %u work failures (%s)\n",
+           (unsigned)data.gen8.wadVersion, checked, allocationFailures, workFailures,
            behaviorOnly ? "behavior only" : "allocation assertions enabled");
-    return allocationFailures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return allocationFailures == 0 && workFailures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
