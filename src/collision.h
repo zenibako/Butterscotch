@@ -448,13 +448,80 @@ static inline bool Collision_pointInInstance(Sprite* spr, Instance* inst, GMLRea
     return true;
 }
 
+// Transient state for one side of a synchronous precise pair scan. Nothing
+// survives this call or crosses an event callback/mutation boundary.
+typedef struct {
+    GMLReal originX, originY, cs, sn;
+    int32_t maskOffsetX, maskOffsetY, maskWidth, maskHeight;
+    uint32_t bytesPerRow;
+    uint8_t* mask;
+    bool transformReady, validScale, rotated, maskBoundsReady, maskReady;
+} CollisionPairPoint;
+
+static inline bool Collision_pairPointInInstance(Sprite* spr, Instance* inst, bool precise,
+                                                 CollisionPairPoint* prepared, GMLReal px, GMLReal py) {
+    if (!prepared->transformReady) {
+        prepared->transformReady = true;
+        // Keep X-before-Y rejection, including the original short circuit.
+        prepared->validScale = !GML_SCALE_IS_DEGENERATE(inst->imageXscale) &&
+                               !GML_SCALE_IS_DEGENERATE(inst->imageYscale);
+        if (prepared->validScale) {
+            prepared->rotated = GMLReal_fabs(inst->imageAngle) > GML_ANGLE_EPSILON;
+            if (prepared->rotated) {
+                GMLReal rad = inst->imageAngle * M_PI / 180.0;
+                prepared->cs = GMLReal_cos(rad);
+                prepared->sn = GMLReal_sin(rad);
+            }
+            prepared->originX = (GMLReal) spr->originX;
+            prepared->originY = (GMLReal) spr->originY;
+        }
+    }
+    if (!prepared->validScale) return false;
+
+    GMLReal dx = px - inst->x;
+    GMLReal dy = py - inst->y;
+    if (prepared->rotated) {
+        GMLReal rx = prepared->cs * dx - prepared->sn * dy;
+        GMLReal ry = prepared->sn * dx + prepared->cs * dy;
+        dx = rx;
+        dy = ry;
+    }
+    // Preserve scalar division, expression order and truncation at every point.
+    GMLReal localX = dx / inst->imageXscale + prepared->originX;
+    GMLReal localY = dy / inst->imageYscale + prepared->originY;
+    int32_t ix = (int32_t) localX;
+    int32_t iy = (int32_t) localY;
+    if (0 > ix || 0 > iy || ix >= (int32_t) spr->width || iy >= (int32_t) spr->height) return false;
+
+    if (precise) {
+        if (!prepared->maskBoundsReady) {
+            prepared->maskOffsetX = spr->maskOffsetX;
+            prepared->maskOffsetY = spr->maskOffsetY;
+            prepared->maskWidth = (int32_t) spr->maskWidth;
+            prepared->maskHeight = (int32_t) spr->maskHeight;
+            prepared->maskBoundsReady = true;
+        }
+        int32_t mx = ix - prepared->maskOffsetX;
+        int32_t my = iy - prepared->maskOffsetY;
+        if (0 > mx || 0 > my || mx >= prepared->maskWidth || my >= prepared->maskHeight) return false;
+        if (!prepared->maskReady) {
+            uint32_t frameIdx = ((uint32_t) inst->imageIndex) % spr->maskCount;
+            prepared->mask = spr->masks[frameIdx];
+            prepared->bytesPerRow = (spr->maskWidth + 7) / 8;
+            prepared->maskReady = true;
+        }
+        return (prepared->mask[my * prepared->bytesPerRow + (mx >> 3)] & (1 << (7 - (mx & 7)))) != 0;
+    }
+    return true;
+}
+
 // Returns true if the two instances' collision shapes overlap.
 //
 // Matches the native GMS 1.4 runner's flow in FUN_0043fde0:
 //   1. AABB overlap test on the two precomputed bboxes.
 //   2. If neither sprite is precise (sepMasks == 1), the AABB overlap is enough.
 //   3. Otherwise walk the pixel intersection and test BOTH instances on every
-//      pixel via Collision_pointInInstance. Both sides get inverse-transformed
+//      pixel with pair-local setup. Both sides get inverse-transformed
 //      regardless of whether they're individually precise, so a rotated
 //      non-precise sprite collides as an OBB as long as its partner is precise.
 static inline bool Collision_instancesOverlapPrecise(Runner* runner, Instance* a, Instance* b, InstanceBBox bboxA, InstanceBBox bboxB) {
@@ -540,13 +607,19 @@ static inline bool Collision_instancesOverlapPrecise(Runner* runner, Instance* a
         sampleOffset = 0.5;
     }
 
+    // Initialize readiness only; unused sides and unreachable mask storage stay
+    // cold. The pointed-to instance/sprite data cannot mutate during this scan.
+    CollisionPairPoint preparedA, preparedB;
+    preparedA.transformReady = preparedA.maskBoundsReady = preparedA.maskReady = false;
+    preparedB.transformReady = preparedB.maskBoundsReady = preparedB.maskReady = false;
+
     for (int32_t py = startY; (compatMode ? py <= endY : py < endY); py++) {
         for (int32_t px = startX; (compatMode ? px <= endX : px < endX); px++) {
             GMLReal wpx = (GMLReal) px + sampleOffset;
             GMLReal wpy = (GMLReal) py + sampleOffset;
 
-            if (!Collision_pointInInstance(sprA, a, wpx, wpy)) continue;
-            if (!Collision_pointInInstance(sprB, b, wpx, wpy)) continue;
+            if (!Collision_pairPointInInstance(sprA, a, preciseA, &preparedA, wpx, wpy)) continue;
+            if (!Collision_pairPointInInstance(sprB, b, preciseB, &preparedB, wpx, wpy)) continue;
             return true;
         }
     }

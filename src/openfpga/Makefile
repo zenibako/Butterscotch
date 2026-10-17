@@ -382,6 +382,11 @@ string-reads-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/string-reads.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/vm_builtins.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_string_reads_fixture
 
 # Asset-free collision dispatch ordering and optional work-count checks.
+# Header-only precise-pair regression; instrumentation exists in this test TU only.
+.PHONY: collision-precise-fixture
+collision-precise-fixture:
+	$(PC_CC) $(ALL_PC_CFLAGS) -finstrument-functions -fno-inline-functions tests/collision-precise.c -lm -o $(PC_BIN)_collision_precise_fixture
+
 .PHONY: collision-work-fixture
 collision-work-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/collision-work.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_collision_work_fixture
