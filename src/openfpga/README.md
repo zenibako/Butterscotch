@@ -95,6 +95,9 @@ make string-reads-fixture    # builds the asset-free string read/ownership regre
 make collision-work-fixture  # builds asset-free collision order/mutation checks
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
+make spatial-grid-fixture    # builds asset-free grid recovery/update checks
+make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
+make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -105,6 +108,19 @@ explicit `WADS=16` or `WADS=17`; add `PC_EXTRA_CFLAGS=-DOF_COLLISION_WORK_PROFIL
 to also check sort, comparison, target-length and bounding-box counters. Use a
 fresh `PC_OBJ_DIR` when changing flags. These counters are diagnostic counts,
 not timings, and are absent from ordinary builds.
+
+The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
+ordinary updates, stale/partial membership recovery and grid replacement; use
+a fresh `PC_OBJ_DIR` for each game or changed build flags.
+
+The layer lookup fixture is `./<game>_pc_layer_lookup_fixture`. It checks ordered
+ID lookup, missing IDs, structural mutations and bounded repeated-hit work using
+the actual runner and layer builtins. Use a separate object directory per game.
+
+The VM call fixture is `./<game>_pc_vm_call_args_fixture`. It exercises actual
+CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value
+ownership and nested script/event execution without game assets. Run it once
+for each game with a separate object directory.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
@@ -183,12 +199,15 @@ Analogue menu to keep it. The log records capture sizes, elapsed time,
 transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
 request is active, preserving buffered audio until normal reads can resume.
-Core format revision 8 uses lossless Zstandard compression, references strings
+Core format revision 9 saves the VM's configurable comparison tolerance, uses
+lossless Zstandard compression, references strings
 already present in the matching game data, carries persistent rooms' saved
 state, and holds GameMaker 2.3 values (methods, structs and GMS 2 arrays), the
 VM's static-block flags, the current room's runtime layers and every loaded
-room's legacy tiles and tilemap cells; states from revisions 3 through 7 remain
-readable. Vertex formats and empty vertex buffers a game makes at start are not
+room's legacy tiles and tilemap cells; states from revisions 3 through 8 remain
+readable and restore the original default comparison tolerance. New revision-9
+states require an updated build. Vertex formats
+and empty vertex buffers a game makes at start are not
 saved: a load keeps the game's own and is refused if they differ from the state's.
 Native builds avoid the renderer's large allocation probe
 when the OS can prove the reserve fits, otherwise retaining the original probe.
