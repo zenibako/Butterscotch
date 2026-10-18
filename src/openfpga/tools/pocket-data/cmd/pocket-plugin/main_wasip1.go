@@ -3,6 +3,9 @@
 package main
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/extism/go-pdk"
 	"github.com/zenibako/Butterscotch/pocket-data/plugin"
 )
@@ -10,7 +13,24 @@ import (
 //go:wasmimport extism:host/user print_msg
 func printMsg(uint64) uint64
 
+var audioTracks int
+
 func progress(message string) {
+	// Pocket Sync appends every message to a flexbox log. Hundreds of rows
+	// can shrink its menu controls out of view, so keep GUI progress compact.
+	if strings.HasPrefix(message, "Converted texture page ") {
+		return
+	}
+	if message == "Converting audio" {
+		audioTracks = 0
+	}
+	if strings.HasPrefix(message, "Audio: ") {
+		audioTracks++
+		if audioTracks != 1 && audioTracks%64 != 0 {
+			return
+		}
+		message = fmt.Sprintf("Audio: processing track %d", audioTracks)
+	}
 	memory := pdk.AllocateString(message + "\n")
 	defer memory.Free()
 	printMsg(memory.Offset())

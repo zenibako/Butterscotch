@@ -41,7 +41,7 @@ standard Go compiler. The plugin uses TinyGo 0.43.0 and Binaryen 133, as recorde
 in CI. Standard Go's handling of relative WASI preopens failed actual host tests;
 no filesystem shim or cwd hack is retained.
 
-## Practical limits
+## Original verification limits
 
 Synthetic tests do not establish full-game behavior, memory use or conversion
 speed with commercial assets. JPEG/GIF decode is supported but stb byte parity
@@ -53,3 +53,59 @@ save files were modified. Nothing was pushed, published or submitted to the cata
 Publication retains Python/C tools as developer references. Public Go bundles
 need only the standalone executable. The plugin prepares a separate output
 folder; users explicitly merge its Assets folder to install their own data.
+
+## Real installation follow-up
+
+Fix commit: `96d9ebc7`. Tested the user's installed macOS Steam copies of
+Undertale 1.08 and Deltarune Chapter 1. The Deltarune app's chapter directory,
+shared music directory, audio group and English language data were discovered
+from the app bundle. Commercial input/output stays outside Git and release ZIPs.
+
+The tests exposed and fixed zero alignment after Deltarune's bzip2 texture
+streams, positive Ogg position offsets, intermediate Ogg page positions and
+whole-final-packet discard. Explicit product rounding also prevents ARM Go
+from fusing arithmetic that WASM executes separately. Each codec/rounding fix
+has a synthetic regression; no commercial fixture is needed to reproduce it.
+
+Both complete native conversions pass. Game data and all 26 Undertale / eight
+Deltarune texture pages match the C reference exactly. All 443 Undertale and
+203 Deltarune audio track names, sample counts, rates and encoded sizes match.
+Music bytes can differ from the independent C Vorbis decoder: representative
+source-PCM comparisons differ by at most one int16 unit; this is a sampled
+measurement, not a bound for every track. Comparing the complete decoded ADPCM
+packs gives RMS differences of 10.82 / 12.21 int16 units and signal-to-difference
+ratios of 52.68 / 52.09 dB respectively. No listening or Pocket gameplay claim
+is inferred from those measurements.
+
+Pocket Sync 7.1.0 installs plugins through published GitHub release assets; it
+has no local unpublished-plugin loader. Testing therefore uses an isolated
+development build of official tag v7.1.0, commit
+`c2143b237dc42f566f052916282c435a2c6b64a6`. Only application identity and the
+frontend plugin listing were changed to show a clearly labelled local fixture.
+Its Rust plugin runner is unchanged (SHA-256
+`e78ed8bb7e4642130cd30c8ffabff766da805761289e4dbe8d940e8693bf7d8d`).
+The installed production app/profile was preserved; conversion targets a
+scratch SD directory with private copies of the actual game files.
+
+Both games completed through the actual Pocket Sync menus. All three output
+assets and the preparation manifest match native Go byte for byte for each
+game. Undertale took 5m56s; the final deterministic Deltarune run took 2m08s in
+this debug host. These are development-build timings, not release benchmarks.
+The UI also exercised Back, Exit and refusal to replace existing output.
+All 574 original input files retained their hashes, and a scratch save sentinel
+was preserved. No game data was installed on the physical SD card.
+
+The long per-track log exposed a Pocket Sync flex-layout issue that squeezed
+completion controls out of view. A follow-up changes only the plugin's progress
+adapter: report phases and the first/every 64th audio track, retaining detailed
+CLI logs. Deltarune was converted again with this final adapter; output remains
+identical, and a screenshot confirms the full result and Back/Exit buttons are
+visible. Repeat refusal and Exit were retested in that build. The converter
+itself is unchanged from the full Undertale/Deltarune parity runs.
+
+The final CLI/plugin tests, WASI prep suite, nested Vorbis tests and root/nested
+vet pass. Six native targets and the standard WASI CLI build successfully.
+The refreshed macOS ARM64 archive is also extracted and executed against the
+real Deltarune installation; its output matches the native reference run.
+Windows/Linux execution, stock Pocket Sync release installation and physical
+Pocket gameplay remain untested. Nothing was published or submitted upstream.
