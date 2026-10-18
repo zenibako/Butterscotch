@@ -1,6 +1,8 @@
 # Text-voice silent-tail investigation
 
-Status: a promising **private feasibility prototype**, not a retained mixer change.
+Historical status: this document records the **private feasibility prototype**.
+The subsequent [production implementation and build](2026-10-18-silent-audio-tail-results.md)
+complete the host lifecycle checks below; physical Pocket measurements remain pending.
 Baseline source is `09527f99e6334f717da813304b09790e36ccf785`. No production mixer code,
 pack, save format, SDK or deployed core changed during this investigation.
 
