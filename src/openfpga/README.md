@@ -29,6 +29,12 @@ benchmark (see On-device diagnostics) reports them for the build in hand.
 You must supply your own game data: `data.win` from Undertale v1.08, or a
 Deltarune chapter (see Deltarune below).
 
+## Installing your own game data
+
+For a prebuilt core, follow [Add your own game files](GAME-DATA.md). The
+Python preparation tool selects the host converters, prepares textures and
+audio, and produces the exact SD-card filenames without rebuilding the core.
+
 ## Layout
 
 | Path | What |
