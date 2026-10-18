@@ -93,11 +93,14 @@ make tile-motion-fixture  # builds the asset-free translated tile-cache regressi
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
+make collision-precise-fixture GAME=undertale WADS=16 # checks precise pairs against scalar sampling
+make collision-precise-fixture GAME=deltarune WADS=17 # checks the Chapter 1 configuration
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
 make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
 make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
+make tile-shift-fixture GAME=deltarune # compares the guarded native with supplied real bytecode
 make asan       # desktop binary with ASan + UBSan: ./undertale_pc_asan
                 # (GAME=deltarune: ./deltarune_pc, ./deltarune_pc_asan)
 make copy       # copy the core to a mounted Pocket SD card
@@ -108,6 +111,31 @@ explicit `WADS=16` or `WADS=17`; add `PC_EXTRA_CFLAGS=-DOF_COLLISION_WORK_PROFIL
 to also check sort, comparison, target-length and bounding-box counters. Use a
 fresh `PC_OBJ_DIR` when changing flags. These counters are diagnostic counts,
 not timings, and are absent from ordinary builds.
+
+The precise-pair fixture is `./<game>_pc_collision_precise_fixture`. Build
+`collision-precise-fixture` with one explicit `WADS=16` or `WADS=17` and the
+matching `GAME`. It compiles the real collision header directly, without game
+assets or platform objects. Literal edge cases and a scalar sampling oracle
+cover compatibility sampling, signed/degenerate scales, tiny/negative angles,
+frame masks, cropped rows, fractional positions and lazy setup. Fixture-only
+function instrumentation and math wrappers bound repeated setup work; they do
+not measure time and add no production diagnostics. `--behavior-only` skips
+work-bound failures for characterizing an unoptimized baseline. For sanitizers,
+use `PC_CC=clang` and
+`PC_EXTRA_CFLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize=alignment,function -fno-omit-frame-pointer"`.
+On macOS run with `ASAN_OPTIONS=detect_leaks=0` and, when needed,
+`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`. Use fresh named `ROOT`,
+`PC_OBJ_DIR` and `PC_BIN` paths when changing configurations; header checksum
+invalidation applies to those selected directories.
+
+The string-read fixture is `./<game>_pc_string_reads_fixture`. It checks UTF-8,
+malformed byte groups, embedded NULs, index boundaries, non-string conversions
+and owned results through the real builtin registry. A scalar oracle covers
+short byte sequences; fixture-only `strlen` accounting verifies that
+`string_char_at` no longer traverses the whole input to determine its length.
+`--behavior-only` skips allocation/work assertions when comparing an older
+implementation. Run both games with separate object directories and the
+sanitizer flags above.
 
 The spatial-grid fixture is `./<game>_pc_spatial_grid_fixture`. It checks
 ordinary updates, stale/partial membership recovery and grid replacement; use
@@ -121,6 +149,13 @@ The VM call fixture is `./<game>_pc_vm_call_args_fixture`. It exercises actual
 CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value
 ownership and nested script/event execution without game assets. Run it once
 for each game with a separate object directory.
+
+The tile-shift fixture is `./deltarune_pc_tile_shift_fixture`. Pass the path to
+your own Chapter 1 `data.win` as its argument. It compares the interpreted
+script and the guarded native, including ordered builtin calls, coordinates,
+caller state and fallback controls; no game bytecode is included in the test.
+Its interpreter-work bound is fixture-only instrumentation. The Undertale
+configuration checks that the Deltarune-only script is not installed there.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
 are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).

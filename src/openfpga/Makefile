@@ -93,7 +93,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
-       platform/of_strings.c platform/of_save_fs.c platform/of_native.c \
+       platform/of_strings.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
        platform/of_font.c platform/of_menu.c platform/of_state_requests.c \
        platform/of_snapshot_envelope.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
@@ -110,7 +110,19 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-BS_DEFS = $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DOF_LOG_SLOT_FILE='"$(APP)_1.sav"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+SAVE_SLOT_FILE = $(APP)_0.sav
+LOG_SLOT_FILE = $(APP)_1.sav
+ifeq ($(FOCUS_BENCH),1)
+ifneq ($(GAME),deltarune)
+$(error FOCUS_BENCH supports Deltarune Chapter 1 only)
+endif
+SAVE_SLOT_FILE = deltarune_tiles_0.sav
+LOG_SLOT_FILE = deltarune_tiles_1.sav
+FOCUS_BUILD_ID ?= unversioned
+FOCUS_DEFS = -DOF_FOCUSED_BENCH -DOF_FOCUS_BUILD_ID='"$(FOCUS_BUILD_ID)"'
+endif
+
+BS_DEFS = $(FOCUS_DEFS) $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(SAVE_SLOT_FILE)"' -DOF_LOG_SLOT_FILE='"$(LOG_SLOT_FILE)"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DPLATFORM_PACK_READ -DSW_TEXTURE_PACK_HOST='"music.bin"' -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
@@ -182,9 +194,11 @@ MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
 # Neither sdk.mk's rules nor the desktop ones track headers, and objects built
 # against an old struct layout link without complaint and then crash (the
 # device build did, twice). So a change to any header empties the object
-# directories this run builds into. (Before sdk.mk, which looks at what is
+# directories this run builds into. Focus mode and build identity also change
+# compiled code and save filenames, so they must invalidate the same objects.
+# (Before sdk.mk, which looks at what is
 # in them; PC_OBJ_DIR is only set this early when a sub-make passes it.)
-HEADER_SUM := $(shell { cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null; printf '%s' '$(STATE_GAME_ID) $(SAVESTATES) $(GAME) $(WADS)'; } | cksum | cut -d' ' -f1)
+HEADER_SUM := $(shell { cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null; printf '%s' '$(STATE_GAME_ID) $(SAVESTATES) $(GAME) $(WADS) $(FOCUS_BENCH) $(FOCUS_BUILD_ID)'; } | cksum | cut -d' ' -f1)
 $(foreach d,$(OBJ_DIR) $(or $(PC_OBJ_DIR),$(ROOT)/.obj/$(APP)-pc),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
 
 # Declare default target before sdk.mk's rules
@@ -382,6 +396,11 @@ string-reads-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/string-reads.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/vm_builtins.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_string_reads_fixture
 
 # Asset-free collision dispatch ordering and optional work-count checks.
+# Header-only precise-pair regression; instrumentation exists in this test TU only.
+.PHONY: collision-precise-fixture
+collision-precise-fixture:
+	$(PC_CC) $(ALL_PC_CFLAGS) -finstrument-functions -fno-inline-functions tests/collision-precise.c -lm -o $(PC_BIN)_collision_precise_fixture
+
 .PHONY: collision-work-fixture
 collision-work-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/collision-work.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_collision_work_fixture
@@ -395,6 +414,31 @@ spatial-grid-fixture: $(PC_OBJS)
 .PHONY: layer-lookup-fixture
 layer-lookup-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/layer-lookup.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/runner.o $(filter %/src/runner.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_layer_lookup_fixture
+
+# Real-asset oracle for the guarded tile-shift native; pass data.win to the binary.
+.PHONY: tile-shift-fixture
+tile-shift-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/tile-shift.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_shift_fixture
+
+# Real-asset oracle for live background lookup and its guarded native path.
+.PHONY: background-lookup-fixture
+background-lookup-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/background-lookup.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_background_lookup_fixture
+
+# Asset-free same-frame wall/flip accounting and frame distribution checks.
+.PHONY: focus-stats-fixture
+focus-stats-fixture:
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/focus-stats.c platform/of_focus_stats.c $(PC_EXTRA_CFLAGS) -o $(PC_BIN)_focus_stats_fixture
+
+# Asset-free tile composition and copy-call regression oracle.
+.PHONY: tile-stripes-fixture
+tile-stripes-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/tile-stripes.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/sw_renderer.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_stripes_fixture
+
+# Real-asset state/RNG/command oracle for the guarded battle writer.
+.PHONY: writer-draw-fixture
+writer-draw-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/writer-draw.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_writer_draw_fixture
 
 # Requires an SDK staged with the matching save-state-enabled os25 runtime.
 # Keep this output separate from the ordinary two-game core. Both games share

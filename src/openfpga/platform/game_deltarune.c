@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include "instance.h"
+#include "gml_array.h"
 #include "log.h"
 #include "renderer.h"
 #include "runner.h"
@@ -164,16 +165,329 @@ static bool get84Sprite(VMContext *ctx, RValue *args, int32_t argCount, RValue *
     return true;
 }
 
+/* gml_Script_tile_layer_shift(depth, x, y), callable body at offset 4.
+ * All ten variables are locals; the separate global-init wrapper installs the
+ * method. Keep the builtin order and their owned arrays: duplicate IDs, omitted
+ * dead instances, missing tiles and integer coordinate conversion belong to the
+ * existing builtins. This removes VM dispatch, not layer-element searches. */
+static bool tileLayerShift(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    if (ctx->runner == NULL || args == NULL || argCount < 3) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!isNumber(args[i]) || !isfinite(RValue_toReal(args[i]))) return false;
+    GMLReal epsilon = ctx->runner->mathEpsilon;
+    if (!isfinite(epsilon) || epsilon < 0) return false;
+
+    static const char *const names[] = {
+        "layer_get_all", "array_length_1d", "layer_get_depth", "layer_get_all_elements",
+        "layer_get_element_type", "layer_tile_get_x", "layer_tile_x", "layer_tile_get_y", "layer_tile_y",
+    };
+    BuiltinFunc functions[9];
+    for (int i = 0; i < 9; ++i) {
+        functions[i] = VM_findBuiltin(ctx, names[i]);
+        if (functions[i] == NULL) return false;
+    }
+
+    /* No fallback after this point: replaying the bytecode would shift twice. */
+    GMLReal depth = RValue_toReal(args[0]);
+    GMLReal x = RValue_toReal(args[1]), y = RValue_toReal(args[2]);
+    RValue layers = functions[0](ctx, NULL, 0);
+    RValue layerCount = functions[1](ctx, &layers, 1);
+    for (int32_t i = 0; lessThan((GMLReal)i, RValue_toReal(layerCount), epsilon); ++i) {
+        RValue layer = GMLArray_getOnArrayRef(&layers, i);
+        RValue layerDepth = functions[2](ctx, &layer, 1);
+        /* IDs returned as REAL may round to a missing ID. Undefined is
+         * unequal to every supported numeric depth, including zero. */
+        bool different = layerDepth.type == RVALUE_UNDEFINED ||
+                         !(GMLReal_fabs(RValue_toReal(layerDepth) - depth) <= epsilon);
+        RValue_free(&layerDepth);
+        if (different) continue;
+        RValue elements = functions[3](ctx, &layer, 1);
+        RValue elementCount = functions[1](ctx, &elements, 1);
+        for (int32_t j = 0; lessThan((GMLReal)j, RValue_toReal(elementCount), epsilon); ++j) {
+            RValue element = GMLArray_getOnArrayRef(&elements, j);
+            RValue type = functions[4](ctx, &element, 1);
+            bool tile = GMLReal_fabs(RValue_toReal(type) - (GMLReal)7) <= epsilon;
+            RValue_free(&type);
+            if (!tile) continue;
+            RValue oldX = functions[5](ctx, &element, 1);
+            RValue setX[2] = { element, RValue_makeReal(RValue_toReal(oldX) + x) };
+            RValue_free(&oldX);
+            RValue unused = functions[6](ctx, setX, 2);
+            RValue_free(&unused);
+            RValue oldY = functions[7](ctx, &element, 1);
+            RValue setY[2] = { element, RValue_makeReal(RValue_toReal(oldY) + y) };
+            RValue_free(&oldY);
+            unused = functions[8](ctx, setY, 2);
+            RValue_free(&unused);
+        }
+        RValue_free(&elementCount);
+        RValue_free(&elements);
+    }
+    RValue_free(&layerCount);
+    RValue_free(&layers);
+    *result = RValue_makeUndefined();
+    return true;
+}
+
+/* The common, already formatted English battle writer. Other styles and
+ * command strings stay in the interpreter. The event and its input callees
+ * are fingerprinted before any state changes; the same builtins retain draw
+ * ordering, conversion, ownership and random-number advancement. */
+enum {
+    W_FORMATTED, W_FONT, W_SPECIAL, W_SHAKE, W_HALT, W_COLOR, W_STRING,
+    W_LENGTH, W_POS, W_X, W_Y, W_HSPACE, W_VSPACE, W_WXSKIP, W_SKIPPABLE,
+    W_SKIPME, W_SINER, W_AUTOMASH, W_BUTTON1, W_BUTTON2, W_BUTTON3,
+    W_ACCEPT, W_WX, W_WY, W_COLORCHANGE, W_N, W_CHAR, W_LANG, W_FLAG, W_COUNT
+};
+static int32_t writerVars[W_COUNT];
+static int writerResolved; /* 0 unresolved, 1 compatible, -1 incompatible */
+static int32_t writerScripts[4];
+static RValue writerGet(VMContext *ctx, int field) {
+    return Instance_getSelfVar(field >= W_LANG ? ctx->globalScopeInstance : ctx->currentInstance, writerVars[field]);
+}
+static void writerSet(VMContext *ctx, int field, RValue value) {
+    Instance_setSelfVar(ctx->currentInstance, writerVars[field], value);
+}
+static void writerNumber(VMContext *ctx, int field, GMLReal value) {
+    writerSet(ctx, field, RValue_makeReal(value));
+}
+static bool writerFinite(RValue value) {
+    return isNumber(value) && isfinite(RValue_toReal(value));
+}
+static bool writerEqual(RValue value, GMLReal number, GMLReal epsilon) {
+    return GMLReal_fabs(RValue_toReal(value) - number) <= epsilon;
+}
+static void writerDiscard(VMContext *ctx, BuiltinFunc fn, RValue *args, int count) {
+    RValue value = fn(ctx, args, count);
+    RValue_free(&value);
+}
+static bool writerDraw(VMContext *ctx) {
+    if (ctx->currentInstance == NULL || ctx->globalScopeInstance == NULL || ctx->runner == NULL ||
+        ctx->runner->renderer == NULL || ctx->runner->mathEpsilon != GML_MATH_EPSILON) return false;
+    if (writerResolved == 0) {
+        static const char *const scripts[] = {
+            "gml_Script_button1_p", "gml_Script_button2_h", "gml_Script_scr_debug", "gml_Script_button3_h"
+        };
+        static const uint32_t lengths[] = {204,128,68,128};
+        static const uint64_t hashes[] = {
+            0xd467a2dc432f29b7ull,0x72767ee209807646ull,0x847afa0367d28889ull,0x6287575da25d418eull
+        };
+        writerResolved = -1;
+        for (int i = 0; i < 4; ++i) {
+            uint32_t length = 0;
+            if (VM_codeHash(ctx, scripts[i], &length) != hashes[i] || length != lengths[i]) return false;
+            ptrdiff_t slot = shgeti(ctx->codeIndexByName, scripts[i]);
+            if (slot < 0) return false;
+            writerScripts[i] = ctx->codeIndexByName[slot].value;
+        }
+        static const char *const names[W_COUNT] = {
+            "formatted","myfont","special","shake","halt","mycolor","mystring",
+            "length","pos","writingx","writingy","hspace","vspace","wxskip","skippable",
+            "skipme","siner","automash_timer","button1","button2","button3",
+            "accept","wx","wy","colorchange","n","mychar","lang","flag"
+        };
+        for (int i = 0; i < W_COUNT; ++i) writerVars[i] = VM_getOrAllocateVarID(ctx, names[i]);
+        writerResolved = 1;
+    }
+    if (writerResolved < 0) return false;
+    static const int fields[] = {W_FORMATTED,W_FONT,W_SPECIAL,W_SHAKE,W_HALT,W_COLOR};
+    static const GMLReal values[] = {1,5,1,0,0,16777215};
+    for (int i = 0; i < 6; ++i) {
+        RValue value = writerGet(ctx, fields[i]);
+        if (!writerFinite(value) || RValue_toReal(value) != values[i]) return false;
+    }
+    RValue language = writerGet(ctx, W_LANG), string = writerGet(ctx, W_STRING);
+    if (language.type != RVALUE_STRING || language.string == NULL || strcmp(language.string,"en") ||
+        string.type != RVALUE_STRING || string.string == NULL) return false;
+    size_t length = 0;
+    for (const unsigned char *s = (const unsigned char *)string.string; *s; ++s) {
+        if (++length > 1024 || *s < 32 || *s > 126 || strchr("/%^\\#", *s) != NULL) return false;
+    }
+    for (int i = W_LENGTH; i <= W_AUTOMASH; ++i)
+        if (!writerFinite(writerGet(ctx,i))) return false;
+    if (RValue_toReal(writerGet(ctx,W_LENGTH)) != (GMLReal)length) return false;
+    GMLReal pos = RValue_toReal(writerGet(ctx,W_POS));
+    if (pos < 1 || pos > (GMLReal)length + 2 || pos != GMLReal_floor(pos)) return false;
+    if (writerGet(ctx,W_X).type != RVALUE_REAL || writerGet(ctx,W_Y).type != RVALUE_REAL ||
+        writerGet(ctx,W_SINER).type != RVALUE_REAL) return false;
+    for (int i = W_WXSKIP; i <= W_SKIPME; ++i) {
+        GMLReal value = RValue_toReal(writerGet(ctx,i));
+        if (value != 0 && value != 1) return false;
+    }
+    GMLReal automash = RValue_toReal(writerGet(ctx,W_AUTOMASH));
+    if (automash != 0 && automash != 1) return false;
+    RValue flags = writerGet(ctx,W_FLAG);
+    if (flags.type != RVALUE_ARRAY || flags.array == NULL) return false;
+    RValue debugFlag = GMLArray_get(flags.array,10);
+    if (!writerFinite(debugFlag)) return false;
+    enum { FONT,COLOR,LENGTH,CHAR,GET_COLOR,NEWLINE,RANDOM,TEXT_COLOR,TEXT };
+    static const char *const builtins[] = {
+        "draw_set_font","draw_set_color","string_length","string_char_at","draw_get_color",
+        "string_hash_to_newline","random","draw_text_color","draw_text"
+    };
+    BuiltinFunc fn[9];
+    for (int i = 0; i < 9; ++i) {
+        fn[i] = VM_findBuiltin(ctx,builtins[i]);
+        if (fn[i] == NULL) return false;
+    }
+    /* No fallback after this point. Input calls use their original scripts. */
+    GMLReal epsilon = ctx->runner->mathEpsilon;
+    writerNumber(ctx,W_BUTTON1,0); writerNumber(ctx,W_BUTTON2,0); writerNumber(ctx,W_BUTTON3,0);
+    RValue result = VM_callCodeIndex(ctx,writerScripts[0],NULL,0);
+    if (writerEqual(result,1,epsilon)) writerNumber(ctx,W_BUTTON1,1);
+    RValue_free(&result);
+    result = VM_callCodeIndex(ctx,writerScripts[1],NULL,0);
+    if (writerEqual(result,1,epsilon)) writerNumber(ctx,W_BUTTON2,1);
+    RValue_free(&result);
+    bool debugEnabled = writerEqual(debugFlag,1,epsilon);
+    if (!debugEnabled) {
+        result = VM_callCodeIndex(ctx,writerScripts[2],NULL,0);
+        debugEnabled = RValue_toBool(result); RValue_free(&result);
+    }
+    if (debugEnabled) {
+        result = VM_callCodeIndex(ctx,writerScripts[3],NULL,0);
+        bool mash = writerEqual(result,1,epsilon); RValue_free(&result);
+        if (mash) {
+            automash = automash == 0 ? 1 : 0; writerNumber(ctx,W_AUTOMASH,automash);
+            if (automash == 0) { writerNumber(ctx,W_BUTTON1,1); writerNumber(ctx,W_BUTTON2,1); }
+        }
+    }
+    writerNumber(ctx,W_ACCEPT,0);
+    writerSet(ctx,W_WX,writerGet(ctx,W_X)); writerSet(ctx,W_WY,writerGet(ctx,W_Y));
+    writerNumber(ctx,W_COLORCHANGE,0);
+    RValue argument = writerGet(ctx,W_FONT); writerDiscard(ctx,fn[FONT],&argument,1);
+    argument = writerGet(ctx,W_COLOR); writerDiscard(ctx,fn[COLOR],&argument,1);
+    if (writerEqual(writerGet(ctx,W_BUTTON2),1,epsilon) && lessThan(pos,(GMLReal)length,epsilon) &&
+        writerEqual(writerGet(ctx,W_SKIPPABLE),1,epsilon)) writerNumber(ctx,W_SKIPME,1);
+    if (writerEqual(writerGet(ctx,W_SKIPME),1,epsilon)) {
+        result = fn[LENGTH](ctx,&string,1); pos = RValue_toReal(result) + 1;
+        // ADD retains INT32 when string_length and the literal are integers;
+        // this Pop.v.v does not perform the literal-store REAL coercion.
+        writerSet(ctx,W_POS,result.type == RVALUE_INT32 ? RValue_makeInt32(result.int32 + 1) : RValue_makeReal(pos));
+        RValue_free(&result);
+        /* SETOWNER precedes the two builtin alarm stores in the bytecode. */
+        ctx->currentArrayOwner = (void *)(intptr_t)68121;
+        ctx->currentInstance->alarm[0] = ctx->currentInstance->alarm[1] = -1;
+        ctx->currentInstance->activeAlarmMask &= (uint16_t)~3u;
+    }
+    writerNumber(ctx,W_N,1);
+    for (GMLReal n = 1; lessThan(n,pos,epsilon); n = n + 1) {
+        writerNumber(ctx,W_ACCEPT,1);
+        RValue args[2] = {string,writerGet(ctx,W_N)};
+        RValue character = fn[CHAR](ctx,args,2);
+        writerSet(ctx,W_CHAR,character); RValue_free(&character);
+        character = writerGet(ctx,W_CHAR);
+        if (!strcmp(character.string,"&")) {
+            writerNumber(ctx,W_ACCEPT,0); writerSet(ctx,W_WX,writerGet(ctx,W_X));
+            if (writerEqual(writerGet(ctx,W_WXSKIP),1,epsilon))
+                writerNumber(ctx,W_WX,RValue_toReal(writerGet(ctx,W_X)) + 58);
+            writerNumber(ctx,W_WY,RValue_toReal(writerGet(ctx,W_WY)) + RValue_toReal(writerGet(ctx,W_VSPACE)));
+        }
+        if (!strcmp(character.string,"|")) {
+            writerNumber(ctx,W_ACCEPT,0);
+            writerNumber(ctx,W_WX,RValue_toReal(writerGet(ctx,W_WX)) + RValue_toReal(writerGet(ctx,W_HSPACE)));
+        }
+        if (writerEqual(writerGet(ctx,W_ACCEPT),1,epsilon)) {
+            writerDiscard(ctx,fn[GET_COLOR],NULL,0);
+            for (int shadow = 1; shadow >= 0; --shadow) {
+                RValue text = fn[NEWLINE](ctx,&character,1);
+                argument = writerGet(ctx,W_SHAKE);
+                result = fn[RANDOM](ctx,&argument,1);
+                GMLReal y = RValue_toReal(writerGet(ctx,W_WY)) + RValue_toReal(result); RValue_free(&result);
+                result = fn[RANDOM](ctx,&argument,1);
+                GMLReal x = RValue_toReal(writerGet(ctx,W_WX)) + RValue_toReal(result); RValue_free(&result);
+                if (shadow) { x = x + 1; y = y + 1; }
+                RValue draw[8] = {RValue_makeReal(x),RValue_makeReal(y),text,RValue_makeInt32(4210752),
+                    RValue_makeInt32(4210752),RValue_makeInt32(8388608),RValue_makeInt32(8388608),RValue_makeInt32(1)};
+                writerDiscard(ctx,fn[shadow ? TEXT_COLOR : TEXT],draw,shadow ? 8 : 3);
+                RValue_free(&text);
+            }
+            writerNumber(ctx,W_WX,RValue_toReal(writerGet(ctx,W_WX)) + RValue_toReal(writerGet(ctx,W_HSPACE)));
+        }
+        writerNumber(ctx,W_N,n + 1);
+    }
+    writerNumber(ctx,W_SKIPME,0);
+    writerNumber(ctx,W_SINER,RValue_toReal(writerGet(ctx,W_SINER)) + 1);
+    return true;
+}
+
+/* Live lookup for the compatibility backgrounds. Preserve layer/element
+ * builtin ordering and ID conversion; remove bytecode and temporary strings.
+ * No cached names or IDs survive a call, room change, or Memory restore. */
+static bool backgroundGetElement(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    if (!ctx->runner || !args || argCount < 1 || !isNumber(args[0]) ||
+        !isfinite(RValue_toReal(args[0])) || ctx->runner->mathEpsilon != GML_MATH_EPSILON) return false;
+    static const char *const names[] = {
+        "layer_get_all", "layer_get_name", "layer_get_all_elements", "layer_get_element_type",
+    };
+    BuiltinFunc fn[4];
+    for (int i=0;i<4;++i) {
+        fn[i]=VM_findBuiltin(ctx,names[i]);
+        if (!fn[i]) return false;
+    }
+    RValue layers=fn[0](ctx,NULL,0), layer=RValue_makeInt32(-1);
+    bool foreground=false, found=false;
+    for (int i=0;i<GMLArray_length1D(layers.array);++i) {
+        RValue id=GMLArray_get(layers.array,i), name=fn[1](ctx,&id,1);
+        if (name.type!=RVALUE_STRING || !name.string) {
+            RValue_free(&name);RValue_free(&layers);return false;
+        }
+        /* Byte and codepoint offsets agree only for ASCII. Unusual names use
+         * the bytecode's UTF-8 and numeric conversion behavior. */
+        const char *text=name.string;size_t length=0;
+        while (text[length] && (unsigned char)text[length]<128) ++length;
+        if (text[length]) {RValue_free(&name);RValue_free(&layers);return false;}
+        foreground=strstr(text,"Compatibility_Foreground_")!=NULL;
+        bool background=!foreground && strstr(text,"Compatibility_Background_")!=NULL;
+        size_t slot=sizeof("Compatibility_Background_")-1;
+        /* Both prefixes have the same length. The original takes the slot at
+         * that absolute offset, even when the substring occurs later. */
+        bool match=false;
+        if ((foreground || background) && length>slot) {
+            unsigned char digit=(unsigned char)text[slot];
+            if (digit<'0' || digit>'9') {RValue_free(&name);RValue_free(&layers);return false;}
+            match=GMLReal_fabs((GMLReal)(digit-'0')-RValue_toReal(args[0]))<=GML_MATH_EPSILON;
+        }
+        RValue_free(&name);
+        if (match) {layer=id;found=true;break;}
+    }
+    RValue_free(&layers);
+    /* Missing backgrounds may be created by the script; decline before any
+     * semantic state change so that only the original creation path runs. */
+    if (!found || GMLReal_fabs(RValue_toReal(layer)+(GMLReal)1)<=GML_MATH_EPSILON) return false;
+    RValue values[3]={RValue_makeInt32(-1),RValue_makeInt32(-1),RValue_makeInt32(-1)};
+    RValue elements=fn[2](ctx,&layer,1);
+    for (int i=0;i<GMLArray_length1D(elements.array);++i) {
+        RValue id=GMLArray_get(elements.array,i), type=fn[3](ctx,&id,1);
+        bool background=GMLReal_fabs(RValue_toReal(type)-(GMLReal)1)<=GML_MATH_EPSILON;
+        RValue_free(&type);
+        if (background) {values[0]=id;values[1]=layer;values[2]=RValue_makeInt32(foreground ? 1 : 0);}
+    }
+    RValue_free(&elements);
+    *result=RValue_makeArray(GMLArray_create(ctx->dataWin,3));
+    ctx->currentArrayOwner=(void*)(intptr_t)18385354;
+    result->array->owner=ctx->currentArrayOwner;
+    for (int i=0;i<3;++i) {
+        values[i].gmlStackType=GML_TYPE_VARIABLE; /* bytecode's Pop.v.v array writes */
+        GMLArray_set(result->array,i,values[i]);
+    }
+    return true;
+}
+
 static const OfNativeScript g_nativeScripts[] = {
+    { "gml_Script___background_get_element", 1340, 0xfd927fdac407744cull, backgroundGetElement },
+    { "gml_Script_tile_layer_shift", 608, 0x7ba14ffb5cf975f3ull, tileLayerShift },
     { "gml_Script___view_get", 1260, 0xeff822f793176fb9ull, viewGet },
     { "gml_Script_scr_84_get_sprite", 84, 0x4121b98b835bc977ull, get84Sprite },
 };
 
 static const OfNativeCode g_natives[] = {
+    { "gml_Object_obj_writer_Draw_0", 12780, 0xad8c918f7aad19f8ull, writerDraw },
     { "gml_Object_obj_purplegrass_Draw_0", 348, 0x8cf611b685a27620ull, purpleGrassDraw },
 };
 
 static void forgetVm(void) {
+    writerResolved = 0;
     g_spriteMapVar = -1;
 }
 
@@ -285,6 +599,15 @@ static void battleUiInstall(Runner *runner) {
                                 bubbleFonts, sizeof(bubbleFonts) / sizeof(bubbleFonts[0]));
     SWRenderer_setContrastGlyphAssets(runner->renderer, glyphSprites, sizeof(glyphSprites) / sizeof(glyphSprites[0]),
                                      NULL, 0);
+    // Half-size names are not doubled pixel art (15 source rows). Point sampling
+    // keeps their counters open; a five-pixel R gives its leg a distinct diagonal.
+    // Fingerprints reject modified/localized labels before deriving any pixels.
+    static const SWHintedGlyphAsset hintedNames[] = {
+        {"spr_bnamekris", 43, 15, 0x8c29ca15u, 6, 5, {30, 17, 17, 30, 20, 18, 17, 17}},
+        {"spr_bnameralsei", 61, 15, 0xd514b019u, 0, 5, {30, 17, 17, 30, 20, 18, 17, 17}},
+        {"spr_bnamesusie", 48, 15, 0x6af54445u, 0, 0, {0}}
+    };
+    SWRenderer_setHintedGlyphAssets(runner->renderer, hintedNames, sizeof(hintedNames) / sizeof(hintedNames[0]));
     g_battleData = runner->dataWin;
     g_battleController = -1;
     for (uint32_t i = 0; i < runner->dataWin->objt.count; ++i) {

@@ -134,6 +134,8 @@ typedef struct {
     /* Short sounds held in memory, indexed by track; NULL when not loaded. */
     uint8_t **cachedSounds;
     uint32_t *cachedLastUse;
+    /* Derived from cached bytes, never serialized. NULL disables the fast path. */
+    uint32_t *cachedSilentFrom;
     uint32_t cachedBytes;
     uint32_t useCounter;
     int32_t nextInstanceId;
@@ -196,6 +198,9 @@ static void openPack(OfAudioSystem *ut) {
     ut->trackCount = count;
     ut->cachedSounds = safeCalloc(count, sizeof(uint8_t *));
     ut->cachedLastUse = safeCalloc(count, sizeof(uint32_t));
+    ut->cachedSilentFrom = malloc((size_t)count * sizeof(uint32_t));
+    if (ut->cachedSilentFrom)
+        for (uint32_t i = 0; i < count; ++i) ut->cachedSilentFrom[i] = UINT32_MAX;
     logInfo("Audio: pack with %u tracks.\n", (unsigned) count);
 }
 
@@ -488,7 +493,7 @@ static void adpcmDiffInit(void) {
  * brought up to date before and read back after. */
 static int32_t gainToFixed(float gain);
 
-static void mixVoice(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int pairs) {
+static void mixVoiceScalar(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int pairs) {
     int32_t sample0 = voice->sample0, sample1 = voice->sample1;
     uint32_t frac = voice->frac;
     const uint32_t step = voice->step;
@@ -572,6 +577,64 @@ out:
     voice->gainNow = gainNow;
 }
 
+/* Codes 0 and 8 preserve predictor/index zero. The interpolation endpoints
+ * must also be zero before that content proof permits skipping any output. */
+static uint32_t silentSuffix(const uint8_t *data, uint32_t bytes) {
+    while (bytes > 0 && (data[bytes - 1] & 0x77) == 0) --bytes;
+    return bytes;
+}
+
+static bool advanceSilentVoice(const OfAudioSystem *ut, OfVoice *voice, int pairs) {
+    if (pairs <= 0 || pairs > OF_MIX_CHUNK_PAIRS || voice->streamSlot >= 0 || voice->loop ||
+        voice->sample0 != 0 || voice->sample1 != 0 || voice->adpcm.predictor != 0 ||
+        voice->adpcm.stepIndex != 0 || voice->step == 0 || voice->step > 8u * 65536u ||
+        voice->frac >= 9u * 65536u || voice->gainStepPerPair < 0 ||
+        voice->track < 0 || (uint32_t)voice->track >= ut->trackCount ||
+        !ut->cachedSilentFrom || !ut->cachedSounds || !voice->data ||
+        voice->data != ut->cachedSounds[voice->track]) return false;
+
+    const OfMusicTrack *track = &ut->tracks[voice->track];
+    uint32_t from = ut->cachedSilentFrom[voice->track];
+    if (from == UINT32_MAX || voice->bufferLen != trackBytes(track) ||
+        voice->bufferPos > voice->bufferLen || voice->bufferPos < from ||
+        voice->samplesDecoded > track->sampleCount ||
+        (voice->havePendingCode && (voice->bufferPos <= from ||
+            voice->pendingCode > 15 || (voice->pendingCode & 7) != 0))) return false;
+
+    /* The bounded chunk/step/phase keep these products in uint32. Decode is
+     * before each output, so the last output's phase increment is deferred. */
+    uint32_t consumed = (voice->frac + (uint32_t)(pairs - 1) * voice->step) >> 16;
+    uint32_t remaining = track->sampleCount - voice->samplesDecoded;
+    uint64_t available = (uint64_t)(voice->bufferLen - voice->bufferPos) * 2 + voice->havePendingCode;
+    if (consumed >= remaining || consumed > available) return false;
+
+    uint32_t codes = consumed;
+    if (voice->havePendingCode && codes > 0) {
+        --codes;
+        voice->havePendingCode = false;
+    }
+    if (codes > 0) {
+        voice->bufferPos += (codes + 1) / 2;
+        voice->pendingCode = voice->data[voice->bufferPos - 1] >> 4;
+        voice->havePendingCode = (codes & 1) != 0;
+    }
+    voice->samplesDecoded += consumed;
+    voice->frac += (uint32_t)pairs * voice->step - (consumed << 16);
+
+    int64_t delta = (int64_t)voice->gainTarget - voice->gainNow;
+    int64_t advance = (int64_t)voice->gainStepPerPair * pairs;
+    if (delta > 0) voice->gainNow += (int32_t)(advance < delta ? advance : delta);
+    else if (delta < 0) voice->gainNow -= (int32_t)(advance < -delta ? advance : -delta);
+    return true;
+}
+
+/* Return optimized voice-output pairs for diagnostics, without extra clocks. */
+static unsigned mixVoice(const OfAudioSystem *ut, OfVoice *voice, int32_t *mix, int pairs) {
+    if (advanceSilentVoice(ut, voice, pairs)) return (unsigned)pairs;
+    mixVoiceScalar(ut, voice, mix, pairs);
+    return 0;
+}
+
 /* Preconditions: snapshotPcm exists, queueCapacity > 0, pairs >= 0. */
 static void rememberAcceptedPcm(OfAudioSystem *ut, const int16_t *pcm, int pairs) {
     if (ut->snapshotWritten > UINT64_MAX - (uint64_t)pairs) {
@@ -603,7 +666,7 @@ static void mixAndWrite(OfAudioSystem *ut, int pairs) {
     int32_t master = (int32_t) (ut->masterGain * (float) OF_GAIN_ONE);
     const bool timed = ofPerfDetail; /* a clock read costs more than mixing a few samples */
     uint64_t mixStart = timed ? nowNanos() : 0;
-    uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0;
+    uint64_t voicesNanos = 0, writeNanos = 0, voicePairs = 0, silentPairs = 0;
     int allPairs = pairs;
 
     while (pairs > 0) {
@@ -615,7 +678,7 @@ static void mixAndWrite(OfAudioSystem *ut, int pairs) {
             for (int v = 0; v < OF_MAX_VOICES; v++) {
                 OfVoice *voice = &ut->voices[v];
                 if (voice->active && !voice->paused && !voiceSkipped(ut, voice)) {
-                    mixVoice(ut, voice, mix, chunk);
+                    silentPairs += mixVoice(ut, voice, mix, chunk);
                     voicePairs += (uint64_t) chunk;
                 }
             }
@@ -648,6 +711,7 @@ static void mixAndWrite(OfAudioSystem *ut, int pairs) {
     ofPerfAddLoad(OF_LOAD_MIX_WRITE, writeNanos);
     ofPerfAddLoad(OF_LOAD_MIX_PAIRS, (uint64_t) allPairs);
     ofPerfAddLoad(OF_LOAD_MIX_VOICE_PAIRS, voicePairs);
+    ofPerfAddLoad(OF_LOAD_MIX_SILENT_PAIRS, silentPairs);
 }
 
 /* Keeps the output queue topped up to the target. Does no file I/O, so it is
@@ -707,6 +771,7 @@ static void evictSounds(OfAudioSystem *ut, uint32_t needed) {
         if (victim < 0) return;
         free(ut->cachedSounds[victim]);
         ut->cachedSounds[victim] = NULL;
+        if (ut->cachedSilentFrom) ut->cachedSilentFrom[victim] = UINT32_MAX;
         ut->cachedBytes -= trackBytes(&ut->tracks[victim]);
     }
 }
@@ -729,6 +794,7 @@ static uint8_t *cachedSound(OfAudioSystem *ut, int32_t track) {
     }
     ofPerfAddLoad(OF_LOAD_SOUND, nowNanos() - start);
     ut->cachedSounds[track] = data;
+    if (ut->cachedSilentFrom) ut->cachedSilentFrom[track] = silentSuffix(data, bytes);
     ut->cachedBytes += bytes;
     return data;
 }
@@ -795,6 +861,7 @@ static void ofDestroy(AudioSystem *audio) {
     }
     free(ut->cachedSounds);
     free(ut->cachedLastUse);
+    free(ut->cachedSilentFrom);
     free(ut->tracks);
     free(ut->snapshotPcm);
     free(audio->groupGains);
@@ -1557,6 +1624,8 @@ void ofAudioApplySnapshot(AudioSystem *audio, void *ptr) {
     for (uint32_t i = 0; i < p->trackCount; i++) if (p->sounds[i]) {
         if (ut->cachedSounds[i]) { free(ut->cachedSounds[i]); ut->cachedBytes -= trackBytes(&ut->tracks[i]); }
         ut->cachedSounds[i] = p->sounds[i]; p->sounds[i] = NULL;
+        if (ut->cachedSilentFrom)
+            ut->cachedSilentFrom[i] = silentSuffix(ut->cachedSounds[i], trackBytes(&ut->tracks[i]));
         ut->cachedBytes += trackBytes(&ut->tracks[i]);
     }
     memcpy(ut->streamBuffers, p->streamBuffers, sizeof(ut->streamBuffers));

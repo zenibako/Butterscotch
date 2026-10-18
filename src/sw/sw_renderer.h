@@ -23,6 +23,17 @@ void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites
 // Add transparent-ink sprites and white HUD fonts to the configured asset set.
 void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sprites, size_t spriteCount,
                                       const char* const* fonts, size_t fontCount);
+// Exact, immutable white labels only: source <=64x16, sampled at 2:1.
+// The fingerprint is FNV-1a over little-endian RGB555 texels. Definitions must
+// outlive the renderer; mismatches keep the ordinary selected-UI sampler.
+typedef struct {
+    const char* spriteName;
+    uint16_t width, height;
+    uint32_t sourceHash;
+    uint8_t patchX, patchWidth;
+    uint8_t patchRows[8]; // optional <=8-pixel-wide replacement, MSB at patchWidth-1
+} SWHintedGlyphAsset;
+void SWRenderer_setHintedGlyphAssets(Renderer* renderer, const SWHintedGlyphAsset* assets, size_t count);
 void SWRenderer_setContrastEnabled(Renderer* renderer, bool enabled);
 
 #endif//_SW_RENDERER_H
