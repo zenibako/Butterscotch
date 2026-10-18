@@ -206,7 +206,7 @@ game's own menus, its dialogue, battles, and the intro, title and naming
 screens, and cutscenes. A battle state also carries the room the battle was entered from,
 which the game keeps as persistent, so finishing the battle returns there.
 The port's Select menu, unsupported runtime resources, live dynamic sprites, and a debug-paused runner
-produce an on-screen refusal. Select → Save states
+produce an on-screen refusal. Select → Debug → Save-state status
 checks the current scene's eligibility; the Pocket's controls perform the save
 or load. A refusal stays visible until a
 fresh game-button press, including after the Pocket menu closes. A snapshot that exceeds the
@@ -367,7 +367,7 @@ in `platform/of_bench.c`).
 with `--bench-sleep` (its own entry on save-state cards). It keeps progress in memory,
 leaving the game's save archive alone. Checkpoint A waits in the yard with
 saving allowed: sleep, wake, then press Start. The yard reloads into Toriel's
-real cutscene and waits at its dialogue. At checkpoint B, Select → Save states
+real cutscene and waits at its dialogue. At checkpoint B, Select → Debug → Save-state status
 should allow capture. Close Select, sleep again, and check that wake returns
 to B in the same dialogue. Repeat sleep/wake at B, then advance the dialogue
 to check that the car ride continues. The benchmark keeps running so
@@ -408,8 +408,9 @@ hardware gives a core no menu variables of its own.
 |---|---|
 | Resume | closes the menu |
 | Performance Mode | Speed or Accuracy, as L sets it |
-| Save states | shows whether the current scene is eligible, and displays a refusal reason when selected |
 | Debug | opens the rows below |
+| Save log | first row in Debug; writes the log to the spare save slot; leave through the Analogue menu to keep it |
+| Save-state status | shows whether the current scene is eligible, and displays a refusal reason when selected |
 | Audio mode | Normal, Disabled, Music only or Sound only, to see what sound costs. Music is what the game streams or keeps in a file of its own, and sound is the effects embedded in its data, however long either is. What is muted is not decoded, mixed or read from the card, and still runs its course so that the game is not left waiting for it. Something that was playing unheard is rough until it next starts. `--mute` in `ARGS=` starts with Disabled |
 | Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
 | Show log overlay | the last log lines over the game. The log is kept whether or not this is on, so it can be switched on after a hitch to read it |
@@ -417,7 +418,6 @@ hardware gives a core no menu variables of its own.
 | Enable debug buttons | the button chords below (debug mode) |
 | Next room, Previous room | goes there as the menu closes |
 | Clear interact | sets `global.interact` to 0, for when a cutscene has left the player stuck |
-| Save log | writes the log to the spare save slot; leave through the Analogue menu to keep it |
 
 With the debug buttons on (or after starting with `--debug` in the OS
 config's `ARGS=`, or `BS_DEBUG=1` on desktop):
