@@ -18,7 +18,7 @@ Successful cache loads derive metadata, eviction invalidates it, and snapshot ap
 
 In the observation reveal model the new counter reports 14,168 of 18,206 total voice pairs per frame bulk-advanced at 30 Hz, or 46,949 of 54,203 at 100 ms. These include all active voices and are work counts, not Pocket timing or frame-rate claims. The flashing-tile windows record no bulk pairs; this change does not address their separate workload.
 
-Private evidence is under `.superpowers/audio-silent-implementation-20261018/` and `.superpowers/audio-voice-discovery-20261018/production-validation/`; real game assets stay private. A physical Pocket Memory roundtrip and actual speed measurement remain required even though host restore tests pass.
+Private evidence is under `.superpowers/audio-silent-implementation-20261018/` and `.superpowers/audio-voice-discovery-20261018/production-validation/`; real game assets stay private. The subsequent [physical Pocket run](2026-10-18-silent-tail-pocket-results.md) measured observation reveal work falling from 100.131 to 63.219 ms/frame. A physical Memory roundtrip and sleep/wake check remain unverified despite passing host restore tests.
 
 ## Pocket candidate
 
@@ -30,4 +30,4 @@ SHA256: `7d70991da8b7941658747908cdf482ad5d215f62481d17b2467a36d08478afb5`.
 
 ZIP CRC and all 34 payload hashes pass readback. Compared with the previous writer/castle update, only the two ordinary game ELFs change; the 11 additional files are the new Tiles diagnostic and its launchers. Firmware, bitstream, loader, configs and sleep setting remain byte-identical. The matched runtime remains 902a8adc. Existing runtime timing/transfer limitations are recorded in the sidecar proof; no new FPGA or firmware build is claimed. No game assets or saves are included. Build inputs, payload hashes, installation instructions and test hashes accompany the ZIP.
 
-Extract at the SD root, merging directories and replacing included files. Test normal save/Quit/reopen, Memory capture/restore, and sleep/wake. For physical before/after data, run Deltarune Tiles 1–5 through PASS, Quit after each, and return `deltarune_tiles_1.sav`. The benchmark uses a separate diagnostic save namespace. A prior baseline diagnostic can be compared by build ID within the retained reports. This exact candidate has not been tested on a physical Pocket.
+Extract at the SD root, merging directories and replacing included files. Test normal save/Quit/reopen, Memory capture/restore, and sleep/wake. For physical before/after data, run Deltarune Tiles 1–5 through PASS, Quit after each, and return `deltarune_tiles_1.sav`. The benchmark uses a separate diagnostic save namespace. A prior baseline diagnostic can be compared by build ID within the retained reports. The candidate has since completed the linked physical benchmark; physical Memory restore and sleep/wake validation remain outstanding.

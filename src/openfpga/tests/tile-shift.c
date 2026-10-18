@@ -1,5 +1,8 @@
 /* Real asset bytecode is the oracle; no game bytecode is copied into the repo.
  * Instrument only this translation unit to count actual interpreter entries. */
+#ifdef NDEBUG
+#undef NDEBUG /* These executables must retain their behavioral checks. */
+#endif
 #include "../../vm.c"
 #include "of_native.h"
 #include "of_game.h"
@@ -166,8 +169,9 @@ static Outcome run(DataWin *dw, int code, int native, int scenario, GMLReal epsi
             const OfNativeScript *n = &ofGame.nativeScripts[i];
             if (strcmp(n->name, "gml_Script_tile_layer_shift"))
                 continue;
-            assert(!VM_setNativeScript(vm, n->name, n->length + (native == 2 ? 4 : 0), n->hash ^ (native == 3 ? 1 : 0),
-                                       n->native));
+            bool installed = VM_setNativeScript(vm, n->name, n->length + (native == 2 ? 4 : 0),
+                                                n->hash ^ (native == 3 ? 1 : 0), n->native);
+            assert(!installed);
         }
     }
     trace = 1469598103934665603ULL;
@@ -282,8 +286,9 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < ofGame.nativeScriptCount; i++)
         if (!strcmp(ofGame.nativeScripts[i].name, "gml_Script_tile_layer_shift")) {
             const OfNativeScript *n = &ofGame.nativeScripts[i];
-            assert(!VM_setNativeScript(vm, n->name, n->length + 4, n->hash, n->native));
-            assert(!VM_setNativeScript(vm, n->name, n->length, n->hash ^ 1, n->native));
+            bool wrongLength = VM_setNativeScript(vm, n->name, n->length + 4, n->hash, n->native);
+            bool wrongHash = VM_setNativeScript(vm, n->name, n->length, n->hash ^ 1, n->native);
+            assert(!wrongLength && !wrongHash);
             assert(vm->nativeScript == NULL);
             ++checks;
         }
