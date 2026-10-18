@@ -19,25 +19,26 @@ zero; the picture is stored rotated a quarter turn anticlockwise.
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
+# Original heavy glyphs on a 9x9 grid, with stepped outer corners.
 LETTERS = {
-    "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
-    "N": ["#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#"],
-    "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
-    "E": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
-    "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
-    "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
-    "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
-    "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
-    "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
-    "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
-    "C": [".####", "#....", "#....", "#....", "#....", "#....", ".####"],
-    "O": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
-    "H": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
-    "P": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
-    "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+    "B": [".#######.", "#########", "###...###", "########.", "########.", "###...###", "###...###", "#########", "########."],
+    "U": ["###...###"] * 7 + ["#########", ".#######."],
+    "T": ["#########"] * 3 + ["...###..."] * 6,
+    "E": ["#########"] * 2 + ["###......"] * 2 + ["########."] + ["###......"] * 2 + ["#########"] * 2,
+    # The solid bowl gives the gray heart a white surround, as in the reference.
+    "R": ["########.", "#########", "#########", "#########", "########.", "######...", "###.###..", "###..###.", "###...###"],
+    "S": [".########", "#########"] + ["###......"] * 2 + ["#########"] + ["......###"] * 2 + ["#########", "########."],
+    "C": [".########", "#########"] + ["###......"] * 5 + ["#########", ".########"],
+    "O": [".#######.", "#########"] + ["###...###"] * 5 + ["#########", ".#######."],
+    "H": ["###...###"] * 3 + ["#########"] * 3 + ["###...###"] * 3,
+    "P": ["########.", "#########", "###...###", "###...###", "#########", "########.", "###......", "###......", "###......"],
+    "K": ["###...###", "###..###.", "###.###..", "######...", "#####....", "######...", "###.###..", "###..###.", "###...###"],
 }
+
+WORDMARK_HEART = ["##.##", "#####", ".###.", "..#.."]
+HEART_GRAY = 160
 
 HEART = [
     "..##...##..",
@@ -53,36 +54,57 @@ HEART = [
 ]
 
 
-def stamp(image, rows, left, top, scale):
-    """Draws a bitmap of '#' cells in white, each cell scale x scale pixels."""
+def stamp(image, rows, left, top, scale, value=255):
+    """Draw a bitmap of '#' cells, each cell scale x scale pixels."""
     for y, row in enumerate(rows):
         for x, cell in enumerate(row):
             if cell != "#":
                 continue
             for dy in range(scale):
                 for dx in range(scale):
-                    image.putpixel((left + x * scale + dx, top + y * scale + dy), 255)
+                    image.putpixel((left + x * scale + dx, top + y * scale + dy), value)
 
 
 def word_width(word, scale):
-    return len(word) * 5 * scale + (len(word) - 1) * scale
+    return (len(word) * 10 - 1) * scale
 
 
-def draw_word(image, word, top, scale):
+def draw_word(image, word, top, scale, heart=False):
     left = (image.width - word_width(word, scale)) // 2
     for i, letter in enumerate(word):
-        stamp(image, LETTERS[letter], left + i * 6 * scale, top, scale)
+        letter_left = left + i * 10 * scale
+        stamp(image, LETTERS[letter], letter_left, top, scale)
+        if heart and letter == "R":
+            stamp(image, WORDMARK_HEART, letter_left + 3 * scale,
+                  top + scale, scale // 2, HEART_GRAY)
 
 
 def banner():
     image = Image.new("L", (521, 165), 0)
-    heart, big, small, gap = 4, 6, 4, 13
-    heart_w, heart_h = len(HEART[0]) * heart, len(HEART) * heart
-    top = (165 - (heart_h + gap + 7 * big + gap + 7 * small)) // 2
-    stamp(image, HEART, (521 - heart_w) // 2, top, heart)
-    draw_word(image, "BUTTERSCOTCH", top + heart_h + gap, big)
-    draw_word(image, "POCKET", top + heart_h + gap + 7 * big + gap, small)
-    return image
+    # Render large, add weight, then downsample while preserving square glyphs.
+    # The Pocket's luminance format preserves the intermediate gray pixels.
+    word = "BUTTERSCOTCH"
+    scale = 8
+    wordmark = Image.new("L", (word_width(word, scale), 9 * scale), 0)
+    draw_word(wordmark, word, 0, scale)
+    wordmark = wordmark.filter(ImageFilter.MaxFilter(3))
+    heart_scale = scale // 2
+    heart_left = (9 * scale - len(WORDMARK_HEART[0]) * heart_scale) // 2
+    heart_top = (5 * scale - len(WORDMARK_HEART) * heart_scale) // 2 + 2
+    stamp(wordmark, WORDMARK_HEART, word.index("R") * 10 * scale + heart_left,
+          heart_top, heart_scale, HEART_GRAY)
+    # Keep the 9x9 glyphs square when fitting the wordmark to the banner.
+    width = 500
+    height = round(wordmark.height * width / wordmark.width)
+    wordmark = wordmark.resize((width, height), Image.Resampling.LANCZOS)
+
+    small, gap = 2, 16
+    top = (image.height - (wordmark.height + gap + 9 * small)) // 2
+    image.paste(wordmark, ((image.width - wordmark.width) // 2, top))
+    draw_word(image, "POCKET", top + wordmark.height + gap, small)
+    # A subpixel reconstruction filter leaves visible gray coverage at edges,
+    # including grid-aligned strokes that resizing alone keeps nearly binary.
+    return image.filter(ImageFilter.GaussianBlur(0.65))
 
 
 def icon():
