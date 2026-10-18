@@ -1,4 +1,4 @@
-# Focused Pocket benchmark: observation text and Card Castle
+# Focused Pocket benchmark: observation text and flashing tiles
 
 This diagnostic extends the current writer/castle candidate. It measures the two
 reported Speed-mode slowdowns on the Pocket before choosing another optimization.
@@ -17,22 +17,24 @@ support remains installed; use fresh launches for these measurements.
 
 Launch these entries in order:
 
-1. **Deltarune Focus 1 Normal**
-2. **Deltarune Focus 2 No Render**
-3. **Deltarune Focus 3 No Audio**
-4. **Deltarune Focus 4 Core Only**
-5. **Deltarune Focus 5 Profile**
+1. **Deltarune Tiles 1 Normal**
+2. **Deltarune Tiles 2 No Render**
+3. **Deltarune Tiles 3 No Audio**
+4. **Deltarune Tiles 4 Core Only**
+5. **Deltarune Tiles 5 Profile**
 
 Each entry runs automatically from seed 7, enters the same battle, samples the
 initial encounter and later observation text while revealing and complete, then
-samples walking and standing at the outdoor castle entrance. Do not press buttons
+samples walking, a full hazard/reset cycle, and standing in the first flashing-tile
+checkerboard corridor (room 65, `room_field_checkers4`). Do not press buttons
 or change settings. The no-render entries may show a frozen screen until the
 report appears. Wait for **Focus PASS; log saved**, then **Quit through the Analogue
 menu after every entry**. This commits the log before the next launch.
 
-After all five, return `Saves/butterscotch/common/deltarune_focus_1.sav`. This single
+After all five, return `Saves/butterscotch/common/deltarune_tiles_1.sav`. This single
 file retains the five reports. If any entry reports FAIL or WRITE FAILED, send the
-log and identify that entry. Normal progress uses different save/log filenames;
+log and identify that entry. The earlier `Deltarune Focus` diagnostic and its log also remain separate.
+Normal progress uses different save/log filenames;
 the diagnostic also uses a volatile filesystem and starts without saved progress.
 It does not create persistent gameplay progress. Diagnostic Memories slots use
 separate names as well.
@@ -41,7 +43,10 @@ separate names as well.
 
 All modes use Speed rendering, uncapped execution and fixed input-frame windows.
 Each accepted sample verifies the expected room, battle objects, exact displayed
-sentence and writer position, or the castle player's movement. Missing scenes or
+sentence and writer position, or the corridor's player and tile-generator objects.
+The reset window retains moving and frozen frames and must contain both lit and
+dark tile phases, a white flash, and an observed return to x=340. The walking and
+standing windows require the corresponding movement state outside a white flash. Missing scenes or
 insufficient samples fail the run. This route measures the identified workloads;
 it does not replay the user's exact save or every possible battle sentence.
 

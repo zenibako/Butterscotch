@@ -1,5 +1,11 @@
 # Focused benchmark validation
 
+**Scene correction:** the user subsequently identified the pictured flashing-tile
+checkerboard corridor as the intended room. This historical build sampled the
+outdoor castle entrance instead. Its battle-text results remain applicable; its
+castle windows do not cover the intended slowdown. See the corrected
+[route instructions](2026-10-18-focused-pocket-benchmark.md).
+
 The diagnostic source is signed commit
 `4388a476ab538ff208bc6dc948b754868bc07216`. This is a measurement package;
 physical Pocket results and the next optimization remain pending.

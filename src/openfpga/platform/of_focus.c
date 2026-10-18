@@ -17,12 +17,13 @@
 #ifndef OF_FOCUS_BUILD_ID
 #define OF_FOCUS_BUILD_ID "unversioned"
 #endif
-#define WINDOWS 6
+#define WINDOWS 7
 #define NOTES 24
 /* sw_renderer.c keeps at most 192 descriptions per frame. Drain them all
  * before applying the smaller per-window summary, counting dropped calls. */
 #define FRAME_NOTES 192
-#define FINISH_FRAME 1225
+#define FINISH_FRAME 1355
+#define TILE_ROOM 65
 static const struct {
     const char *name;
     int first, last, minimum;
@@ -30,15 +31,16 @@ static const struct {
 } windows[WINDOWS] = {
     {"encounter-reveal",400,459,6,true}, {"encounter-full",465,494,20,false},
     {"observation-reveal",820,919,6,true}, {"observation-full",930,979,20,false},
-    {"castle-walk",1045,1114,60,false}, {"castle-still",1130,1219,80,false}
+    {"tiles-walk",1070,1139,60,false}, {"tiles-reset-cycle",1140,1239,90,false},
+    {"tiles-still",1250,1349,80,false}
 };
 static const char *const modes[] = {"normal","no-render","no-audio","core","profile"};
 static const OfJump jumps[] = {
     {29,-1,"darkzone=1,char[1]=2,char[2]=3,plot=60,interact=0"}, {30,52,NULL},
-    {999,-1,"darkzone=1,char[1]=2,char[2]=3,plot=165,interact=0"}, {1000,104,NULL}
+    {999,-1,"darkzone=1,char[1]=2,char[2]=3,plot=165,interact=0"}, {1000,TILE_ROOM,NULL}
 };
 static const char script[] = "100:R*300,500:Z,515:Z,530:Z,545:Z,560:Z,575:Z,590:Z,605:Z,620:Z,635:Z,650:Z,"
-    "665:Z,680:Z,695:Z,710:Z,725:Z,740:Z,755:Z,770:Z,785:Z,800:Z,1040:U*80";
+    "665:Z,680:Z,695:Z,710:Z,725:Z,740:Z,755:Z,770:Z,785:Z,800:Z,1040:D*10,1065:R*150";
 static int mode=-1, inputFrame, pending=-1;
 static uint64_t inputStart, presentStart;
 static OfPerfTotals frameTotals;
@@ -48,7 +50,9 @@ static ProfilerEntry *profiles[WINDOWS];
 static SWCallNote notes[WINDOWS][NOTES];
 static unsigned noteCount[WINDOWS], missed[WINDOWS];
 static int writerObject=-1, controllerObject=-1, playerObject=-1;
-static int32_t posVar, lengthVar, stringVar;
+static int32_t posVar, lengthVar, stringVar, whiteVar, activeVar;
+static int generatorObject=-1, tileObject=-1, previousWhite;
+static unsigned litFrames[WINDOWS], darkFrames[WINDOWS], flashFrames[WINDOWS], resets[WINDOWS];
 static bool initialized, previousPlayer;
 static float previousX, previousY;
 static char failure[112];
@@ -106,16 +110,19 @@ void ofFocusInput(Runner *r, int frame) {
     if (!initialized) {
         initialized=true;
         if (!r || r->dataWin->gen8.wadVersion!=17 || strcmp(r->dataWin->gen8.name,"DELTARUNE") ||
-            r->dataWin->room.count<=104 || strcmp(r->dataWin->room.rooms[52].name,"room_field2") ||
-            strcmp(r->dataWin->room.rooms[104].name,"room_forest_castlefront")) {
+            r->dataWin->room.count<=TILE_ROOM || strcmp(r->dataWin->room.rooms[52].name,"room_field2") ||
+            strcmp(r->dataWin->room.rooms[TILE_ROOM].name,"room_field_checkers4")) {
             fail("unsupported game/room identity"); return;
         }
         writerObject=object(r,"obj_writer"); controllerObject=object(r,"obj_battlecontroller");
         playerObject=object(r,"obj_mainchara");
-        if (writerObject<0 || controllerObject<0 || playerObject<0) fail("missing scene objects");
+        generatorObject=object(r,"obj_ob_gen"); tileObject=object(r,"obj_ob_checkertile");
+        if (writerObject<0 || controllerObject<0 || playerObject<0 || generatorObject<0 || tileObject<0) fail("missing scene objects");
         posVar=VM_getOrAllocateVarID(r->vmContext,"pos");
         lengthVar=VM_getOrAllocateVarID(r->vmContext,"length");
         stringVar=VM_getOrAllocateVarID(r->vmContext,"mystring");
+        whiteVar=VM_getOrAllocateVarID(r->vmContext,"whitecon");
+        activeVar=VM_getOrAllocateVarID(r->vmContext,"active");
     }
     /* These totals contain the last presented frame. Room-transition frames
      * may not present; frame IDs below are input IDs, never presentation IDs. */
@@ -124,14 +131,15 @@ void ofFocusInput(Runner *r, int frame) {
     if (mode==4) { swrCallNotes=true; swrCallNotesTake(NULL,0,NULL); }
     inputStart=nowNanos(); pending=-1;
 }
-static bool matches(Runner *r, int w, bool moving) {
+static bool matches(Runner *r, int w, bool moving, int white) {
     if (!ofPlatformSpeedMode() || ofAudioMode()!=(noAudio() ? OF_AUDIO_DISABLED : OF_AUDIO_NORMAL)) {
         fail("performance/audio mode changed"); return false;
     }
     if (w>=4) {
-        return r->currentRoomIndex==104 && instanceCount(r,controllerObject)==0 &&
+        return r->currentRoomIndex==TILE_ROOM && instanceCount(r,controllerObject)==0 &&
             instanceCount(r,writerObject)==0 && onlyInstance(r,playerObject)!=NULL &&
-            previousPlayer && moving==(w==4);
+            onlyInstance(r,generatorObject)!=NULL && instanceCount(r,tileObject)>0 &&
+            previousPlayer && white>=0 && (w==5 || (white==0 && moving==(w==4)));
     }
     if (r->currentRoomIndex!=52 || onlyInstance(r,controllerObject)==NULL) return false;
     Instance *writer=onlyInstance(r,writerObject);
@@ -144,6 +152,24 @@ static bool matches(Runner *r, int w, bool moving) {
         (length.type!=RVALUE_REAL && length.type!=RVALUE_INT32)) return false;
     GMLReal p=RValue_toReal(pos), n=RValue_toReal(length);
     return p>1 && ((p<n)==windows[w].reveal);
+}
+/* Observe the real hazard state without changing game variables or input. */
+static int tileState(Runner *r, bool *lit) {
+    Instance *generator=onlyInstance(r,generatorObject);
+    if (!generator) return -1;
+    RValue white=Instance_getSelfVar(generator,whiteVar);
+    if (white.type!=RVALUE_REAL && white.type!=RVALUE_INT32) return -1;
+    GMLReal state=RValue_toReal(white);
+    if (state!=0 && state!=1 && state!=2) return -1;
+    *lit=false;
+    for (ptrdiff_t i=0; i<arrlen(r->instancesByObject[tileObject]); ++i) {
+        Instance *tile=r->instancesByObject[tileObject][i];
+        if (!tile->active || tile->destroyed) continue;
+        RValue active=Instance_getSelfVar(tile,activeVar);
+        if (active.type!=RVALUE_REAL && active.type!=RVALUE_INT32) return -1;
+        if (RValue_toReal(active)==1) *lit=true;
+    }
+    return (int)state;
 }
 static void collectProfile(Runner *r, int w) {
     Profiler *profiler=r->vmContext->profiler;
@@ -167,15 +193,26 @@ static void collectProfile(Runner *r, int w) {
 void ofFocusPresent(Runner *r, bool skipped) {
     if (mode<0) return;
     ofPerfTakeTotals(&frameTotals);
-    Instance *player=r->currentRoomIndex==104 ? onlyInstance(r,playerObject) : NULL;
+    Instance *player=r->currentRoomIndex==TILE_ROOM ? onlyInstance(r,playerObject) : NULL;
+    bool lit=false;
+    int white=player ? tileState(r,&lit) : -1;
+    bool reset=player && previousPlayer && previousWhite==1 && white==2 &&
+        player->x>=336 && player->x<=344 && previousX-player->x>40;
     bool moving=player && previousPlayer && (player->x!=previousX || player->y!=previousY);
     for (int w=0; w<WINDOWS; ++w) if (inputFrame>=windows[w].first && inputFrame<=windows[w].last) {
-        if (matches(r,w,moving)) {
+        if (matches(r,w,moving,white)) {
             if (skipped!=noRender()) fail("unexpected rendered/skipped sample");
-            else pending=w;
+            else {
+                pending=w;
+                if (w>=4) {
+                    if (lit) ++litFrames[w]; else ++darkFrames[w];
+                    if (white>0) ++flashFrames[w];
+                    if (reset) ++resets[w];
+                }
+            }
         } else ++rejected[w];
     }
-    previousPlayer=player!=NULL;
+    previousPlayer=player!=NULL; previousWhite=white;
     if (player) { previousX=player->x; previousY=player->y; }
     if (mode==4 && pending>=0) collectProfile(r,pending);
     presentStart=nowNanos();
@@ -196,9 +233,12 @@ static void logReport(const char *report) {
     ofLogPrint("\n");
 }
 static void finish(void) {
+    if (!resets[5]) fail("no tile-triggered return in reset window");
+    if (!litFrames[5] || !darkFrames[5] || !flashFrames[5]) fail("missing tile/white-flash cycle");
     bool good=!failure[0];
     for (int w=0; w<WINDOWS; ++w) if (samples[w].count<(unsigned)windows[w].minimum) good=false;
     ofLogPrint("=== Focused Deltarune benchmark %s ===\n",modes[mode]);
+    ofLogPrint("route card-castle-tiles; room 65 room_field_checkers4\n");
     ofLogPrint("build %s; seed 7; Speed; uncapped; input-frame windows\n",OF_FOCUS_BUILD_ID);
 #ifndef OF_PC
     const struct of_capabilities *caps=of_get_caps();
@@ -215,6 +255,8 @@ static void finish(void) {
             micros((s->total-s->flip)/divisor),micros(ofFocusStatsPercentile(s,50)),
             micros(ofFocusStatsPercentile(s,95)),micros(ofFocusStatsPercentile(s,100)),
             micros(s->flip/divisor),micros(s->present/divisor));
+        if (w>=4) ofLogPrint("  tiles lit/dark/white-flash frames %u/%u/%u; verified returns %u\n",
+            litFrames[w],darkFrames[w],flashFrames[w],resets[w]);
         ofLogPrint("  blocks10 us:");
         for (unsigned i=0; i<n; i+=10) ofLogPrint(" %u",micros(ofFocusStatsBlockMean(s,i,10)));
         ofLogPrint("\n");
@@ -252,7 +294,7 @@ static void finish(void) {
     ofLogPrint("--- end of report ---\n");
     bool dumped=ofLogDump();
     ofLogPrint("Focus %s; log %s. Quit via Analogue menu.\n",good?"PASS":"FAIL",dumped?"saved":"WRITE FAILED");
-    ofLogPrint("Return Saves/butterscotch/common/deltarune_focus_1.sav\n");
+    ofLogPrint("Return Saves/butterscotch/common/deltarune_tiles_1.sav\n");
     mode=-1; swrCallNotes=false;
 #ifdef OF_PC
     if (!good || !dumped) exit(1);

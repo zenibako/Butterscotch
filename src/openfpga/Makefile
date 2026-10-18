@@ -116,8 +116,8 @@ ifeq ($(FOCUS_BENCH),1)
 ifneq ($(GAME),deltarune)
 $(error FOCUS_BENCH supports Deltarune Chapter 1 only)
 endif
-SAVE_SLOT_FILE = deltarune_focus_0.sav
-LOG_SLOT_FILE = deltarune_focus_1.sav
+SAVE_SLOT_FILE = deltarune_tiles_0.sav
+LOG_SLOT_FILE = deltarune_tiles_1.sav
 FOCUS_BUILD_ID ?= unversioned
 FOCUS_DEFS = -DOF_FOCUSED_BENCH -DOF_FOCUS_BUILD_ID='"$(FOCUS_BUILD_ID)"'
 endif
