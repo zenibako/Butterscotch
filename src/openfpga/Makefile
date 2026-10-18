@@ -93,7 +93,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
-       platform/of_strings.c platform/of_save_fs.c platform/of_native.c \
+       platform/of_strings.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
        platform/of_font.c platform/of_menu.c platform/of_state_requests.c \
        platform/of_snapshot_envelope.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
@@ -110,7 +110,19 @@ BS_INCLUDES = -Iplatform -I$(BS_SRC) -I$(BS_SRC)/sw -I$(BS_SRC)/image -I$(BS_SRC
 # interpreter hot path. The CPU's FPU is single-precision, so GML reals are
 # floats (same trade-off the PS2 port makes).
 # Override to test other games on desktop, e.g. `make test WADS="14 16"`.
-BS_DEFS = $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(APP)_0.sav"' -DOF_LOG_SLOT_FILE='"$(APP)_1.sav"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
+SAVE_SLOT_FILE = $(APP)_0.sav
+LOG_SLOT_FILE = $(APP)_1.sav
+ifeq ($(FOCUS_BENCH),1)
+ifneq ($(GAME),deltarune)
+$(error FOCUS_BENCH supports Deltarune Chapter 1 only)
+endif
+SAVE_SLOT_FILE = deltarune_focus_0.sav
+LOG_SLOT_FILE = deltarune_focus_1.sav
+FOCUS_BUILD_ID ?= unversioned
+FOCUS_DEFS = -DOF_FOCUSED_BENCH -DOF_FOCUS_BUILD_ID='"$(FOCUS_BUILD_ID)"'
+endif
+
+BS_DEFS = $(FOCUS_DEFS) $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(SAVE_SLOT_FILE)"' -DOF_LOG_SLOT_FILE='"$(LOG_SLOT_FILE)"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DPLATFORM_PACK_READ -DSW_TEXTURE_PACK_HOST='"music.bin"' -DENABLE_VM_GML_PROFILER \
           -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
@@ -405,6 +417,11 @@ layer-lookup-fixture: $(PC_OBJS)
 .PHONY: tile-shift-fixture
 tile-shift-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/tile-shift.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_shift_fixture
+
+# Asset-free same-frame wall/flip accounting and frame distribution checks.
+.PHONY: focus-stats-fixture
+focus-stats-fixture:
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/focus-stats.c platform/of_focus_stats.c $(PC_EXTRA_CFLAGS) -o $(PC_BIN)_focus_stats_fixture
 
 # Asset-free tile composition and copy-call regression oracle.
 .PHONY: tile-stripes-fixture
