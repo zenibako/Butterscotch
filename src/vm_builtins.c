@@ -2708,18 +2708,13 @@ static RValue builtin_chr(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t arg
 
 static RValue builtin_string_pos(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
     REQUIRE_ARGC_AT_LEAST("string_pos", 2, RValue_makeReal(0.0));
-    char* needle = RValue_toString(args[0], ctx->runner->dataWin);
-    char* haystack = RValue_toString(args[1], ctx->runner->dataWin);
-    char* found = strstr(haystack, needle);
-    if (found == nullptr) {
-        free(haystack);
-        free(needle);
-        return RValue_makeReal(0.0);
-    }
-    int32_t byteIndex = (int32_t) (found - haystack);
-    int32_t charIndex = TextUtils_utf8CodepointCount(haystack, byteIndex) + 1; // 1-based codepoint index
-    free(haystack);
-    free(needle);
+    BuiltinStringInput needle = builtinStringInput(args[0], ctx->runner->dataWin);
+    BuiltinStringInput haystack = builtinStringInput(args[1], ctx->runner->dataWin);
+    const char* found = strstr(haystack.text, needle.text);
+    int32_t charIndex = found == nullptr ? 0 :
+        TextUtils_utf8CodepointCount(haystack.text, (int32_t)(found - haystack.text)) + 1;
+    free(haystack.owned);
+    free(needle.owned);
     return RValue_makeReal((GMLReal) charIndex);
 }
 
