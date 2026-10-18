@@ -1,5 +1,8 @@
 /* Real game bytecode is the behavioral oracle. Instrument only this VM copy
  * to prove successful lookups avoid interpretation, independently of pixels. */
+#ifdef NDEBUG
+#undef NDEBUG /* These executables must retain their behavioral checks. */
+#endif
 #include "../../vm.c"
 #include "of_native.h"
 #include "of_game.h"
@@ -54,15 +57,19 @@ static Outcome run(int native, int scenario, GMLReal epsilon, RValue bind, bool 
         for (size_t i=0;i<ofGame.nativeScriptCount;++i) {
             const OfNativeScript *row=&ofGame.nativeScripts[i];
             if (strcmp(row->name,script)) continue;
-            assert(!VM_setNativeScript(vm,row->name,row->length+4,row->hash,row->native));
-            assert(!VM_setNativeScript(vm,row->name,row->length,row->hash^1,row->native));
+            bool wrongLength=VM_setNativeScript(vm,row->name,row->length+4,row->hash,row->native);
+            bool wrongHash=VM_setNativeScript(vm,row->name,row->length,row->hash^1,row->native);
+            assert(!wrongLength && !wrongHash);
             assert(vm->nativeScript[code]==f);
         }
         void *before=vm->currentArrayOwner;RValue unused=RValue_makeUndefined();
-        assert(!f(vm,NULL,0,&unused));assert(vm->currentArrayOwner==before);
-        RValue wrong=RValue_makeString("0");assert(!f(vm,&wrong,1,&unused));
+        bool accepted=f(vm,NULL,0,&unused);
+        assert(!accepted && vm->currentArrayOwner==before);
+        RValue wrong=RValue_makeString("0");accepted=f(vm,&wrong,1,&unused);
+        assert(!accepted);
         assert(vm->currentArrayOwner==before && unused.type==RVALUE_UNDEFINED);
-        RValue nan=RValue_makeReal(NAN);assert(!f(vm,&nan,1,&unused));
+        RValue nan=RValue_makeReal(NAN);accepted=f(vm,&nan,1,&unused);
+        assert(!accepted);
         assert(vm->currentArrayOwner==before && unused.type==RVALUE_UNDEFINED);
     }
     RValue local=RValue_makeString("caller"),outer=RValue_makeInt32(789);

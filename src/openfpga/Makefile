@@ -194,9 +194,11 @@ MISTER_ASSETS ?= $(wildcard $(G)data.win) $(GAME_PACKS)
 # Neither sdk.mk's rules nor the desktop ones track headers, and objects built
 # against an old struct layout link without complaint and then crash (the
 # device build did, twice). So a change to any header empties the object
-# directories this run builds into. (Before sdk.mk, which looks at what is
+# directories this run builds into. Focus mode and build identity also change
+# compiled code and save filenames, so they must invalidate the same objects.
+# (Before sdk.mk, which looks at what is
 # in them; PC_OBJ_DIR is only set this early when a sub-make passes it.)
-HEADER_SUM := $(shell { cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null; printf '%s' '$(STATE_GAME_ID) $(SAVESTATES) $(GAME) $(WADS)'; } | cksum | cut -d' ' -f1)
+HEADER_SUM := $(shell { cat $(BS_SRC)/*.h $(BS_SRC)/*/*.h platform/*.h 2>/dev/null; printf '%s' '$(STATE_GAME_ID) $(SAVESTATES) $(GAME) $(WADS) $(FOCUS_BENCH) $(FOCUS_BUILD_ID)'; } | cksum | cut -d' ' -f1)
 $(foreach d,$(OBJ_DIR) $(or $(PC_OBJ_DIR),$(ROOT)/.obj/$(APP)-pc),$(shell [ "$$(cat $(d)/.headers 2>/dev/null)" = "$(HEADER_SUM)" ] || { rm -rf $(d); mkdir -p $(d); echo $(HEADER_SUM) > $(d)/.headers; }))
 
 # Declare default target before sdk.mk's rules

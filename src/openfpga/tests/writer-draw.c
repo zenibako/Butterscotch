@@ -1,5 +1,8 @@
 /* Real game bytecode is the oracle for state, RNG and renderer command order.
  * Input scripts are deterministic test utilities; real input is covered by replays. */
+#ifdef NDEBUG
+#undef NDEBUG /* These executables must retain their behavioral checks. */
+#endif
 #include "../../vm.c"
 #include "of_native.h"
 #include "of_game.h"
@@ -113,7 +116,9 @@ static Outcome run(const char *text, int pos, int scenario, bool native) {
     VMNativeScript funcs[] = {key1,key2,key3,isDebug};
     for (int i = 0; i < 4; ++i) {
         uint32_t len; uint64_t hash = VM_codeHash(vm, scripts[i], &len);
-        assert(hash && VM_setNativeScript(vm, scripts[i], len, hash, funcs[i]));
+        assert(hash);
+        bool installed = VM_setNativeScript(vm, scripts[i], len, hash, funcs[i]);
+        assert(installed);
     }
     for (int i = 0; i < 9; ++i) {
         originals[i] = VM_findBuiltin(vm, builtins[i]); assert(originals[i]);
@@ -127,8 +132,9 @@ static Outcome run(const char *text, int pos, int scenario, bool native) {
         for (size_t i=0;i<ofGame.nativeCount;++i) {
             const OfNativeCode *entry=&ofGame.natives[i];
             if (strcmp(entry->name,writerName)) continue;
-            assert(!VM_setNativeCode(vm,entry->name,entry->length+4,entry->hash,entry->native));
-            assert(!VM_setNativeCode(vm,entry->name,entry->length,entry->hash^1,entry->native));
+            bool wrongLength = VM_setNativeCode(vm,entry->name,entry->length+4,entry->hash,entry->native);
+            bool wrongHash = VM_setNativeCode(vm,entry->name,entry->length,entry->hash^1,entry->native);
+            assert(!wrongLength && !wrongHash);
         }
     }
     if (scenario == 22) shdel(vm->builtinMap,"random");
@@ -146,7 +152,8 @@ static Outcome run(const char *text, int pos, int scenario, bool native) {
         uint32_t count = self->selfVars.count;
         uint64_t beforeSelf = stateHash(vm,self), beforeGlobal = stateHash(vm,global);
         uint16_t beforeMask = self->activeAlarmMask; void *owner = vm->currentArrayOwner;
-        assert(!vm->nativeCode[code](vm));
+        bool accepted = vm->nativeCode[code](vm);
+        assert(!accepted);
         assert(calls == 0 && writerEntries == 0 && self->selfVars.count == count);
         assert(stateHash(vm,self)==beforeSelf && stateHash(vm,global)==beforeGlobal);
         assert(self->activeAlarmMask==beforeMask && vm->currentArrayOwner==owner && color==0x123456);

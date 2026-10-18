@@ -10,16 +10,16 @@ Original room order and tile/generator bytecode establish the floor's active-til
 collision → white flash → return-to-x340 mechanism. A desktop probe using the
 actual battle-prefixed route verified this before selecting the final input.
 
-The corrected route moves down 10frames at1040, then right 150frames at1065.
-It measures walking1070–1139, the complete hazard/reset cycle1140–1239, and
-standing1250–1349. Frozen reset-animation frames are retained in the reset window.
+The corrected route moves down 10 frames at 1040, then right 150 frames at 1065.
+It measures walking 1070–1139, the complete hazard/reset cycle 1140–1239, and
+standing 1250–1349. Frozen reset-animation frames are retained in the reset window.
 Room identity, unique player/generator, live tiles, movement, tile phases, white
-flash, and a real whitecon1→2/backward displacement to x340 gate acceptance.
+flash, and a real whitecon 1→2/backward displacement to x340 gate acceptance.
 
 ## Verified
 
-- All five modes pass all seven windows. Each accepts70 walking,100 reset-cycle
-  and100 standing samples. Reset cycle:59 lit/41 dark frames,39 white-flash frames,
+- All five modes pass all seven windows. Each accepts 70 walking, 100 reset-cycle,
+  and 100 standing samples. Reset cycle: 59 lit/41 dark frames, 39 white-flash frames,
   and one verified return in each mode. These are functional host checks, not
   physical performance measurements.
 - Overriding the target with the old room 104 fails. Keeping room 65 but walking
@@ -29,7 +29,7 @@ flash, and a real whitecon1→2/backward displacement to x340 gate acceptance.
   archive is created. New slots use `deltarune_tiles_0.sav` through `_9.sav`.
 - All five unique complete reports survive through the shared new log file
   (17,631 bytes). Every one of seven Profile windows retains eight script entries
-  and a complete total. Normal/Profile match at54 raw-frame checkpoints.
+  and a complete total. Normal/Profile match at 54 raw-frame checkpoints.
 - Statistics fixture, packaging tests, lint and whitespace checks pass.
   Independent source and empirical reviews found no blocker. Full-game runs
   retain the pre-existing vendored stb_ds signed-shift UBSan diagnostic; they

@@ -93,7 +93,8 @@ make tile-motion-fixture  # builds the asset-free translated tile-cache regressi
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
-make collision-precise-fixture # checks precise pairs against scalar point sampling
+make collision-precise-fixture GAME=undertale WADS=16 # checks precise pairs against scalar sampling
+make collision-precise-fixture GAME=deltarune WADS=17 # checks the Chapter 1 configuration
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
