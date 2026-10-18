@@ -1,6 +1,6 @@
 # Butterscotch Pocket: Undertale and Deltarune on openfpgaOS (Analogue Pocket / MiSTer)
 
-<p align="center"><img src="docs/banner.png" alt="Butterscotch Pocket menu banner: a pixel heart above the words BUTTERSCOTCH POCKET" width="521"></p>
+<p align="center"><img src="docs/banner.png" alt="Butterscotch Pocket menu banner: bold white pixel lettering with a gray heart inside the R of BUTTERSCOTCH, above POCKET" width="521"></p>
 
 <!--
 Introduction: one short paragraph, then the game-data notice.
