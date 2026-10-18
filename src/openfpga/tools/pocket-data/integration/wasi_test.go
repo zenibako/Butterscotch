@@ -127,9 +127,15 @@ func compareAssets(t *testing.T, a, b string) {
 
 // Execute the unit suite as wasm32 as well: native tests cannot detect int-width regressions.
 func TestWASIUnitSuite(t *testing.T) {
+	for _, pkg := range []string{"prep", "third_party/vorbis"} {
+		t.Run(pkg, func(t *testing.T) { testWASIUnitSuite(t, pkg) })
+	}
+}
+
+func testWASIUnitSuite(t *testing.T, pkg string) {
 	root := t.TempDir()
-	binary := filepath.Join(root, "prep.test.wasm")
-	cmd := exec.Command("go", "test", "-c", "-o", binary, "./prep")
+	binary := filepath.Join(root, "unit.test.wasm")
+	cmd := exec.Command("go", "test", "-C", pkg, "-c", "-o", binary)
 	cmd.Dir = ".."
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=wasip1", "GOARCH=wasm")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -146,12 +152,12 @@ func TestWASIUnitSuite(t *testing.T) {
 	if _, err = wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		t.Fatal(err)
 	}
-	packageDir, err := filepath.Abs("../prep")
+	packageDir, err := filepath.Abs(filepath.Join("..", pkg))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	conf := wazero.NewModuleConfig().WithArgs("prep.test", "-test.v").WithFSConfig(wazero.NewFSConfig().WithReadOnlyDirMount(packageDir, "/").WithDirMount(root, "/tmp")).WithEnv("TMPDIR", "/tmp").WithStdout(&log).WithStderr(&log).WithRandSource(rand.Reader).WithSysWalltime().WithSysNanotime()
+	conf := wazero.NewModuleConfig().WithArgs("unit.test", "-test.v").WithFSConfig(wazero.NewFSConfig().WithReadOnlyDirMount(packageDir, "/").WithDirMount(root, "/tmp")).WithEnv("TMPDIR", "/tmp").WithStdout(&log).WithStderr(&log).WithRandSource(rand.Reader).WithSysWalltime().WithSysNanotime()
 	if _, err = rt.InstantiateWithConfig(ctx, code, conf); err != nil {
 		t.Fatalf("WASI unit suite: %v\n%s", err, &log)
 	}
