@@ -28,19 +28,19 @@ class FocusedPackageTest(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(len(archive.namelist()), 11)
                 self.assertEqual(len(set(archive.namelist())), 11)
-                self.assertEqual(archive.read('Assets/butterscotch/common/deltarune_focus.elf'), elf.read_bytes())
+                self.assertEqual(archive.read('Assets/butterscotch/common/deltarune_tiles.elf'), elf.read_bytes())
                 self.assertFalse(any(n.endswith(('.sav', '.win', '.bin', '.ofsf')) for n in archive.namelist()))
                 base = {s['id']: s['filename'] for s in json.loads(original)['instance']['data_slots']}
                 for number, (mode, label) in enumerate(mkfocus.MODES, 1):
-                    name = f'Assets/butterscotch/zenibako.Butterscotch/Deltarune Focus {number} {label}.json'
+                    name = f'Assets/butterscotch/zenibako.Butterscotch/Deltarune Tiles {number} {label}.json'
                     slots = {s['id']: s['filename'] for s in json.loads(archive.read(name))['instance']['data_slots']}
-                    self.assertEqual(slots[3], 'deltarune_focus.elf')
+                    self.assertEqual(slots[3], 'deltarune_tiles.elf')
                     for slot in [1, 4, 5, 6, 7]:
                         self.assertEqual(slots[slot], base[slot])
                     for slot in range(10, 20):
-                        self.assertEqual(slots[slot], f'deltarune_focus_{slot-10}.sav')
+                        self.assertEqual(slots[slot], f'deltarune_tiles_{slot-10}.sav')
                     ini = archive.read('Assets/butterscotch/common/' + slots[2]).decode()
-                    self.assertEqual(ini, f'[os]\nELF=deltarune_focus.elf\nARGS=--focus-{mode}\nVARIANT=os25\n')
+                    self.assertEqual(ini, f'[os]\nELF=deltarune_tiles.elf\nARGS=--focus-{mode}\nVARIANT=os25\n')
             self.assertEqual(template.read_bytes(), original)
 
     def test_reject_non_elf_before_writing_zip(self):

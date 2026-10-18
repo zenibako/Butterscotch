@@ -16,21 +16,21 @@ def package(elf: Path, template: Path, output: Path):
     if not payload.startswith(b'\x7fELF'):
         raise ValueError('diagnostic input must be an ELF')
     instance = json.loads(template.read_text())
-    entries = {'Assets/butterscotch/common/deltarune_focus.elf': payload}
+    entries = {'Assets/butterscotch/common/deltarune_tiles.elf': payload}
     for number, (mode, label) in enumerate(MODES, 1):
-        ini = 'deltarune_focus_' + mode.replace('-', '_') + '.ini'
+        ini = 'deltarune_tiles_' + mode.replace('-', '_') + '.ini'
         entries['Assets/butterscotch/common/' + ini] = (
-            f'[os]\nELF=deltarune_focus.elf\nARGS=--focus-{mode}\nVARIANT=os25\n').encode()
+            f'[os]\nELF=deltarune_tiles.elf\nARGS=--focus-{mode}\nVARIANT=os25\n').encode()
         item = copy.deepcopy(instance)
         slots = item['instance']['data_slots']
         for slot in slots:
             if slot['id'] == 2:
                 slot['filename'] = ini
             elif slot['id'] == 3:
-                slot['filename'] = 'deltarune_focus.elf'
+                slot['filename'] = 'deltarune_tiles.elf'
             elif 10 <= slot['id'] <= 19:
-                slot['filename'] = f"deltarune_focus_{slot['id']-10}.sav"
-        entries[f'Assets/butterscotch/zenibako.Butterscotch/Deltarune Focus {number} {label}.json'] = (
+                slot['filename'] = f"deltarune_tiles_{slot['id']-10}.sav"
+        entries[f'Assets/butterscotch/zenibako.Butterscotch/Deltarune Tiles {number} {label}.json'] = (
             json.dumps(item, indent=4) + '\n').encode()
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
