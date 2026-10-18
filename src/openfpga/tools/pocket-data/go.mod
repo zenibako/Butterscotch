@@ -21,3 +21,5 @@ require (
 )
 
 replace github.com/jfreymuth/vorbis => ./third_party/vorbis
+
+replace github.com/jfreymuth/oggvorbis => ./third_party/oggvorbis

@@ -82,6 +82,8 @@ jobs:
         run: go test ./integration -run TestExtismPlugin -v
       - name: Test patched Vorbis decoder
         run: go test -C third_party/vorbis ./...
+      - name: Check patched Ogg page reader
+        run: go vet -C third_party/oggvorbis ./...
       - name: Cross-build standalone tools
         shell: bash
         env:

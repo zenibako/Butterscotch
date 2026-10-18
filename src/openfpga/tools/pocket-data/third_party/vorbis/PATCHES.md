@@ -32,7 +32,12 @@ return an error without hanging or allocating from unchecked counts. Patches:
 - Floor0 rejects zero order/rate/map size and amplitude widths over 32, and its
   application loop explicitly stops at the output boundary.
 
-Ordinary valid decoding math is unchanged. The prep tests compare a synthetic
+- IMDCT products and codebook lookup products explicitly round to float32
+  before additions, preventing ARM64 compiler FMA contraction. This gives
+  native and wasm32 the same arithmetic; a synthetic deterministic IMDCT
+  checksum regression fixes the portable result.
+
+Ordinary valid decoding uses the same algorithm with explicit float32 rounding. The prep tests compare a synthetic
 Vorbis fixture to the existing stb_vorbis/C packer; the complete pack remains
 byte-identical after these patches. Malformed entropy tails are rejected rather
 than concealed by implicit zero padding.

@@ -121,3 +121,49 @@ func TestImagePNG16PreservesStraightChannels(t *testing.T) {
 		t.Fatalf("got %v want straight %v", p, want)
 	}
 }
+
+// TXTR image extents include alignment bytes after the bzip2 stream.
+func TestImageCompressedQOIAlignment(t *testing.T) {
+	stream, err := hex.DecodeString("425a6839314159265359c8537b72000005d784f1004000400000100120a00080400000a000220693464f4100000300e96c4f7d7f272b45dc914e14243214dedc80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, newer := range []bool{false, true} {
+		for _, padding := range []int{0, 1, 2, 73, 127} {
+			header := 8
+			if newer {
+				header = 12
+			}
+			blob := make([]byte, header)
+			copy(blob, "2zoq")
+			binary.LittleEndian.PutUint16(blob[4:], 2)
+			binary.LittleEndian.PutUint16(blob[6:], 1)
+			if newer {
+				binary.LittleEndian.PutUint32(blob[8:], 18)
+			}
+			blob = append(blob, stream...)
+			blob = append(blob, make([]byte, padding)...)
+			p, w, h, err := decodeTextureImage(blob, newer)
+			if err != nil {
+				t.Errorf("newer=%v padding=%d: %v", newer, padding, err)
+				continue
+			}
+			if w != 2 || h != 1 || !bytes.Equal(p, []byte{200, 32, 90, 127, 200, 32, 90, 127}) {
+				t.Fatalf("decoded %v %dx%d", p, w, h)
+			}
+			for removed := 1; removed <= 12; removed++ {
+				truncated := append(append([]byte(nil), blob[:header+len(stream)-removed]...), make([]byte, padding)...)
+				if _, _, _, err := decodeTextureImage(truncated, newer); err == nil {
+					t.Fatalf("accepted stream missing %d bytes with %d padding", removed, padding)
+				}
+			}
+			for _, corruptAt := range []int{10, len(stream) - 2} {
+				corrupt := append([]byte(nil), blob...)
+				corrupt[header+corruptAt] ^= 1
+				if _, _, _, err := decodeTextureImage(corrupt, newer); err == nil {
+					t.Fatalf("accepted corrupt stream at %d with %d padding", corruptAt, padding)
+				}
+			}
+		}
+	}
+}

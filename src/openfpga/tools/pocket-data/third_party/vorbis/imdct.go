@@ -29,6 +29,8 @@ func generateIMDCTLookup(n int, l *imdctLookup) {
 }
 
 // "inverse modified discrete cosine transform"
+// Explicit product conversions force float32 rounding before addition. Go may
+// otherwise fuse these operations on ARM64, unlike wasm32, changing PCM bytes.
 func imdct(t *imdctLookup, in, out []float32) {
 	n := len(in) * 2
 
@@ -43,14 +45,14 @@ func imdct(t *imdctLookup, in, out []float32) {
 		a3 := t.A[n4-2*j-2]
 		a4 := t.A[n2-4-4*j]
 		a5 := t.A[n2-3-4*j]
-		v0 := (-in[4*j+3])*a0 + (-in[4*j+1])*a1
-		v1 := (-in[4*j+3])*a1 - (-in[4*j+1])*a0
-		v2 := (in[n2-4*j-4])*a2 + (in[n2-4*j-2])*a3
-		v3 := (in[n2-4*j-4])*a3 - (in[n2-4*j-2])*a2
+		v0 := float32((-in[4*j+3])*a0) + float32((-in[4*j+1])*a1)
+		v1 := float32((-in[4*j+3])*a1) - float32((-in[4*j+1])*a0)
+		v2 := float32((in[n2-4*j-4])*a2) + float32((in[n2-4*j-2])*a3)
+		v3 := float32((in[n2-4*j-4])*a3) - float32((in[n2-4*j-2])*a2)
 		out[n4+2*j+1] = v3 + v1
 		out[n4+2*j] = v2 + v0
-		out[2*j+1] = (v3-v1)*a4 - (v2-v0)*a5
-		out[2*j] = (v2-v0)*a4 + (v3-v1)*a5
+		out[2*j+1] = float32((v3-v1)*a4) - float32((v2-v0)*a5)
+		out[2*j] = float32((v2-v0)*a4) + float32((v3-v1)*a5)
 	}
 	ld := int(ilog(n) - 1)
 	for l := 0; l < ld-3; l++ {
@@ -70,8 +72,8 @@ func imdct(t *imdctLookup, in, out []float32) {
 				v2, v3 := out[i2], out[i3]
 				out[i0] = v0 + v2
 				out[i1] = v1 + v3
-				out[i2] = (v0-v2)*a0 - (v1-v3)*a1
-				out[i3] = (v1-v3)*a0 + (v0-v2)*a1
+				out[i2] = float32((v0-v2)*a0) - float32((v1-v3)*a1)
+				out[i3] = float32((v1-v3)*a0) + float32((v0-v2)*a1)
 				i0 -= 2 * k0
 				i1 -= 2 * k0
 				i2 -= 2 * k0
@@ -103,10 +105,10 @@ func imdct(t *imdctLookup, in, out []float32) {
 		v2, v3 := in[i2], in[i3]
 		c0 := t.C[i0]
 		c1 := t.C[i1]
-		out[i0] = (v0 + v2 + c1*(v0-v2) + c0*(v1+v3)) / 2
-		out[i2] = (v0 + v2 - c1*(v0-v2) - c0*(v1+v3)) / 2
-		out[i1] = (v1 - v3 + c1*(v1+v3) - c0*(v0-v2)) / 2
-		out[i3] = (-v1 + v3 + c1*(v1+v3) - c0*(v0-v2)) / 2
+		out[i0] = (v0 + v2 + float32(c1*(v0-v2)) + float32(c0*(v1+v3))) / 2
+		out[i2] = (v0 + v2 - float32(c1*(v0-v2)) - float32(c0*(v1+v3))) / 2
+		out[i1] = (v1 - v3 + float32(c1*(v1+v3)) - float32(c0*(v0-v2))) / 2
+		out[i3] = (-v1 + v3 + float32(c1*(v1+v3)) - float32(c0*(v0-v2))) / 2
 		i0 += 2
 		i1 += 2
 		i2 -= 2
@@ -117,8 +119,8 @@ func imdct(t *imdctLookup, in, out []float32) {
 		b1 := t.B[2*k+1]
 		v0 := out[2*k]
 		v1 := out[2*k+1]
-		in[k] = v0*b0 + v1*b1
-		in[n2-1-k] = v0*b1 - v1*b0
+		in[k] = float32(v0*b0) + float32(v1*b1)
+		in[n2-1-k] = float32(v0*b1) - float32(v1*b0)
 	}
 	for i := 0; i < n4; i++ {
 		out[i] = in[i+n4]

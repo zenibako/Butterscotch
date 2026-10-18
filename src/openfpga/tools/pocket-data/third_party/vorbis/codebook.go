@@ -89,7 +89,7 @@ func (c *codebook) ReadFrom(r *bitReader) error {
 			indexDivisor := 1
 			for i := 0; i < int(c.dimensions); i++ {
 				multiplicandOffset := (entry / indexDivisor) % len(multiplicands)
-				c.values[index+i] = float32(multiplicands[multiplicandOffset])*deltaValue + minimumValue + last
+				c.values[index+i] = float32(float32(multiplicands[multiplicandOffset])*deltaValue) + minimumValue + last
 				if sequenceP {
 					last = c.values[index+i]
 				}
@@ -98,7 +98,7 @@ func (c *codebook) ReadFrom(r *bitReader) error {
 		} else if lookupType == 2 {
 			last := float32(0)
 			for i := 0; i < int(c.dimensions); i++ {
-				c.values[index+i] = float32(multiplicands[index+i])*deltaValue + minimumValue + last
+				c.values[index+i] = float32(float32(multiplicands[index+i])*deltaValue) + minimumValue + last
 				if sequenceP {
 					last = c.values[index+i]
 				}

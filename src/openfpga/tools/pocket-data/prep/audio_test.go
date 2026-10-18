@@ -259,3 +259,166 @@ func TestAudioEmptyHuffmanTerminates(t *testing.T) {
 		t.Fatal("decodeAudio hangs on empty Huffman table")
 	}
 }
+
+func TestAudioVorbisGranuleBeyondDecodedSamples(t *testing.T) {
+	// An Ogg granule is a PCM end position, not necessarily the number of
+	// frames returned. Reproduce a 128-frame positive offset using our tone;
+	// the C/stb reference returns 5120 frames for this complete packet set.
+	b, err := os.ReadFile("testdata/audio/sine.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := 0
+	for p := 0; p < len(b); {
+		last = p
+		n := int(b[p+26])
+		size := 27 + n
+		for _, segment := range b[p+27 : p+27+n] {
+			size += int(segment)
+		}
+		p += size
+	}
+	setGranule := func(granule uint64) {
+		binary.LittleEndian.PutUint64(b[last+6:], granule)
+		clear(b[last+22 : last+26])
+		var crc uint32
+		for _, v := range b[last:] {
+			crc ^= uint32(v) << 24
+			for i := 0; i < 8; i++ {
+				if crc&0x80000000 != 0 {
+					crc = crc<<1 ^ 0x04c11db7
+				} else {
+					crc <<= 1
+				}
+			}
+		}
+		binary.LittleEndian.PutUint32(b[last+22:], crc)
+	}
+	setGranule(5120 + 128)
+	pcm, ch, rate, err := decodeAudio(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch != 2 || rate != 44100 || len(pcm) != 5120*2 {
+		t.Fatalf("Vorbis shape %d %d %d", ch, rate, len(pcm))
+	}
+	for _, n := range []int{last, len(b) - 1} {
+		if _, _, _, err := decodeAudio(b[:n]); err == nil {
+			t.Fatalf("accepted truncated offset stream at %d", n)
+		}
+	}
+	b[len(b)-1] ^= 1
+	if _, _, _, err := decodeAudio(b); err == nil {
+		t.Fatal("accepted corrupt offset stream checksum")
+	}
+	b[len(b)-1] ^= 1
+	setGranule(maxAudioSamples/2 + 1)
+	if _, _, _, err := decodeAudio(b); err == nil {
+		t.Fatal("accepted excessive granule")
+	}
+}
+
+func TestAudioResamplingRoundsWindowStartBeforeEnd(t *testing.T) {
+	// Force a half-integer output at 44.1 -> 32 kHz. Fusing i*ratio+ratio
+	// moves the end boundary across that tie and disagrees with the C oracle.
+	pcm := make([]int16, 9118*2)
+	pcm[9116*2], pcm[9116*2+1] = -3673, -3674
+	pcm[9117*2], pcm[9117*2+1] = -3012, -3012
+	mono, err := monoAudio(pcm, 2, 44100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mono[6615] != -3350 {
+		t.Fatalf("resampled boundary = %d, want C reference -3350", mono[6615])
+	}
+}
+
+func TestAudioVorbisEndUsesPreviousPagePosition(t *testing.T) {
+	b, err := os.ReadFile("testdata/audio/sine.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Split the synthetic tone's six audio packets into two pages. The
+	// earlier page position is 128 frames ahead of its decoded sample count,
+	// reproducing page positions that occur at Vorbis window transitions.
+	p := 0
+	for b[p+5]&4 == 0 {
+		n := int(b[p+26])
+		size := 27 + n
+		for _, segment := range b[p+27 : p+27+n] {
+			size += int(segment)
+		}
+		p += size
+	}
+	n := int(b[p+26])
+	body := p + 27 + n
+	var packets [][]byte
+	var packet []byte
+	for _, segment := range b[p+27 : p+27+n] {
+		packet = append(packet, b[body:body+int(segment)]...)
+		body += int(segment)
+		if segment < 255 {
+			packets = append(packets, packet)
+			packet = nil
+		}
+	}
+	if len(packets) != 6 {
+		t.Fatalf("synthetic packet count = %d", len(packets))
+	}
+	page := func(packets [][]byte, seq uint32, flag byte, granule uint64) []byte {
+		out := make([]byte, 27)
+		copy(out, b[p:p+27])
+		out[5] = flag
+		binary.LittleEndian.PutUint64(out[6:], granule)
+		binary.LittleEndian.PutUint32(out[18:], seq)
+		clear(out[22:26])
+		for _, packet := range packets {
+			length := len(packet)
+			for length >= 255 {
+				out = append(out, 255)
+				length -= 255
+			}
+			out = append(out, byte(length))
+		}
+		out[26] = byte(len(out) - 27)
+		for _, packet := range packets {
+			out = append(out, packet...)
+		}
+		var crc uint32
+		for _, v := range out {
+			crc ^= uint32(v) << 24
+			for i := 0; i < 8; i++ {
+				if crc&0x80000000 != 0 {
+					crc = crc<<1 ^ 0x04c11db7
+				} else {
+					crc <<= 1
+				}
+			}
+		}
+		binary.LittleEndian.PutUint32(out[22:], crc)
+		return out
+	}
+	for _, tc := range []struct {
+		name            string
+		split           int
+		previous, final uint64
+		frames          int
+	}{
+		{"partial-final-packet", 5, 4096 + 128, 5120, 4992},
+		{"discard-exceeds-final-packet", 4, 3072 + 2304, 6144, 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := append([]byte(nil), b[:p]...)
+			stream = append(stream, page(packets[:tc.split], 2, 0, tc.previous)...)
+			stream = append(stream, page(packets[tc.split:], 3, 4, tc.final)...)
+			pcm, ch, rate, err := decodeAudio(stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Both expected lengths were emitted by the unchanged C/stb decoder.
+			if len(pcm) != tc.frames*2 || ch != 2 || rate != 44100 {
+				t.Fatalf("Vorbis shape %d %d %d, want %d 2 44100", len(pcm), ch, rate, tc.frames*2)
+			}
+		})
+	}
+}
