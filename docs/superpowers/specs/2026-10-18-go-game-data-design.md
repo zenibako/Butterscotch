@@ -14,10 +14,12 @@ requires bounded decoding and preserving original game assets. The existing
 
 ## Architecture
 
-Create one Go module at `src/openfpga/tools/pocket-data`. Package `prep` owns
+Use Go 1.25 or newer (the pinned WASI test runtime requires it). Create one Go module at `src/openfpga/tools/pocket-data`. Package `prep` owns
 bounded FORM parsing, discovery, conversion, validation and staged output.
 No subprocesses, cgo, Python runtime or platform converter binaries are used.
-The native CLI and WASI CLI call the same library. A separate Extism adapter
+The native CLI and standard-Go WASI CLI call the same library. The plugin uses
+TinyGo 0.43.0 with Binaryen 133: actual host tests exposed standard Go's repeated
+cwd prefixing for relative WASI preopens; TinyGo handles both mount orders. A separate Extism adapter
 implements Pocket Sync's Choice/Text/Exit protocol using that library after
 conversion has passed native/WASI integration checks.
 

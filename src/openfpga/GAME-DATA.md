@@ -1,7 +1,7 @@
 # Add your own game files
 
 Butterscotch Pocket includes the core and game programs. You supply the game
-data from your own computer installation. The preparation script converts its
+data from your own computer installation. The preparation tool converts its
 textures and audio and writes a new folder ready to copy to your SD card.
 It does not download games, change your original installation or write saves.
 
@@ -27,10 +27,10 @@ preparation steps below for either installation method. The game-data
 preparation bundle is a separate computer-side tool; extract it on your
 computer, not on the SD card. Do not drag that tools archive into Pocket Sync.
 
-Use Python 3.9 or newer. The preparation bundle must include the native
-`mktexpack` and `mkmusic` converters for your computer. The script detects macOS,
-Windows or Linux and x86_64 or arm64, and selects `bin/<platform>-<architecture>/`.
-It reports a missing or unsupported converter bundle before creating output.
+Download the preparation bundle for your computer: macOS, Windows or Linux,
+on x86_64 or arm64. It contains a standalone `prepare-data` executable
+(`prepare-data.exe` on Windows). Python, a C compiler and the openfpgaOS SDK
+are not required. The same Go conversion library also runs in WASM.
 
 ## 2. Select your installed game
 
@@ -51,7 +51,7 @@ Deltarune needs all of these original files:
 - `lang/lang_en.json` in the chapter folder.
 - Chapter music and the shared `mus` folder's `.ogg` files.
 
-The script gathers the chapter's referenced music and includes its language
+The tool gathers the chapter's referenced music and includes its language
 and additional sound data in the generated audio pack. You do not need to
 rename or manually copy those extra files to the SD card.
 
@@ -63,26 +63,26 @@ paths with your own. Keep paths containing spaces inside quotes.
 macOS or Linux:
 
 ```sh
-python3 prepare_game.py --game undertale --source "/path/to/UNDERTALE.app" --output "prepared-undertale"
-python3 prepare_game.py --game deltarune --source "/path/to/DELTARUNE.app" --output "prepared-deltarune"
+./prepare-data --game undertale --source "/path/to/UNDERTALE.app" --output "prepared-undertale"
+./prepare-data --game deltarune --source "/path/to/DELTARUNE.app" --output "prepared-deltarune"
 ```
 
 Windows, in PowerShell:
 
 ```powershell
-py -3 prepare_game.py --game undertale --source "C:\Games\UNDERTALE" --output "prepared-undertale"
-py -3 prepare_game.py --game deltarune --source "C:\Games\DELTARUNE" --output "prepared-deltarune"
+.\prepare-data.exe --game undertale --source "C:\Games\UNDERTALE" --output "prepared-undertale"
+.\prepare-data.exe --game deltarune --source "C:\Games\DELTARUNE" --output "prepared-deltarune"
 ```
 
 Run only the command for the game you want to install. Choose an output folder
 that does not already exist and is outside the original game installation.
 If preparation fails, fix the reported missing or invalid file and rerun it.
 A failed conversion does not publish a partial output folder. To prepare again,
-choose a new output folder; the script does not overwrite an existing folder.
+choose a new output folder; the tool does not overwrite an existing folder.
 
 ## 4. Install the prepared data
 
-After the script says `Ready`, choose either method:
+After the tool says `Ready`, choose either method:
 
 - **Pocket Sync:** In the prepared output folder, compress the **Assets**
   folder into a ZIP using your computer's file manager. Drag this new ZIP onto
@@ -118,7 +118,7 @@ Select only a game whose data you installed. Your progress is under
 folder. Keep your original games and generated data private.
 
 Pocket Sync installs the core and copies prepared files; it does not run the
-Python converters or obtain your purchased game data. Installing an updated
+converters or obtain your purchased game data. Installing an updated
 core does not convert a different game version. If a release asks you to
 prepare the data again, repeat steps 2–4 with a new output folder.
 
@@ -127,26 +127,67 @@ describe connecting a card and importing archives. Butterscotch's catalog
 listing must point to the **core ZIP**, keeping the computer-side tools and
 private game-data archives separate.
 
-## Building the converters from source
+## Pocket Sync plugin
 
-This section is for developers preparing bundles or testing the script.
-Release users use the included binaries and do not need a C compiler or the
-openfpgaOS SDK.
+The optional plugin uses the same conversion library. It reads only files
+accessible through Pocket Sync's SD-card mount; entering an arbitrary computer
+path does not grant it access to that folder.
 
-From `src/openfpga/tools` in the full source checkout:
+1. Install the core, then stage your own complete installation under
+   `/Butterscotch-input/undertale/` or `/Butterscotch-input/deltarune/` on the card.
+   Keep the installation's folder structure and music files together.
+2. Run the Butterscotch game-data plugin in Pocket Sync, select the game,
+   and follow its preparation confirmation.
+3. On success, merge the **Assets** folder from
+   `/Butterscotch-prepared/<game>/` into the card root. Use the ZIP import method
+   above if preferred. The plugin prepares a separate folder and does not replace
+   your installed game files or saves.
+
+The prepared output folder must not already exist. Move a previous prepared
+folder elsewhere before another conversion. Keep staged originals and prepared
+data private. The plugin does not download commercial files.
+
+Plugin distribution requires separate `plugin.wasm` and `plugin.json` release
+assets. Those assets are not the core ZIP; availability in Pocket Sync depends
+on publishing a release. Local builds and automated host tests do not establish
+live Pocket Sync or Pocket compatibility.
+
+## Building from source
+
+From `src/openfpga/tools/pocket-data`, with Go 1.25 or newer:
 
 ```sh
-python3 prepare_game.py --build-tools
+go test ./...
+go build -trimpath -o prepare-data ./cmd/prepare-data
 ```
 
-On Windows use `py -3` and a GCC-compatible MinGW compiler available on `PATH`.
-On macOS/Linux use the host C compiler (`cc`), or set `CC`. The tools are built
-from the repository's vendored sources without the FPGA toolchain, SDK, Docker
-or downloaded game files. Output is `src/openfpga/out/data-tools/<host>/`.
-Use `--tools-dir` to select another directory containing the two converters.
+Windows users can choose `-o prepare-data.exe`. To cross-compile, set `GOOS`
+and `GOARCH` for the intended host and `CGO_ENABLED=0`. No C toolchain is used.
 
-A preparation bundle places `prepare_game.py`, these instructions, and
-`bin/<host>/mktexpack` and `mkmusic` together (`.exe` on Windows). The native
-build workflow tests the real conversion tools using synthetic PNG/PCM game
-fixtures before retaining platform artifacts. These tests do not replace
-compatibility tests with the user's own complete game on Pocket.
+WASI CLI (run in a WASI host with the input/output directories mounted):
+
+```sh
+GOOS=wasip1 GOARCH=wasm go build -trimpath -o prepare-data.wasm ./cmd/prepare-data
+```
+
+Pocket Sync / Extism plugin, using TinyGo 0.43.0 and Binaryen 133:
+
+```sh
+tinygo build -p 2 -trimpath -target wasip1 -buildmode=c-shared -o plugin.wasm ./cmd/pocket-plugin
+```
+
+Use TinyGo for the plugin: standard Go's WASI filesystem handling does not work
+reliably with Pocket Sync's relative preopen names. The CLI WASM uses standard Go.
+Place `plugin.json` beside the plugin WASM. `go test ./...` executes native and
+WASI conversions against synthetic fixtures, compares their game files, and
+runs plugin exports in an Extism host when `tinygo` is on PATH (or set `TINYGO`
+to its executable). Set `REQUIRE_PLUGIN_TESTS=1` to fail instead of skipping when
+TinyGo is missing. Run `go test -C third_party/vorbis ./...` for the patched
+decoder's own regressions. When Python and a host C compiler are available, it also compares the existing C converters as an independent oracle.
+The old `prepare_game.py`, `mktexpack.c` and `mkmusic.c` remain developer references;
+they are not dependencies of the Go executable or plugin.
+
+The Vorbis decoder is pure Go. The generated synthetic Vorbis fixture matches
+the old decoder in current checks; this does not prove byte-identical decoding
+for every commercial track. Full-game compatibility and resource use still need
+on-device tests with the user's own supported game files.
