@@ -120,7 +120,7 @@ Use the matching runtime/card from the build skill. **Deltarune Sleep Test**
 
 1. At A, outside the cutscene, close Select and sleep/wake. Confirm A resumes.
 2. Press Start to enter the real Toriel yard cutscene at B. Check Select →
-   Save states permits capture, then close Select.
+   Debug → Save-state status permits capture, then close Select.
 3. Sleep/wake at B twice consecutively. Each wake should return to the same
    dialogue rather than A. Record the capture and received payload IDs.
 4. Advance dialogue after waking; continue through the car ride and into

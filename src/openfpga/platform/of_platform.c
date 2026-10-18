@@ -924,20 +924,6 @@ static bool menuAudio(int direction) {
     return false;
 }
 
-static const OfMenuRow g_debugRows[] = {
-    { "Audio mode",                menuAudioValue,       menuAudio,        NULL },
-    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes,   NULL },
-    { "Show log overlay",          menuLogValue,         menuLog,          NULL },
-    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes,  NULL },
-    { "Enable debug buttons",      menuDebugValue,       menuDebug,        NULL },
-    { "Next room",                 NULL,                 menuNextRoom,     NULL },
-    { "Previous room",             NULL,                 menuPreviousRoom, NULL },
-    { "Clear interact",            NULL,                 menuUnstick,      NULL },
-    { "Save log",                  NULL,                 menuSaveLog,      NULL },
-};
-
-static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
-
 static const char *menuSnapshotValue(void) {
     return ofSavestateReason(g_runner) ? "Unavailable" : "Ready in game";
 }
@@ -947,10 +933,25 @@ static bool menuSnapshotReason(int direction) {
     showNotice(why ? why : "Use Pocket controls to save");
     return true;
 }
+
+static const OfMenuRow g_debugRows[] = {
+    { "Save log",                  NULL,                 menuSaveLog,      NULL },
+    { "Save-state status",         menuSnapshotValue,    menuSnapshotReason, NULL },
+    { "Audio mode",                menuAudioValue,       menuAudio,        NULL },
+    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes,   NULL },
+    { "Show log overlay",          menuLogValue,         menuLog,          NULL },
+    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes,  NULL },
+    { "Enable debug buttons",      menuDebugValue,       menuDebug,        NULL },
+    { "Next room",                 NULL,                 menuNextRoom,     NULL },
+    { "Previous room",             NULL,                 menuPreviousRoom, NULL },
+    { "Clear interact",            NULL,                 menuUnstick,      NULL },
+};
+
+static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
+
 static const OfMenuRow g_menuRows[] = {
     { "Resume",                    NULL,                 menuResume,       NULL },
     { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
-    { "Save states",              menuSnapshotValue,    menuSnapshotReason, NULL },
     { "Debug",                     NULL,                 NULL,             &g_debugPage },
 };
 
