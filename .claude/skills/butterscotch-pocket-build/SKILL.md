@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-build
-description: Use when building, packaging or deploying the Butterscotch Analogue Pocket port, preparing Undertale and Deltarune update ZIPs, staging dependencies or save-state runtimes, or handling the port's build and CI review feedback.
+description: Use when building, packaging or deploying the Butterscotch Analogue Pocket port, preparing Undertale and Deltarune update ZIPs, staging dependencies or save-state runtimes, committing Pocket changes, or handling the port's build and CI review feedback.
 argument-hint: "[checkout: path or host:path with game data + toolchain] [card: SD mount path, and which machine]"
 ---
 
@@ -87,6 +87,11 @@ The key also tracks `STATE_GAME_ID`, `SAVESTATES`, `GAME`, `WADS`,
 `FOCUS_BENCH` and `FOCUS_BUILD_ID` for native and PC objects. It is not a
 complete compiler/flag fingerprint: use a fresh named `ROOT` when changing
 other definitions, compiler, SDK or layout. Preserve existing build evidence.
+The `save-states`/`native-saves` convenience target hardcodes its recursive
+`ROOT`; passing a fresh `ROOT` to that target does not isolate its builds.
+Use the explicit per-game `SAVESTATES=1 ... all` workflow in
+[Native save-state builds](references/native-save-state-builds.md) for a fresh
+release root, and keep that root through packaging and copy verification.
 For a production release, explicitly select `FOCUS_BENCH=0`; build diagnostic
 ELFs separately with an identifying `FOCUS_BUILD_ID`. A build-ID string alone
 does not prove which ELF was packaged. The shared-root transition regression is
