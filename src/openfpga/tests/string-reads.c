@@ -250,6 +250,50 @@ static void testTraversalWork(VMContext *ctx) {
     expectString(&result, "");
 }
 
+/* A read-only search must borrow both existing strings, preserve codepoint
+ * indexing, and convert nonstrings without taking ownership of caller data. */
+static void testStringPosition(VMContext *ctx) {
+    static const struct { const char *needle, *text; int want; } cases[] = {
+        {"ABC", "ABCABC", 1}, {"BC", "ABCABC", 2}, {"Z", "ABC", 0},
+        {"", "ABC", 1}, {"", "", 1}, {"A", "", 0},
+        {NULL, "ABC", 1}, {"A", NULL, 0}, {NULL, NULL, 1},
+        {"Z", "A\xc3\xa9Z", 3}, {"\xc3\xa9", "A\xc3\xa9Z", 2},
+        {"Q", "\xf0\x9f\x98\x80Q", 2},
+        {"Z", "\x80\x81Z", 1}, {"A", "A\0B", 1}, {"B", "A\0B", 0},
+    };
+    for (unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
+        for (int owned=0;owned<2;++owned) {
+            RValue args[] = {owned ? ownedInput(cases[i].needle) : RValue_makeString(cases[i].needle),
+                             owned ? ownedInput(cases[i].text) : RValue_makeString(cases[i].text)};
+            const char *needle=args[0].string, *text=args[1].string;
+            RValue result=call(ctx,"string_pos",args,2,0);
+            expectOrdinal(&result,cases[i].want);
+            assert(args[0].string==needle && args[1].string==text);
+            if (needle) assert(!strcmp(needle,cases[i].needle));
+            if (text) assert(!strcmp(text,cases[i].text));
+            RValue_free(&args[0]);RValue_free(&args[1]);
+        }
+    }
+    RValue alias=ownedInput("same string"), args[]={alias,alias};
+    RValue result=call(ctx,"string_pos",args,2,0);
+    expectOrdinal(&result,1);RValue_free(&alias);
+    RValue convert[][2] = {
+        {RValue_makeInt32(42),RValue_makeString("1420")},
+        {RValue_makeString("2"),RValue_makeInt32(42)},
+        {RValue_makeInt32(42),RValue_makeInt32(1420)},
+        {RValue_makeBool(true),RValue_makeString("010")},
+        {RValue_makeUndefined(),RValue_makeString("is undefined")},
+    };
+    const int want[]={2,2,2,2,4};
+    for (unsigned i=0;i<sizeof(want)/sizeof(want[0]);++i) {
+        result=call(ctx,"string_pos",convert[i],2,i==2 ? 2 : 1);
+        expectOrdinal(&result,want[i]);
+    }
+    for (int count=0;count<2;++count) {
+        result=call(ctx,"string_pos",NULL,count,0);expectOrdinal(&result,0);
+    }
+}
+
 int main(int argc, char **argv) {
     DataWin data = {0};
     Runner runner = {0};
@@ -276,6 +320,7 @@ int main(int argc, char **argv) {
     testAllocationProbes(&ctx);
     testByteSequences(&ctx);
     testTraversalWork(&ctx);
+    testStringPosition(&ctx);
     shfree(ctx.builtinMap);
     printf("WAD %u: %u behavior/ownership checks, %u allocation failures, %u work failures (%s)\n",
            (unsigned)data.gen8.wadVersion, checked, allocationFailures, workFailures,
