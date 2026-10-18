@@ -11,7 +11,7 @@ import (
 func printMsg(uint64) uint64
 
 func progress(message string) {
-	memory := pdk.AllocateString(message)
+	memory := pdk.AllocateString(message + "\n")
 	defer memory.Free()
 	printMsg(memory.Offset())
 }

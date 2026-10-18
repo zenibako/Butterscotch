@@ -180,7 +180,11 @@ func decodeVorbis(blob []byte) (pcm []int16, channels, sampleRate int, err error
 			return nil, 0, 0, io.ErrNoProgress
 		}
 	}
-	if len(out) == 0 || len(out)%ch != 0 || int64(len(out)/ch) != r.Length() {
+	// Ogg granules are end positions and may include a positive starting
+	// offset. They need not equal the number of decoded frames (including
+	// streams accepted by stb_vorbis). Complete framing/EOS and codec errors
+	// above detect truncation; do not manufacture samples to fill that offset.
+	if len(out) == 0 || len(out)%ch != 0 {
 		return nil, 0, 0, fmt.Errorf("incomplete Vorbis samples")
 	}
 	return out, ch, rate, nil
@@ -198,7 +202,9 @@ func monoAudio(pcm []int16, channels, rate int) ([]int16, error) {
 	}
 	out := make([]int16, count)
 	for i := range out {
-		start := float64(i) * ratio
+		// Preserve the C reference's rounded window start before adding
+		// ratio. An explicit conversion prevents Go from fusing both steps.
+		start := float64(float64(i) * ratio)
 		end := start + ratio
 		sum, weight := 0.0, 0.0
 		if ratio > 1 {
@@ -211,7 +217,7 @@ func monoAudio(pcm []int16, channels, rate int) ([]int16, error) {
 				for c := 0; c < channels; c++ {
 					s += float64(pcm[f*channels+c])
 				}
-				sum += (s / float64(channels)) * w
+				sum += float64((s / float64(channels)) * w)
 				weight += w
 			}
 		} else {
@@ -226,7 +232,7 @@ func monoAudio(pcm []int16, channels, rate int) ([]int16, error) {
 				s0 += float64(pcm[f0*channels+c])
 				s1 += float64(pcm[f1*channels+c])
 			}
-			sum = (s0*(1-t) + s1*t) / float64(channels)
+			sum = (float64(s0*(1-t)) + float64(s1*t)) / float64(channels)
 			weight = 1
 		}
 		v := 0.0

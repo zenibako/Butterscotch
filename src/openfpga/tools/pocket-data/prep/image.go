@@ -42,7 +42,7 @@ func decodeTextureImage(blob []byte, newer bool) ([]byte, int, int, error) {
 			return nil, 0, 0, err
 		}
 		limit := int64(12 + w*h*5)
-		raw, err := io.ReadAll(io.LimitReader(bzip2.NewReader(bytes.NewReader(blob[header:])), limit+1))
+		raw, err := decodeTextureBzip2(blob[header:], limit)
 		if err != nil {
 			return nil, 0, 0, fmt.Errorf("QOI bzip2: %w", err)
 		}
@@ -89,6 +89,37 @@ func decodeTextureImage(blob []byte, newer bool) ([]byte, int, int, error) {
 	}
 	return raw, cfg.Width, cfg.Height, nil
 }
+
+// decodeTextureBzip2 validates the complete stream, including both CRCs. TXTR
+// blob extents can include alignment padding, whereas Go's reader expects any
+// following bytes to begin another bzip2 stream. Its io.ByteReader input avoids
+// read-ahead, so an invalid continuation consumes only one or two padding bytes.
+// Retry those exact boundaries and require clean EOF; never suppress the initial
+// error merely because enough QOI pixels were produced (that skips CRC checks).
+func decodeTextureBzip2(data []byte, limit int64) ([]byte, error) {
+	source := bytes.NewReader(data)
+	raw, err := io.ReadAll(io.LimitReader(bzip2.NewReader(source), limit+1))
+	if err == nil {
+		return raw, nil
+	}
+	consumed := len(data) - source.Len()
+	for _, trim := range []int{2, 1} {
+		if trim > consumed {
+			continue
+		}
+		end := consumed - trim
+		// Only TXTR's zero alignment padding warrants this fallback.
+		if len(bytes.Trim(data[end:], "\x00")) != 0 {
+			continue
+		}
+		retry, retryErr := io.ReadAll(io.LimitReader(bzip2.NewReader(bytes.NewReader(data[:end])), limit+1))
+		if retryErr == nil && int64(len(retry)) <= limit {
+			return retry, nil
+		}
+	}
+	return nil, err
+}
+
 func decodeTextureQOI(data []byte) ([]byte, int, int, error) {
 	bad := func() ([]byte, int, int, error) { return nil, 0, 0, fmt.Errorf("malformed custom QOI") }
 	if len(data) < 12 || string(data[:4]) != "fioq" {
