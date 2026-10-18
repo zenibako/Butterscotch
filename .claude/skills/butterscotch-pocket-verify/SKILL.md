@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-verify
-description: Verify changes to the Butterscotch Pocket port (Undertale and Deltarune) on the desktop build before the user spends an SD-card trip on them. Use this for any change to the renderer, loader, audio, saves, input or platform layer in src/openfpga — to check frames are pixel-identical, reproduce a scene the user describes, drive the game to a specific point with scripted input, capture audio, or produce a screenshot to show the user. Use it even when the change "obviously" can't affect output; a card trip costs the user several minutes and a desktop check costs seconds.
+description: Use when validating Butterscotch Pocket renderer, VM, native-script, string, audio, save-state or platform changes; reproducing game scenes; comparing pixels and PCM; testing restore chains; or interpreting supplied device logs before a Pocket test.
 ---
 
 # Verifying on the desktop build
@@ -22,6 +22,10 @@ For Memories, sleep/wake, cutscene captures, or an attached device log, read
 [Save-state verification](references/save-states.md). It covers fresh-process
 comparisons, scene-policy checks, repeat wakes, and matching saved payloads to
 received payloads. Ordinary screenshot comparisons do not exercise restoration.
+
+For native-script, string, audio-tail or build-cache optimizations, also read
+[optimization checks](references/optimization-checks.md). It maps the targeted
+fixtures and distinguishes deterministic output evidence from desktop timing.
 
 Desktop binaries open `data.win` in the current directory, so run them from
 `src/openfpga/games/<game>/` (`scripts/bs-frames.sh -g <game>` does this for you).
@@ -151,10 +155,11 @@ BS_RUN_DIR="$record_dir" \
    leaving nothing behind that a later frame needs).
 5. Report exactly which frames you compared.
 
-For audio, compare a new `BS_AUDIO_DUMP` against an earlier one. Captures
-can start a few dozen samples apart, so search for the shift that makes
-them match rather than expecting byte equality. The user's ears are the
-real test; save a WAV into `undertale-pocket/screenshots/` and send it.
+For audio, `BS_AUDIO_DUMP` supports listening and inspection, but its wall-clock
+sample demand does not establish deterministic PCM identity. Offset alignment
+alone cannot correct unequal demand. Use deterministic decoder/mixer tests or
+a separately validated fixed-clock capture for exact comparisons. Save a WAV
+for listening when useful, and report device listening separately.
 
 ## Lint and sanitizers
 

@@ -4,6 +4,8 @@ Use this for a card with the Pocket's native Memories and power-button
 sleep/wake. Read `src/openfpga/README.md`'s save-state section first. The SDK
 and runtime must implement the same save-state API; a successful link against
 new headers does not prove that an older `os.bin` services requests.
+Use the README's current minimum runtime revision and staging provenance rules;
+the historical pair below is not evidence of current normal-save fixes.
 
 ## Stage a matching SDK and runtime
 
@@ -26,12 +28,14 @@ From the checkout, after sourcing the parent workspace's `env.sh` on macOS:
 
 ```bash
 make -C src/openfpga SHELL=/opt/homebrew/bin/bash \
-  SDK_ROOT=/absolute/path/to/staged-sdk save-states
+  SDK_ROOT=/absolute/path/to/staged-sdk FOCUS_BENCH=0 save-states
 ```
 
 Packaging requires Bash 4+; the example uses Homebrew Bash rather than macOS
 `/bin/bash`. Set the appropriate Bash path on other hosts. The target builds
 Undertale and also Deltarune when its local game assets exist.
+When both games were requested, verify both assets exist before building and
+both new production ELFs exist afterwards; an Undertale-only success is incomplete.
 
 - Card tree: `src/openfpga/out/native-saves/build/pocket/butterscotch/`.
 - App ELFs: `src/openfpga/out/native-saves/.obj/<game>/app.elf`.
@@ -90,6 +94,16 @@ A small update ZIP may contain just the changed ELFs and benchmark entries
 when the user already has the verified runtime and game assets. State that
 dependency explicitly. Neither a full card nor an update should package the
 user's progress saves; don't silently replace assets or runtime binaries.
+
+Build the update inventory from the intended release changes, including an
+updated logo and its platform/core metadata when requested. Distinguish both
+production ELFs from any separately built diagnostic ELF. Verify every included
+payload against its staged source, including the logo; inspect launch entries
+and slot filenames so a focused binary cannot replace a normal game entry.
+Record dependencies on unchanged installed runtime files with their hashes.
+Preserve Memories/sleep metadata and include runtime changes as a matched set
+when needed. Do not infer a bootloader/bitstream exception from a past release:
+an authorized exception applies only to its stated compatible build and evidence.
 
 Before handoff, use the verify skill's save-state reference for desktop
 restore comparisons and the physical-device checklist. No harness substitutes

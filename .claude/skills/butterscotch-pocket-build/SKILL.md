@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-build
-description: Build, package and deploy the Butterscotch port for the Analogue Pocket (Undertale and Deltarune on openfpgaOS) in this repo. Use this whenever the task involves building src/openfpga, running make here, producing the SD card tree, copying to the Pocket's SD card (from the build machine or another one), regenerating textures.bin or music.bin, the v0.9 comparison cores, or committing work in this repo — even if the user only says "rebuild it", "copy it" or "is it ready to copy?".
+description: Use when building, packaging or deploying the Butterscotch Analogue Pocket port, preparing Undertale and Deltarune update ZIPs, staging dependencies or save-state runtimes, or handling the port's build and CI review feedback.
 argument-hint: "[checkout: path or host:path with game data + toolchain] [card: SD mount path, and which machine]"
 ---
 
@@ -8,9 +8,9 @@ argument-hint: "[checkout: path or host:path with game data + toolchain] [card: 
 
 ## Inputs
 
-This skill names no machines. Take these from the arguments; if one is
-missing and the task needs it, ask the user once for it and use what they
-say for the rest of the session, rather than guessing from earlier sessions:
+This skill names no machines. Use paths and host choices already established
+in the session or supplied handoff. Ask once only for required information
+that cannot be established from that evidence:
 
 - **checkout**: where the working checkout, the game data and the Pocket
   toolchain are. A local path, or `host:path` when it is on another machine
@@ -65,23 +65,32 @@ make -C src/openfpga                # RISC-V ELF + packs + SD tree (v0.7 core on
 make -C src/openfpga compare        # the above + Benchmark entries + v0.9 cores
 ```
 
-`env.sh` matters: it puts GNU sed on the PATH (the SDK scripts use GNU-only
-`sed -i`) and sets `USE_SDK_CONTAINER=0` so the build uses Homebrew's
-`riscv64-elf-gcc` instead of the SDK's Docker image, which cannot be built
-here because Docker's keychain access fails in non-interactive sessions.
+Before importing dependency images or building, check free space on the host
+and output volume. If containers will be used, also check Docker's actual
+backing filesystem and available capacity, and VM memory. Archives on an
+external disk do not move Docker's backing store.
+Inspect existing containers, projects and local changes before proposing cleanup
+or VM changes; do not prune images or relocate/restart the VM without permission.
+Read a supplied dependency manifest and verify its checksums before using it.
+
+`env.sh` supplies GNU sed (the SDK uses GNU-only `sed -i`) and normally selects
+Homebrew's `riscv64-elf-gcc` with `USE_SDK_CONTAINER=0`. Inspect its actual settings
+and the staged runtime's requirements; a previous Docker/keychain failure does
+not establish that containers are unavailable now. Record the compiler actually
+used rather than assuming host and container builds are equivalent.
 
 A change to any header under `src/`, `src/*/` or `platform/` empties the
 object directories a run builds into (the Makefile keeps a checksum of the
 headers in each one's `.headers`), so objects are never left built against an
-old struct layout: that links without complaint and crashes on the device,
-which happened twice before the check existed. Flag changes are still not
-tracked. After changing `-D` flags, remove the affected objects first
-(`<game>` is `undertale` or `deltarune`):
-
-```bash
-rm -rf src/openfpga/out/.obj/<game>-pc                              # desktop
-rm -rf src/openfpga/out/.obj/<game> src/openfpga/out/.obj/<game>-v09   # device
-```
+old struct layout: that links without complaint and crashes on the device.
+The key also tracks `STATE_GAME_ID`, `SAVESTATES`, `GAME`, `WADS`,
+`FOCUS_BENCH` and `FOCUS_BUILD_ID` for native and PC objects. It is not a
+complete compiler/flag fingerprint: use a fresh named `ROOT` when changing
+other definitions, compiler, SDK or layout. Preserve existing build evidence.
+For a production release, explicitly select `FOCUS_BENCH=0`; build diagnostic
+ELFs separately with an identifying `FOCUS_BUILD_ID`. A build-ID string alone
+does not prove which ELF was packaged. The shared-root transition regression is
+`tests/test_focus_build_cache.py`, run by `tools/test-snapshots.sh`.
 
 The device build prints many warnings and notes; they are expected and not
 a problem. What matters is that there are no errors. `make compare` output
@@ -233,7 +242,9 @@ One repository holds both the runner and the port:
 git add -A src .claude && git ... commit      # a branch off main
 ```
 
-- Conventional commit messages; commits are GPG signed automatically.
+- Conventional commit messages; commits must be GPG signed. In Codex, run
+  `gpg-warm-agent` before the first commit and verify the resulting signature.
+  If warming fails, ask for an unlock rather than disabling signing.
 - `main` is upstream `main` merged with upstream's draft PR #429
   (`sw-renderer`) and this port. Bring upstream in with a merge, not a
   rebase: the branch is published.
@@ -257,10 +268,9 @@ git add -A src .claude && git ... commit      # a branch off main
   merged while follow-up fixes were being pushed to it, and they never
   reached `main`. After a merge, put further work on a new branch from
   `main`.
-- Write the full PR description (before and after, the evidence, what is
-  not yet checked on the device), but start it with an empty `## Summary`
-  section for the user to fill in, then a `---` divider, so their copy and
-  the agent's stay apart.
+- Follow the user's authorship instructions. When they reserve PR descriptions
+  or comments, offer a brief outline and use their supplied wording; do not
+  publish agent-written prose or automatic summary comments.
 - CI runs about 33 checks: desktop gcc and clang, C++98, MSVC 4.0,
   GCC 2.95, Web, the consoles and the Analogue Pocket build. They build
   with warnings as errors, so the usual failures are:
@@ -272,12 +282,9 @@ git add -A src .claude && git ... commit      # a branch off main
     one variable declared twice;
   - a platform hook the Web build does not provide.
   Reproduce with the desktop CMake build and `-DWERROR=ON` before pushing.
-- CodeRabbit reviews PRs and is rate-limited. Check each finding against
-  the code and fix confirmed problems. Post thread replies only when authorized.
-- A PR creation tool may display a form without creating a PR. Confirm a real
-  PR URL and head SHA before reporting success. If the user reports that no form
-  appeared, use an available authorized CLI route with the prepared description
-  in `--body-file`, check for an existing PR first, then verify the result.
+- For review fixes, thread resolution, CI monitoring and an authorized merge,
+  read [PR follow-through](references/pr-follow-through.md). It covers existing
+  authorization, rate-limited reviews and verification of external mutations.
 
 ## Syncing with upstream
 
