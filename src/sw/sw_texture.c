@@ -31,6 +31,7 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     txt->originX = txt->originY = 0;
     txt->lastUsedFrame = 0;
     txt->halfBuffer = NULL;
+    txt->glyphHints = NULL;
     txt->rowBounds = NULL;
     txt->halfRowBounds = NULL;
     txt->halfFullBounds = NULL;
@@ -52,11 +53,21 @@ SWTexture* swrCopyTexture(SWTexture* texture)
     return swrCreateTextureEx(texture->buffer, texture->width, texture->height, false);
 }
 
+void swrFreeGlyphHints(SWTexture* texture)
+{
+    while (texture->glyphHints) {
+        SWGlyphHintCache* next = texture->glyphHints->next;
+        free(texture->glyphHints);
+        texture->glyphHints = next;
+    }
+}
+
 void swrFreeTexture(SWTexture* texture)
 {
     if (UNLIKELY(!texture))
         return;
     
+    swrFreeGlyphHints(texture);
     free(texture->halfBuffer); // the coverage, if any, is in the same allocation
     free(texture->rowBounds);
     free(texture->buffer);

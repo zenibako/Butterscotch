@@ -225,6 +225,7 @@ static void SWRenderer_destroy(Renderer* renderer)
     swr->textureCount = 0;
     swr->totalTextureCount = 0;
     free(swr->vertexData);
+    free(swr->hintedGlyphs);
     free(swr->contrastItems);
     free(swr->contrastFonts);
     
@@ -482,6 +483,15 @@ static void SWRenderer_drawSprite(Renderer* renderer, int32_t tpagIndex, float x
     {
         // Only a plain sprite draw may be held back for merging; see swrOverlayFlush.
         swr->overlayMergeAllowed = true;
+        bool hinted = false;
+        for (size_t i = 0; i < swr->hintedGlyphCount; ++i) {
+            if (swr->hintedGlyphs[i].item == tpagIndex) {
+                hinted = swrDrawHintedGlyph(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh,
+                                             color, alpha, swr->hintedGlyphs[i].asset);
+                break;
+            }
+        }
+        if (hinted) { swr->overlayMergeAllowed = false; return; }
         if ((uint32_t) tpagIndex < swr->contrastItemCount && swr->contrastItems[tpagIndex])
             swrDrawContrastSprite(renderer, dx, dy, dw, dh, texture, sx, sy, sw, sh, color, alpha, swr->contrastItems[tpagIndex]);
         else
@@ -1247,6 +1257,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     SWRenderer* swr = (SWRenderer*) renderer;
     SWTexture* surface, localSurface;
     localSurface.halfBuffer = NULL;
+    localSurface.glyphHints = NULL;
     localSurface.rowBounds = NULL;
     localSurface.halfRowBounds = NULL;
     localSurface.halfFullBounds = NULL;
@@ -2210,8 +2221,48 @@ static bool swrRunAllocate(SWTileRun* run, int width, int height)
 // in the pictures' units and that are width by height, block by block. With
 // a colour to go under them, the pixels are first cleared to it wherever no
 // picture is solid.
+static void swrRunDrawStripes(const SWTileRun* run, uintpixel_t* pixels, int pitch, int left, int top, int width, int height, const uintpixel_t* under, bool underOnly)
+{
+    int right = left + width, bottom = top + height;
+    for (int by = swrFloorToStep(top, SWR_TILE_RUN_BLOCK); by < bottom; by += SWR_TILE_RUN_BLOCK) {
+        int y0 = by < top ? top : by;
+        int y1 = by + SWR_TILE_RUN_BLOCK > bottom ? bottom : by + SWR_TILE_RUN_BLOCK;
+        for (int bx = swrFloorToStep(left, SWR_TILE_RUN_BLOCK); bx < right;) {
+            uint8_t kind = swrRunBlockKind(run, bx, by);
+            int end = bx + SWR_TILE_RUN_BLOCK;
+            while (end < right && swrRunBlockKind(run, end, by) == kind) end += SWR_TILE_RUN_BLOCK;
+            int x0 = bx < left ? left : bx, x1 = end > right ? right : end;
+            bx = end;
+            if (under != NULL && kind != SWR_BLOCK_SOLID)
+                for (int y = y0; y < y1; ++y)
+                    swrFillPixels(&pixels[(y - top) * pitch + x0 - left], (size_t)(x1 - x0), *under);
+            if (underOnly || kind == SWR_BLOCK_EMPTY) continue;
+            int sy0 = y0 < run->y ? run->y : y0;
+            int sy1 = y1 > run->y + run->height ? run->y + run->height : y1;
+            if (x0 < run->x) x0 = run->x;
+            if (x1 > run->x + run->width) x1 = run->x + run->width;
+            if (x0 >= x1) continue;
+            for (int y = sy0; y < sy1; ++y) {
+                const uintpixel_t* src = &run->pixels[(y - run->y) * run->width + x0 - run->x];
+                uintpixel_t* dst = &pixels[(y - top) * pitch + x0 - left];
+                if (kind == SWR_BLOCK_SOLID) memcpy(dst, src, (size_t)(x1 - x0) * sizeof(uintpixel_t));
+                else for (int x = 0; x < x1 - x0; ++x) {
+                    uintpixel_t pixel = src[x];
+                    if (swrIsOpaque(pixel)) dst[x] = pixel;
+                }
+            }
+        }
+    }
+}
+
 static void swrRunsDrawOnto(SWTileRun* const* runs, int count, uintpixel_t* pixels, int pitch, int left, int top, int width, int height, const uintpixel_t* under, bool underOnly)
 {
+    // One picture (including flattened layers) can copy adjacent solid blocks
+    // in one row span, keeping classification and transparency semantics.
+    if (count == 1) {
+        swrRunDrawStripes(runs[0], pixels, pitch, left, top, width, height, under, underOnly);
+        return;
+    }
     int right = left + width, bottom = top + height;
     for (int by = swrFloorToStep(top, SWR_TILE_RUN_BLOCK); by < bottom; by += SWR_TILE_RUN_BLOCK)
     {
@@ -2864,6 +2915,7 @@ void SWRenderer_setContrastAssets(Renderer* renderer, const char* const* sprites
     SWRenderer* swr = (SWRenderer*) renderer;
     DataWin* dw = renderer->dataWin;
     uint32_t i;
+    free(swr->hintedGlyphs); swr->hintedGlyphs = NULL; swr->hintedGlyphCount = 0;
     free(swr->contrastItems); free(swr->contrastFonts);
     swr->contrastItemCount = dw->tpag.count;
     swr->contrastFontCount = dw->font.count;
@@ -2897,6 +2949,31 @@ void SWRenderer_setContrastGlyphAssets(Renderer* renderer, const char* const* sp
     }
     for (i = 0; i < swr->contrastFontCount; ++i)
         if (swrAssetNamed(dw->font.fonts[i].name, fonts, fontCount)) swr->contrastFonts[i] |= SWR_FONT_WHITE_CONTRAST;
+}
+
+void SWRenderer_setHintedGlyphAssets(Renderer* renderer, const SWHintedGlyphAsset* assets, size_t count)
+{
+    SWRenderer* swr = (SWRenderer*) renderer;
+    DataWin* dw = renderer->dataWin;
+    free(swr->hintedGlyphs); swr->hintedGlyphs = NULL; swr->hintedGlyphCount = 0;
+    if (!assets || count == 0 || count > 16) return;
+    swr->hintedGlyphs = (SWHintedGlyphBinding*) safeCalloc(count, sizeof(SWHintedGlyphBinding));
+    for (size_t a = 0; a < count; ++a) {
+        if (!assets[a].spriteName) continue;
+        for (uint32_t i = 0; i < dw->sprt.count; ++i) {
+            const Sprite* sprite = &dw->sprt.sprites[i];
+            if (!sprite->name || strcmp(sprite->name, assets[a].spriteName) != 0 || sprite->textureCount != 1) continue;
+            int32_t item = sprite->tpagIndices[0];
+            if (item < 0 || (uint32_t) item >= dw->tpag.count) continue;
+            const TexturePageItem* tpag = &dw->tpag.items[item];
+            if (tpag->sourceWidth != assets[a].width || tpag->sourceHeight != assets[a].height ||
+                tpag->targetWidth != tpag->sourceWidth || tpag->targetHeight != tpag->sourceHeight) continue;
+            swr->hintedGlyphs[swr->hintedGlyphCount].item = item;
+            swr->hintedGlyphs[swr->hintedGlyphCount].asset = &assets[a];
+            ++swr->hintedGlyphCount;
+            break;
+        }
+    }
 }
 
 void SWRenderer_setContrastEnabled(Renderer* renderer, bool enabled)

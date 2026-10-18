@@ -12,6 +12,7 @@
 #include "loop.h"
 #include "platform/of_diag.h"
 #include "platform/of_bench.h"
+#include "platform/of_focus.h"
 #include "platform/of_hooks.h"
 #include "platform/of_state_requests.h"
 #include "stb_ds.h"
@@ -94,6 +95,7 @@ int main(int argc, char **argv) {
     args.renderer = SOFTWARE;
     args.dataWinPath = OF_DATA_WIN_NAME;
     for (int i = 0; i < argc; i++) {
+        if (ofFocusStart(argv[i])) { args.seed=7; args.hasSeed=true; }
         if (strcmp(argv[i], "--bench-sleep") == 0) {
             args.seed = 7;
             args.hasSeed = true;

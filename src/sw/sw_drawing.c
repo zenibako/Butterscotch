@@ -947,7 +947,11 @@ static void swrDrawSpriteInternal(
     
     if (diffxl != 0 || diffyl != 0 || diffxu != 0 || diffyu != 0)
     {
-        if (contrast != SWR_CONTRAST_NONE) {
+        if (pointSample && osw == odw && osh == odh) {
+            // A pre-hinted native mask is already 1:1. Preserve its last visible
+            // row/column, including a viewport only one pixel wide or high.
+            sx += diffxl; sy += diffyl; sw = dw; sh = dh;
+        } else if (contrast != SWR_CONTRAST_NONE) {
             // This sampler is exactly 2:1. An odd last block has one source
             // texel, so clipping it must not remove a texel from its neighbour.
             sx += diffxl * 2; sy += diffyl * 2;
@@ -2296,6 +2300,78 @@ void swrDrawDoubledGlyph(Renderer* renderer, float dx, float dy, float dw, float
     swrOverlayFlush(swr);
     swrDrawSpriteInternal(renderer, swrFloor(dx), swrFloor(dy), sw / 2, sh / 2,
                           texture, sx, sy, sw, sh, swrConvertPixel(tintColor), swrIntAlpha(alpha), true, SWR_CONTRAST_NONE);
+}
+
+// Build a tiny derivative once per immutable source lifetime. Source identity
+// includes every texel, so localized/replaced lettering never receives a patch.
+// Neither the original texture nor its shared half-size cache is modified.
+bool swrDrawHintedGlyph(Renderer* renderer, float dx, float dy, float dw, float dh,
+                        SWTexture* texture, int sx, int sy, int sw, int sh,
+                        uint32_t tintColor, float alpha, const SWHintedGlyphAsset* asset)
+{
+#ifdef SW_HAS_PREMUL_BLEND
+    SWRenderer* swr = (SWRenderer*) renderer;
+    float screenW = dw, screenH = dh;
+    swrTransformSizeIfNeeded(swr, &screenW, &screenH);
+    if (!swr->contrastEnabled || !swrFavorSpeed || !swrSmoothMinify || swr->drawingToSurface ||
+        swr->scaleX != 0.5f || swr->scaleY != 0.5f || !texture->immutable || swr->blendMode != bm_normal ||
+        screenW <= 0 || screenH <= 0 || screenW * 2 != sw || screenH * 2 != sh ||
+        sw != asset->width || sh != asset->height || sw > 64 || sh > 16 ||
+        sx < 0 || sy < 0 || sx > texture->width - sw || sy > texture->height - sh ||
+        asset->patchWidth > 8 || asset->patchX + asset->patchWidth > (sw + 1) / 2) return false;
+    SWGlyphHintCache* cache;
+    unsigned count = 0;
+    for (cache = texture->glyphHints; cache; cache = cache->next) {
+        ++count;
+        if (cache->sx == sx && cache->sy == sy && cache->asset.width == sw && cache->asset.height == sh &&
+            cache->asset.sourceHash == asset->sourceHash && cache->asset.patchX == asset->patchX &&
+            cache->asset.patchWidth == asset->patchWidth &&
+            memcmp(cache->asset.patchRows, asset->patchRows, sizeof(asset->patchRows)) == 0) break;
+    }
+    if (!cache) {
+        if (count >= 16) return false;
+        cache = (SWGlyphHintCache*) calloc(1, sizeof(*cache));
+        if (!cache) return false;
+        cache->asset = *asset; cache->sx = sx; cache->sy = sy;
+        cache->next = texture->glyphHints; texture->glyphHints = cache;
+        uint32_t hash = 2166136261u;
+        bool white = true;
+        for (int y = 0; y < sh; ++y) {
+            for (int x = 0; x < sw; ++x) {
+                uintpixel_t pixel = texture->buffer[(sy + y) * texture->width + sx + x];
+                white &= pixel == 0 || pixel == 0xffff;
+                hash = (hash ^ (pixel & 255)) * 16777619u;
+                hash = (hash ^ (pixel >> 8)) * 16777619u;
+                if ((x & 1) == 0 && (y & 1) == 0) cache->pixels[(y / 2) * ((sw + 1) / 2) + x / 2] = pixel;
+            }
+        }
+        cache->valid = white && hash == asset->sourceHash;
+        if (cache->valid) {
+            for (int y = 0; y < (sh + 1) / 2; ++y)
+                for (int x = 0; x < asset->patchWidth; ++x)
+                    cache->pixels[y * ((sw + 1) / 2) + asset->patchX + x] =
+                        asset->patchRows[y] & (1u << (asset->patchWidth - 1 - x)) ? 0xffff : 0;
+        }
+    }
+    if (!cache->valid) return false;
+    SWTexture hinted = {0};
+    hinted.buffer = cache->pixels;
+    hinted.width = (uint16_t) ((sw + 1) / 2); hinted.height = (uint16_t) ((sh + 1) / 2);
+    swrTransformPosIfNeeded(swr, &dx, &dy);
+    swrOverlayFlush(swr);
+    // The wrapper is local: never let deferred overlay merging retain its address.
+    bool mergeAllowed = swr->overlayMergeAllowed;
+    swr->overlayMergeAllowed = false;
+    swrDrawSpriteInternal(renderer, swrFloor(dx), swrFloor(dy), hinted.width, hinted.height,
+                          &hinted, 0, 0, hinted.width, hinted.height, swrConvertPixel(tintColor),
+                          swrIntAlpha(alpha), true, SWR_CONTRAST_NONE);
+    swr->overlayMergeAllowed = mergeAllowed;
+    return true;
+#else
+    (void) renderer; (void) dx; (void) dy; (void) dw; (void) dh; (void) texture;
+    (void) sx; (void) sy; (void) sw; (void) sh; (void) tintColor; (void) alpha; (void) asset;
+    return false;
+#endif
 }
 
 // The platform selects only battle UI assets. Surfaces, rotated/flipped/scaled

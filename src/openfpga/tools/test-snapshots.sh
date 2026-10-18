@@ -48,12 +48,15 @@ echo "runner snapshot (WAD 17): passed"
 "$cc" "${flags[@]}" -I"${SDK_ROOT:?Set SDK_ROOT}/src/sdk/include" \
     "$repo/tests/of_audio_snapshot_test.c" "$repo/src/stb_ds.c" -o "$out/audio"
 "$out/audio"
+"$cc" "${flags[@]}" -I"$SDK_ROOT/src/sdk/include" \
+    "$repo/tests/of_audio_silence_test.c" "$repo/src/stb_ds.c" -o "$out/audio-silence"
+"$out/audio-silence"
 "$cc" "${flags[@]}" -I"$SDK_ROOT/src/sdk/include" -isystem "$SDK_ROOT/src/sdk/pc" \
     -DOF_PC_SDL_SOURCE='"of_sdl2.c"' $(pkg-config --cflags sdl2) \
     "$repo/tests/of_pc_audio_snapshot_test.c" $(pkg-config --libs sdl2) -lm -o "$out/pc-audio"
 "$out/pc-audio"
 export SDK_ROOT
-for test in test_runtime_packaging test_game_fingerprint test_snapshot_notice test_save_fs_native_close test_save_fs_sync \
+for test in test_runtime_packaging test_game_fingerprint test_focus_build_cache test_snapshot_notice test_save_fs_native_close test_save_fs_sync \
     test_snapshot_completion test_restore_commit test_state_coverage test_state_probe; do
     python3 "$port/tests/$test.py"
 done
