@@ -31,6 +31,13 @@ return an error without hanging or allocating from unchecked counts. Patches:
   changing arithmetic, allowing current Go vet to validate the local module.
 - Floor0 rejects zero order/rate/map size and amplitude widths over 32, and its
   application loop explicitly stops at the output boundary.
+- Floor0 synthesis follows Vorbis I section 6.2.3: the odd-order quarter is
+  floating point, coefficient-index loops safely handle order 1, even-order
+  factors use cosine rather than cosine squared, and the Bark map divides
+  frequency by twice the output length. Packet decoding retains the cumulative
+  last LSP coefficient across codebook vectors (section 6.2.2). Synthetic golden
+  maps/curves and multi-vector packets in floor0_test.go cover these inherited
+  correctness defects; floor0 remains supported.
 
 - IMDCT products and codebook lookup products explicitly round to float32
   before additions, preventing ARM64 compiler FMA contraction. This gives

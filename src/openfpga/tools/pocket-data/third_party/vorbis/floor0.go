@@ -54,7 +54,7 @@ func (f *floor0) Decode(r *bitReader, books []codebook, n uint32) interface{} {
 				return floor0Data{amplitude, coefficients}
 			}
 		}
-		last = tempVector[len(tempVector)-1]
+		last = coefficients[i-1]
 	}
 }
 
@@ -69,26 +69,20 @@ func (f *floor0) Apply(out []float32, data interface{}) {
 		var p, q float64
 		if f.order%2 == 1 {
 			p = 1 - cosw*cosw
-			for j := 0; j <= int(f.order-3)/2; j++ {
-				tmp := math.Cos(float64(d.coefficients[2*j+1])) - cosw
-				p *= 4 * tmp * tmp
-			}
-			q = 1 / 4
-			for j := 0; j <= int(f.order-1)/2; j++ {
-				tmp := math.Cos(float64(d.coefficients[2*j])) - cosw
-				q *= 4 * tmp * tmp
-			}
+			q = .25
 		} else {
-			p = (1 - cosw*cosw) / 2
-			for j := 0; j <= int(f.order-2)/2; j++ {
-				tmp := math.Cos(float64(d.coefficients[2*j+1])) - cosw
-				p *= 4 * tmp * tmp
-			}
-			q = (1 + cosw*cosw) / 2
-			for j := 0; j <= int(f.order-2)/2; j++ {
-				tmp := math.Cos(float64(d.coefficients[2*j])) - cosw
-				q *= 4 * tmp * tmp
-			}
+			p = (1 - cosw) / 2
+			q = (1 + cosw) / 2
+		}
+		// Index coefficients directly: subtracting from the uint8 order
+		// underflows for order 1, whose odd-index product is empty.
+		for j := 1; j < int(f.order); j += 2 {
+			tmp := math.Cos(float64(d.coefficients[j])) - cosw
+			p *= 4 * tmp * tmp
+		}
+		for j := 0; j < int(f.order); j += 2 {
+			tmp := math.Cos(float64(d.coefficients[j])) - cosw
+			q *= 4 * tmp * tmp
 		}
 		linearFloorValue := math.Exp(.11512925 * (float64(d.amplitude)*float64(f.amplitudeOffset)/(float64(uint64(1)<<f.amplitudeBits-1)*math.Sqrt(p+q)) - float64(f.amplitudeOffset)))
 		for i < n && f.mapResult(i, n) == mapi {
@@ -102,7 +96,7 @@ func (f *floor0) mapResult(i, n uint32) int {
 	if i >= n {
 		return -1
 	}
-	b := int(math.Floor(bark(float64(f.rate)*float64(i)/2*float64(n)) * float64(f.barkMapSize) / bark(.5*float64(f.rate))))
+	b := int(math.Floor(bark(float64(f.rate)*float64(i)/(2*float64(n))) * float64(f.barkMapSize) / bark(.5*float64(f.rate))))
 	if b > int(f.barkMapSize)-1 {
 		return int(f.barkMapSize) - 1
 	}
