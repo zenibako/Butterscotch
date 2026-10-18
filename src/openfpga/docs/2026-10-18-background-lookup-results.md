@@ -105,3 +105,20 @@ Private reproducible commands, logs and hashes are under
 `.superpowers/background-optimization-20261018/`; disassembly and script
 fingerprint discovery are in `.superpowers/background-discovery-20261018/`.
 Original game assets stay private.
+
+## Logo refresh from main
+
+Signed merge `08c72aacd451cf052548072f4012527308d23ea2` incorporates main
+`b9d368b7a32caa0c80eb0c7cc0c30c62eefae8fd`. Its changes are limited to the banner,
+art generator and documentation. The refreshed update is
+`out/background-lookup-logo-08c72aa-20261018/butterscotch-background-lookup-logo-08c72aa-20261018-update.zip`
+(6,921,359 bytes), SHA256
+`3e2fe108189a86d0635d808fcdb1834b06b42aa762357ce56742ca8ffcf80eaf`.
+
+Regenerating the art matches both tracked binary images exactly and the banner
+PNG pixels. The archive's only changed payload is
+`Platforms/_images/butterscotch.bin`; all other 33 files, including both game
+programs, the Tiles diagnostic and Memories/sleep runtime/configs, are
+byte-identical to the verified b0f96cf candidate. CRC and full payload readback
+pass. No program rebuild or repeated gameplay tests were needed for this asset
+refresh. Diagnostic reports correctly retain source build ID b0f96cf.
