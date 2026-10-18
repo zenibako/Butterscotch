@@ -2968,7 +2968,9 @@ void SWRenderer_setHintedGlyphAssets(Renderer* renderer, const SWHintedGlyphAsse
             const TexturePageItem* tpag = &dw->tpag.items[item];
             if (tpag->sourceWidth != assets[a].width || tpag->sourceHeight != assets[a].height ||
                 tpag->targetWidth != tpag->sourceWidth || tpag->targetHeight != tpag->sourceHeight) continue;
-            swr->hintedGlyphs[swr->hintedGlyphCount++] = (SWHintedGlyphBinding) {item, &assets[a]};
+            swr->hintedGlyphs[swr->hintedGlyphCount].item = item;
+            swr->hintedGlyphs[swr->hintedGlyphCount].asset = &assets[a];
+            ++swr->hintedGlyphCount;
             break;
         }
     }

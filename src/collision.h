@@ -607,11 +607,9 @@ static inline bool Collision_instancesOverlapPrecise(Runner* runner, Instance* a
         sampleOffset = 0.5;
     }
 
-    // Initialize readiness only; unused sides and unreachable mask storage stay
-    // cold. The pointed-to instance/sprite data cannot mutate during this scan.
-    CollisionPairPoint preparedA, preparedB;
-    preparedA.transformReady = preparedA.maskBoundsReady = preparedA.maskReady = false;
-    preparedB.transformReady = preparedB.maskBoundsReady = preparedB.maskReady = false;
+    // Zero initialization also makes the lazy state definite to older compilers.
+    // The pointed-to instance/sprite data cannot mutate during this scan.
+    CollisionPairPoint preparedA = {0}, preparedB = {0};
 
     for (int32_t py = startY; (compatMode ? py <= endY : py < endY); py++) {
         for (int32_t px = startX; (compatMode ? px <= endX : px < endX); px++) {
