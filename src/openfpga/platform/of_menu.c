@@ -19,7 +19,6 @@
 #include "of.h"
 #include "of_font.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -83,7 +82,49 @@ typedef struct {
     int heldFrames; /* how long Up or Down has been held */
 } MenuState;
 
-static void draw(const OfMenu *menu, const MenuState *all, uint16_t *fb, const uint16_t *game, int width, int height) {
+/* Shared by drawing and navigation so a scrolled selection stays visible. */
+static int menuChrome(int scale, int line) {
+    return 2 * (OF_MENU_BORDER + OF_MENU_PAD) * scale + 4 * line + 2 * (line / 2);
+}
+
+/* Two lines, word-wrapped using the actual font metrics. Split long words
+ * when needed and mark descriptions that exceed the available space. */
+static void drawDescription(uint16_t *fb, int width, int height, int x, int y,
+                            int available, const char *text, int scale, int line) {
+    if (text == NULL) return;
+    for (int row = 0; row < 2 && *text != '\0'; row++, y += line) {
+        char part[256];
+        size_t count = 0, space = 0;
+        while (*text == ' ') text++;
+        while (text[count] != '\0' && text[count] != '\n' && count < sizeof(part) - 1) {
+            part[count] = text[count];
+            part[count + 1] = '\0';
+            if (ofFontWidth(part, scale) > available) break;
+            if (text[count] == ' ') space = count;
+            count++;
+        }
+        if (count == 0 && *text != '\n' && *text != '\0') count = 1;
+        bool more = text[count] != '\0' && text[count] != '\n';
+        if (more && space > 0) count = space;
+        memcpy(part, text, count);
+        part[count] = '\0';
+        text += count;
+        while (*text == ' ') text++;
+        if (*text == '\n') text++;
+        if (row == 1 && *text != '\0') {
+            if (count > sizeof(part) - 4) count = sizeof(part) - 4;
+            while (count > 0) {
+                part[count] = '\0';
+                if (ofFontWidth(part, scale) + ofFontWidth("...", scale) <= available) break;
+                count--;
+            }
+            memcpy(part + count, "...", 4);
+        }
+        ofFontDraw(fb, width, height, x, y, part, OF_GREY, scale);
+    }
+}
+
+static void draw(const MenuState *all, uint16_t *fb, const uint16_t *game, int width, int height) {
     const MenuLevel *state = &all->levels[all->depth];
     const OfMenuPage *page = state->page;
     /* The game behind at a quarter of its brightness. */
@@ -92,7 +133,7 @@ static void draw(const OfMenu *menu, const MenuState *all, uint16_t *fb, const u
     int s = ofFontScale(width);
     int line = ofFontLineHeight(s);
     int margin = OF_MENU_MARGIN * s, border = OF_MENU_BORDER * s, pad = OF_MENU_PAD * s;
-    int chrome = 2 * border + 2 * pad + line /* title */ + line / 2 + line / 2 + 2 * line /* status, help */;
+    int chrome = menuChrome(s, line);
     int visible = (height - 2 * margin - chrome) / line;
     if (visible > page->count) visible = page->count;
     if (visible < 1) visible = 1;
@@ -126,12 +167,10 @@ static void draw(const OfMenu *menu, const MenuState *all, uint16_t *fb, const u
     if (state->scroll + visible < page->count) fillRect(fb, width, height, right - 2 * s, y + line / 8, 4 * s, s, OF_GREY);
 
     y += line / 2;
-    if (menu->status != NULL) {
-        char status[64];
-        menu->status(status, sizeof(status));
-        ofFontDraw(fb, width, height, left, y, status, OF_GREY, s);
-    }
-    y += line;
+    fillRect(fb, width, height, left, y - line / 4, right - left, s, OF_GREY);
+    drawDescription(fb, width, height, left, y, right - left,
+                    page->rows[state->cursor].description, s, line);
+    y += 2 * line;
     ofFontDraw(fb, width, height, left, y, "A: change   B: back", OF_GREY, s);
 }
 
@@ -221,14 +260,14 @@ bool ofMenuRun(const OfMenu *menu, const uint16_t *frame, int width, int height)
 
         /* Keep the chosen row in view. */
         int s = ofFontScale(width), line = ofFontLineHeight(s);
-        int chrome = 2 * (OF_MENU_BORDER + OF_MENU_PAD) * s + 3 * line + 2 * (line / 2);
+        int chrome = menuChrome(s, line);
         int visible = (height - 2 * OF_MENU_MARGIN * s - chrome) / line;
         if (visible < 1) visible = 1;
         if (level->cursor < level->scroll) level->scroll = level->cursor;
         if (level->cursor >= level->scroll + visible) level->scroll = level->cursor - visible + 1;
 
         if (!open) break;
-        draw(menu, &state, fb, game, width, height);
+        draw(&state, fb, game, width, height);
         menu->present(fb);
         if (menu->idle != NULL) menu->idle();
 #ifdef OF_PC
@@ -241,7 +280,7 @@ bool ofMenuRun(const OfMenu *menu, const uint16_t *frame, int width, int height)
         /* The script ran out with the menu open: show it as it stands. */
         g_script = NULL;
         if (open) {
-            draw(menu, &state, fb, game, width, height);
+            draw(&state, fb, game, width, height);
             menu->present(fb);
             free(game);
             free(fb);
