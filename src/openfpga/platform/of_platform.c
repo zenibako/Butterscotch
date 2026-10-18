@@ -924,20 +924,6 @@ static bool menuAudio(int direction) {
     return false;
 }
 
-static const OfMenuRow g_debugRows[] = {
-    { "Audio mode",                menuAudioValue,       menuAudio,        NULL },
-    { "Show frame times",          menuFrameTimesValue,  menuFrameTimes,   NULL },
-    { "Show log overlay",          menuLogValue,         menuLog,          NULL },
-    { "Show script times in log",  menuScriptTimesValue, menuScriptTimes,  NULL },
-    { "Enable debug buttons",      menuDebugValue,       menuDebug,        NULL },
-    { "Next room",                 NULL,                 menuNextRoom,     NULL },
-    { "Previous room",             NULL,                 menuPreviousRoom, NULL },
-    { "Clear interact",            NULL,                 menuUnstick,      NULL },
-    { "Save log",                  NULL,                 menuSaveLog,      NULL },
-};
-
-static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
-
 static const char *menuSnapshotValue(void) {
     return ofSavestateReason(g_runner) ? "Unavailable" : "Ready in game";
 }
@@ -947,24 +933,40 @@ static bool menuSnapshotReason(int direction) {
     showNotice(why ? why : "Use Pocket controls to save");
     return true;
 }
-static const OfMenuRow g_menuRows[] = {
-    { "Resume",                    NULL,                 menuResume,       NULL },
-    { "Performance Mode",          menuVideoValue,       menuVideo,        NULL },
-    { "Save states",              menuSnapshotValue,    menuSnapshotReason, NULL },
-    { "Debug",                     NULL,                 NULL,             &g_debugPage },
+
+static const OfMenuRow g_debugRows[] = {
+    { "Save log to SD card", NULL, menuSaveLog, NULL,
+      "Writes the debug log. Quit through the Analogue menu to keep it." },
+    { "Save-state status", menuSnapshotValue, menuSnapshotReason, NULL,
+      "Checks this scene. Use Pocket controls to save or load a Memory." },
+    { "Audio mode", menuAudioValue, menuAudio, NULL,
+      "Isolates music or effects to diagnose audio problems." },
+    { "Show frame times", menuFrameTimesValue, menuFrameTimes, NULL,
+      "Shows frame times and skipped frames over the game." },
+    { "Show log overlay", menuLogValue, menuLog, NULL,
+      "Shows recent debug messages over the game." },
+    { "Show script times in log", menuScriptTimesValue, menuScriptTimes, NULL,
+      "Profiles slow scripts in the log. Adds some overhead." },
+    { "Enable debug buttons", menuDebugValue, menuDebug, NULL,
+      "Enables R for logs and Select chords for debug actions." },
+    { "Next room", NULL, menuNextRoom, NULL,
+      "Warps forward one room. May disrupt game progress." },
+    { "Previous room", NULL, menuPreviousRoom, NULL,
+      "Warps back one room. May disrupt game progress." },
+    { "Clear interact", NULL, menuUnstick, NULL,
+      "Resets the interaction flag to debug a stuck cutscene." },
 };
 
-/* The frame-time overlay's numbers, in words. */
-static void menuStatus(char *out, size_t size) {
-    if (nowNanos() < g_noticeUntil) {
-        snprintf(out, size, "%s", g_notice);
-        return;
-    }
-    unsigned average, worstWork, worstPeriod, skipped;
-    ofPerfShown(&average, &worstWork, &worstPeriod, &skipped);
-    (void) worstPeriod;
-    snprintf(out, size, "%u ms avg, %u worst, %u skipped", average, worstWork, skipped);
-}
+static const OfMenuPage g_debugPage = { "DEBUG", g_debugRows, (int) (sizeof(g_debugRows) / sizeof(g_debugRows[0])) };
+
+static const OfMenuRow g_menuRows[] = {
+    { "Resume", NULL, menuResume, NULL,
+      "Closes this menu and returns to the game." },
+    { "Performance Mode", menuVideoValue, menuVideo, NULL,
+      "Speed favors frame rate. Accuracy preserves visual detail." },
+    { "Debug", NULL, NULL, &g_debugPage,
+      "Opens logs, performance tools and troubleshooting actions." },
+};
 
 #ifdef OF_PC
 static bool g_menuDump = false;
@@ -996,7 +998,7 @@ static void runMenu(void) {
     /* Over the picture last shown, at the size it was shown. */
     if (g_nextFb == NULL || !g_showingFramebuffer || g_nextW != g_modeW || g_nextH != g_modeH) return;
     static const OfMenu menu = {
-        { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuStatus, menuPresent, menuIdle,
+        { "BUTTERSCOTCH", g_menuRows, (int) (sizeof(g_menuRows) / sizeof(g_menuRows[0])) }, menuPresent, menuIdle,
     };
     AudioSystem *audio = g_runner->audioSystem;
     bool wasPaused = g_runner->paused;

@@ -23,6 +23,8 @@ typedef struct {
     /* The page of rows A opens from this one, or NULL; `value` and `choose`
      * are not used on a row that has one. B on that page comes back here. */
     const OfMenuPage *opens;
+    /* Short help for the selected row, wrapped into the two-line footer. */
+    const char *description;
 } OfMenuRow;
 
 struct OfMenuPage {
@@ -33,8 +35,6 @@ struct OfMenuPage {
 
 typedef struct {
     OfMenuPage page; /* the first page */
-    /* A line under the rows, written fresh each frame (the frame times). */
-    void (*status)(char *out, size_t size);
     /* Shows a finished frame of `width` x `height` pixels. */
     void (*present)(const uint16_t *fb);
     /* Called about every 16 ms while the menu is up, to keep the sound fed. */

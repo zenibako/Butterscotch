@@ -120,7 +120,7 @@ Use the matching runtime/card from the build skill. **Deltarune Sleep Test**
 
 1. At A, outside the cutscene, close Select and sleep/wake. Confirm A resumes.
 2. Press Start to enter the real Toriel yard cutscene at B. Check Select →
-   Save states permits capture, then close Select.
+   Debug → Save-state status permits capture, then close Select.
 3. Sleep/wake at B twice consecutively. Each wake should return to the same
    dialogue rather than A. Record the capture and received payload IDs.
 4. Advance dialogue after waking; continue through the car ride and into
@@ -139,7 +139,7 @@ font and remain readable at both game resolutions.
 
 ## Read an attached device log as evidence
 
-Select → Save log uses the spare `.sav` slot, so the extension alone does not
+Select → Debug → Save log to SD card uses the spare `.sav` slot, so the extension alone does not
 identify a progress archive. Inspect bytes before decoding; retain the
 attachment unchanged. Text logs can contain NUL padding, benchmark history,
 previous-boot tails, and current-boot output. Split text at the first NUL for
