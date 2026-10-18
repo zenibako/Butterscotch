@@ -137,7 +137,7 @@ func testExtismMountOrder(t *testing.T, wasm, first string) {
 		compareAssets(t, native, output)
 		menu = get(answer(failure, "Back"))
 	}
-	if !strings.Contains(log.String(), "Converted texture page") || !strings.Contains(log.String(), "Audio:") {
+	if !strings.Contains(log.String(), "Converting textures\n") || !strings.Contains(log.String(), "Audio: processing track 1\n") {
 		t.Fatalf("missing host progress: %s", log.String())
 	}
 	if out := call("handle_response", []byte(`"Kill"`)); string(out) != `"Exit"` {
