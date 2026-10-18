@@ -76,3 +76,8 @@ The legacy castle windows in this log sampled outdoor room 104. They do not meas
 the user-confirmed flashing-tile corridor. That scene requires the corrected
 [Deltarune Tiles diagnostic](2026-10-18-flashing-tile-benchmark-validation.md) and
 its separate `deltarune_tiles_1.sav` result. No slowdown fix is claimed here.
+
+The follow-up [silent text-voice investigation](2026-10-18-silent-text-voice-investigation.md)
+identifies exact silent padding and validates a private chunk-advance prototype.
+Its operation-count reductions are deterministic model evidence; production
+integration and physical before/after timing remain separate.
