@@ -11,10 +11,21 @@ other game releases or chapters.
 
 ## 1. Install the core
 
-Extract the Butterscotch Pocket core ZIP into the root of your Pocket SD card,
-merging its `Cores`, `Assets` and `Platforms` folders with the existing folders.
-The game-data preparation bundle is a separate computer-side tool; extract it
-on your computer, not on the SD card.
+Choose either installation method:
+
+- **Pocket Sync:** Connect your Pocket or insert its SD card, click
+  **Connect to Pocket**, and select the card's root folder (the one containing
+  `Assets`, `Cores` and `Saves`). Drag the Butterscotch Pocket **core ZIP** onto
+  the Pocket Sync window and follow its install prompts. This works before
+  Butterscotch appears in its catalog. Once listed, you can also install it
+  from Pocket Sync's core browser.
+- **Manual:** Extract the core ZIP into the root of your Pocket SD card,
+  merging its `Cores`, `Assets` and `Platforms` folders with the existing folders.
+
+Installing the core does not install your commercial game data. Complete the
+preparation steps below for either installation method. The game-data
+preparation bundle is a separate computer-side tool; extract it on your
+computer, not on the SD card. Do not drag that tools archive into Pocket Sync.
 
 Use Python 3.9 or newer. The preparation bundle must include the native
 `mktexpack` and `mkmusic` converters for your computer. The script detects macOS,
@@ -69,10 +80,24 @@ If preparation fails, fix the reported missing or invalid file and rerun it.
 A failed conversion does not publish a partial output folder. To prepare again,
 choose a new output folder; the script does not overwrite an existing folder.
 
-## 4. Copy the prepared data to the card
+## 4. Install the prepared data
 
-After the script says `Ready`, copy the output folder's **Assets** folder into
-the root of your Pocket SD card and merge folders. The resulting paths are:
+After the script says `Ready`, choose either method:
+
+- **Pocket Sync:** In the prepared output folder, compress the **Assets**
+  folder into a ZIP using your computer's file manager. Drag this new ZIP onto
+  the connected Pocket Sync window, review the selected `Assets` paths, and
+  click **Confirm**. Include all three generated game files.
+- **Manual:** Copy the output folder's **Assets** folder into the root of
+  your Pocket SD card and merge folders.
+
+For Pocket Sync, check that opening the ZIP shows `Assets` immediately, with
+`butterscotch/common` inside it. Do not compress the enclosing
+`prepared-undertale` or `prepared-deltarune` folder: that would add an extra
+directory above `Assets`. The game-data ZIP contains no core, tools or saves.
+It is a private archive for your own card; do not upload it to a release.
+
+The resulting paths on the card are:
 
 | Game | Files under `/Assets/butterscotch/common/` |
 |---|---|
@@ -91,6 +116,16 @@ Unmount the card after copying, put it in the Pocket, and open Butterscotch.
 Select only a game whose data you installed. Your progress is under
 `/Saves/butterscotch/common/`; the preparation output contains no `Saves`
 folder. Keep your original games and generated data private.
+
+Pocket Sync installs the core and copies prepared files; it does not run the
+Python converters or obtain your purchased game data. Installing an updated
+core does not convert a different game version. If a release asks you to
+prepare the data again, repeat steps 2–4 with a new output folder.
+
+Pocket Sync's [installation and ZIP import instructions](https://github.com/neil-morrison44/pocket-sync#installation)
+describe connecting a card and importing archives. Butterscotch's catalog
+listing must point to the **core ZIP**, keeping the computer-side tools and
+private game-data archives separate.
 
 ## Building the converters from source
 
