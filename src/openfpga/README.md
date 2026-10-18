@@ -338,6 +338,14 @@ to B in the same dialogue. Repeat sleep/wake at B, then advance the dialogue
 to check that the car ride continues. The benchmark keeps running so
 Memories and sleep requests can be serviced at both checkpoints.
 
+**Undertale Sleep Test** is its counterpart for Papyrus's first scene in
+Snowdin (`room_tundra4`), the earliest Undertale scene that sets
+`obj_mainchara.cutscene`. It is started the same way and keeps progress in
+memory too. Checkpoint A enters the room past the scene, free to walk: sleep,
+wake, then press Start. The room reloads with the scene ahead; walk right
+until Papyrus starts talking, and the label reads "B: sleep/wake in
+cutscene". Sleep, wake, and check the scene carries on from the same line.
+
 What the software renderer does for Deltarune's rooms and screens (tile
 layers, stacks of mirrored translucent layers, the battle background) is
 described where it is done, in the comments of `../sw/sw_renderer.c` and
