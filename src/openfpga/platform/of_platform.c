@@ -19,6 +19,7 @@
 #include "profiler.h"
 #include "runner.h"
 #include "of_bench.h"
+#include "of_focus.h"
 #include "of_font.h"
 #include "of_menu.h"
 #include "of_strings.h"
@@ -579,11 +580,13 @@ void platformSwapBuffers(void) {
         /* Nothing was drawn: the frame is counted and the last picture stays up. */
         scriptProfileFrame();
         ofPerfFrame(NULL, 0, 0);
+        ofFocusPresent(g_runner,true);
         ofBenchFrame();
 #ifdef OF_PC
         dumpFrameIfRequested(false);
 #endif
         ofPerfPhase(OF_PHASE_OTHER);
+        ofFocusEnd(0);
         return;
     }
 #ifdef OF_PC
@@ -599,6 +602,7 @@ void platformSwapBuffers(void) {
 #endif
     scriptProfileFrame();
     ofPerfFrame(g_nextFb, g_nextW, g_nextH);
+    ofFocusPresent(g_runner,false);
     /* L's setting, by the name the instruction screen gives the toggle:
      * for a moment after L is pressed, and in debug mode for as long as a
      * 640x480 room (the only kind it changes) is showing. */
@@ -655,11 +659,13 @@ void platformSwapBuffers(void) {
     if (!noFlip)
 #endif
     of_video_flip();
-    ofBenchAddFlipTime(nowNanos() - flipStart);
+    uint64_t flipNanos=nowNanos() - flipStart;
+    ofBenchAddFlipTime(flipNanos);
 #ifndef OF_PC
     ofLogSetConsole(false);
 #endif
     ofPerfPhase(OF_PHASE_OTHER);
+    ofFocusEnd(flipNanos);
 }
 
 /* Shows the recent log full-screen and never returns. Used for the benchmark
@@ -1010,6 +1016,7 @@ static void runMenu(void) {
 /* Returns true when the app should quit; a Pocket core never does. */
 bool platformHandleEvents(void) {
     ofPerfPhase(OF_PHASE_STEP);
+    ofFocusInput(g_runner,g_scriptFrame+1);
     of_input_poll();
 
     /* A Pocket menu can hide the game longer than a timed toast lasts.
