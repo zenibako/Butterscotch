@@ -411,7 +411,71 @@ static bool writerDraw(VMContext *ctx) {
     return true;
 }
 
+/* Live lookup for the compatibility backgrounds. Preserve layer/element
+ * builtin ordering and ID conversion; remove bytecode and temporary strings.
+ * No cached names or IDs survive a call, room change, or Memory restore. */
+static bool backgroundGetElement(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    if (!ctx->runner || !args || argCount < 1 || !isNumber(args[0]) ||
+        !isfinite(RValue_toReal(args[0])) || ctx->runner->mathEpsilon != GML_MATH_EPSILON) return false;
+    static const char *const names[] = {
+        "layer_get_all", "layer_get_name", "layer_get_all_elements", "layer_get_element_type",
+    };
+    BuiltinFunc fn[4];
+    for (int i=0;i<4;++i) {
+        fn[i]=VM_findBuiltin(ctx,names[i]);
+        if (!fn[i]) return false;
+    }
+    RValue layers=fn[0](ctx,NULL,0), layer=RValue_makeInt32(-1);
+    bool foreground=false, found=false;
+    for (int i=0;i<GMLArray_length1D(layers.array);++i) {
+        RValue id=GMLArray_get(layers.array,i), name=fn[1](ctx,&id,1);
+        if (name.type!=RVALUE_STRING || !name.string) {
+            RValue_free(&name);RValue_free(&layers);return false;
+        }
+        /* Byte and codepoint offsets agree only for ASCII. Unusual names use
+         * the bytecode's UTF-8 and numeric conversion behavior. */
+        const char *text=name.string;size_t length=0;
+        while (text[length] && (unsigned char)text[length]<128) ++length;
+        if (text[length]) {RValue_free(&name);RValue_free(&layers);return false;}
+        foreground=strstr(text,"Compatibility_Foreground_")!=NULL;
+        bool background=!foreground && strstr(text,"Compatibility_Background_")!=NULL;
+        size_t slot=sizeof("Compatibility_Background_")-1;
+        /* Both prefixes have the same length. The original takes the slot at
+         * that absolute offset, even when the substring occurs later. */
+        bool match=false;
+        if ((foreground || background) && length>slot) {
+            unsigned char digit=(unsigned char)text[slot];
+            if (digit<'0' || digit>'9') {RValue_free(&name);RValue_free(&layers);return false;}
+            match=GMLReal_fabs((GMLReal)(digit-'0')-RValue_toReal(args[0]))<=GML_MATH_EPSILON;
+        }
+        RValue_free(&name);
+        if (match) {layer=id;found=true;break;}
+    }
+    RValue_free(&layers);
+    /* Missing backgrounds may be created by the script; decline before any
+     * semantic state change so that only the original creation path runs. */
+    if (!found || GMLReal_fabs(RValue_toReal(layer)+(GMLReal)1)<=GML_MATH_EPSILON) return false;
+    RValue values[3]={RValue_makeInt32(-1),RValue_makeInt32(-1),RValue_makeInt32(-1)};
+    RValue elements=fn[2](ctx,&layer,1);
+    for (int i=0;i<GMLArray_length1D(elements.array);++i) {
+        RValue id=GMLArray_get(elements.array,i), type=fn[3](ctx,&id,1);
+        bool background=GMLReal_fabs(RValue_toReal(type)-(GMLReal)1)<=GML_MATH_EPSILON;
+        RValue_free(&type);
+        if (background) {values[0]=id;values[1]=layer;values[2]=RValue_makeInt32(foreground ? 1 : 0);}
+    }
+    RValue_free(&elements);
+    *result=RValue_makeArray(GMLArray_create(ctx->dataWin,3));
+    ctx->currentArrayOwner=(void*)(intptr_t)18385354;
+    result->array->owner=ctx->currentArrayOwner;
+    for (int i=0;i<3;++i) {
+        values[i].gmlStackType=GML_TYPE_VARIABLE; /* bytecode's Pop.v.v array writes */
+        GMLArray_set(result->array,i,values[i]);
+    }
+    return true;
+}
+
 static const OfNativeScript g_nativeScripts[] = {
+    { "gml_Script___background_get_element", 1340, 0xfd927fdac407744cull, backgroundGetElement },
     { "gml_Script_tile_layer_shift", 608, 0x7ba14ffb5cf975f3ull, tileLayerShift },
     { "gml_Script___view_get", 1260, 0xeff822f793176fb9ull, viewGet },
     { "gml_Script_scr_84_get_sprite", 84, 0x4121b98b835bc977ull, get84Sprite },
