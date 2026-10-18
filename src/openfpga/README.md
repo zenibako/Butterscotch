@@ -96,6 +96,7 @@ make collision-work-fixture  # builds asset-free collision order/mutation checks
 make collision-precise-fixture GAME=undertale WADS=16 # checks precise pairs against scalar sampling
 make collision-precise-fixture GAME=deltarune WADS=17 # checks the Chapter 1 configuration
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
+make menu-fixture            # checks menu help, scrolling and navigation without game data
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
 make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
@@ -229,7 +230,7 @@ position will not be restored; check eligibility before sleeping.
 
 Routine saves and loads use the Pocket's normal interface; the app shows
 refusals and failures without extra stage overlays. For troubleshooting,
-Select → Save log writes the log to the spare save slot; leave through the
+Select → Debug → Save log to SD card writes the log to the spare save slot; leave through the
 Analogue menu to keep it. The log records capture sizes, elapsed time,
 transfer return codes, core capture phases, and the Pocket's read-word count.
 Optional streamed-music refills are deferred while the Pocket menu or a state
@@ -399,7 +400,8 @@ font (the first of `fnt_main`, `fnt_maintext` and `fnt_small` the game has,
 copied out of its texture page the first time; see `platform/of_font.c`).
 Up/Down choose a row and A or Left/Right change it. The debug settings are
 on a page of their own: A on "Debug" opens it and B goes back. B on the
-first page, or Select or Start on either, closes the menu. The sound stops
+first page, or Select or Start on either, closes the menu. A two-line area
+below the rows explains the selected item, with text wrapped to the menu width. The sound stops
 while it is open. Everything it sets lasts until
 the core is left. It is not in the Pocket's own core menu because the
 hardware gives a core no menu variables of its own.
@@ -409,10 +411,10 @@ hardware gives a core no menu variables of its own.
 | Resume | closes the menu |
 | Performance Mode | Speed or Accuracy, as L sets it |
 | Debug | opens the rows below |
-| Save log | first row in Debug; writes the log to the spare save slot; leave through the Analogue menu to keep it |
+| Save log to SD card | first row in Debug; writes the log to the spare save slot; leave through the Analogue menu to keep it |
 | Save-state status | shows whether the current scene is eligible, and displays a refusal reason when selected |
 | Audio mode | Normal, Disabled, Music only or Sound only, to see what sound costs. Music is what the game streams or keeps in a file of its own, and sound is the effects embedded in its data, however long either is. What is muted is not decoded, mixed or read from the card, and still runs its course so that the game is not left waiting for it. Something that was playing unheard is rough until it next starts. `--mute` in `ARGS=` starts with Disabled |
-| Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu's bottom line gives the same numbers whether or not this is on |
+| Show frame times | four numbers in the top left corner over the last 30 frames. The first three are milliseconds (average work, worst work, worst frame period; 33 means full speed); the fourth is how many of the 30 frames were skipped, which is always 0 in accuracy mode. The menu footer describes the selected item; frame times appear only when this overlay is on |
 | Show log overlay | the last log lines over the game. The log is kept whether or not this is on, so it can be switched on after a hitch to read it |
 | Show script times in log | every two seconds the log gets the twenty game scripts and built-in functions that took the most time, as milliseconds, VM instructions and calls per frame (Butterscotch's GML profiler). The log comes up with it. Measuring slows the game a little while it is on |
 | Enable debug buttons | the button chords below (debug mode) |

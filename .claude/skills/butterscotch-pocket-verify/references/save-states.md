@@ -139,7 +139,7 @@ font and remain readable at both game resolutions.
 
 ## Read an attached device log as evidence
 
-Select → Save log uses the spare `.sav` slot, so the extension alone does not
+Select → Debug → Save log to SD card uses the spare `.sav` slot, so the extension alone does not
 identify a progress archive. Inspect bytes before decoding; retain the
 attachment unchanged. Text logs can contain NUL padding, benchmark history,
 previous-boot tails, and current-boot output. Split text at the first NUL for

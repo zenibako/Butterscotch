@@ -20,7 +20,7 @@ the user once rather than guessing a machine or path:
 
 Prefer the log file to screenshots: it is the whole log, not the last 21
 lines. It is written to the game's spare save slot when the core halts
-(benchmark end, fatal error), from the menu's "Save log" and on Select +
+(benchmark end, fatal error), from the menu's "Save log to SD card" and on Select +
 Y with the debug buttons on, and reaches
 the card when the user leaves the core through the Analogue menu:
 
@@ -310,11 +310,10 @@ Variants: `--bench-smooth` (320x240 with smoothing), `--bench-lowres`
 keep the report within 20 lines of 53 characters, which is what fits on
 the 320x240 report screen.
 
-**Overlays** (switched on in the menu: press Select, then "Show frame times"
+**Overlays** (switched on in the menu: press Select, then Debug → "Show frame times"
 or "Show log overlay"): frame times are four numbers over 30 frames (average work,
-worst work and worst frame period in ms, then frames skipped); the menu's
-bottom line gives the same numbers in words whether or not the overlay is
-on. The log shows the last log lines over the game; R toggles it too with
+worst work and worst frame period in ms, then frames skipped). The menu's
+footer explains the selected item instead of showing timings. The log shows the last log lines over the game; R toggles it too with
 the debug buttons on. The log overlay itself
 costs a lot of frame time, so read the numbers with it off.
 
