@@ -1,6 +1,6 @@
 ---
 name: butterscotch-pocket-perf
-description: Measure and diagnose performance of the Butterscotch port (Undertale and Deltarune) on the Analogue Pocket — frame rate, load time, SD read speed, texture-load freezes, audio dropouts. Use this whenever the user reports something slow, choppy or frozen on the device, sends a benchmark table or overlay screenshot, asks whether a change helped, asks about os20/os25 or openfpgaOS versions, or before starting any optimisation work in src/openfpga. Also use it when you are about to explain why something is slow: this skill records which explanations have already been tested and ruled out.
+description: Use when investigating Butterscotch Undertale or Deltarune performance on the Analogue Pocket, interpreting benchmark logs, diagnosing battle text or flashing-tile slowdowns, comparing optimization candidates, or assessing os20/os25 timing claims.
 argument-hint: "[card: SD mount path] [harness: path or host:path of the os25 harness, if any]"
 ---
 
@@ -340,6 +340,11 @@ repeatedly mean the cache is thrashing. `Video: 640x480, stride 1280`
 marks a mode switch. `Audio: playing NAME` marks a streamed track.
 
 ## Working through a report from the user
+
+For battle letter-reveal or flashing-tile corridor slowdowns, use
+[focused scene benchmarks](references/focused-benchmarks.md) before extending
+the old whole-route benchmark. It records the corrected room, diagnostic modes,
+returned-log checks and existing findings that should not be rediscovered.
 
 1. Reproduce the scene on desktop if you can (see the
    butterscotch-pocket-verify skill) and read the log for texture loads,
