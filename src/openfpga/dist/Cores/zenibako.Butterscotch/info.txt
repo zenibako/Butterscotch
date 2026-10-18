@@ -17,12 +17,16 @@ Controls
   D-pad    Move
   A/Start  Confirm
   B        Cancel
-  X or Y   Menu (In-game)
+  X or Y   Game menu
+  Select   Butterscotch menu
   L        Toggle speed/accuracy
            (starts in speed)
 
-Debug mode (hold Select 2 s: on/off)
-  Select      Frame-time overlay
+Select > Debug:
+  Save log to SD card comes first.
+  Save-state status checks whether
+  the current scene can be saved.
+  Enable debug buttons for:
   R           Log overlay
   Hold Select and press:
   Right/Left  Next/previous room
@@ -33,7 +37,8 @@ Debug mode (hold Select 2 s: on/off)
   Y           Save the log to the card
 
 Starting takes about 20 seconds.
-Quit from the Analogue menu to save.
+After saving the log, quit through the
+Analogue menu to keep the log.
 
 github.com/zenibako/butterscotch-pocket
 No association with or endorsement by
