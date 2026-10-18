@@ -32,8 +32,8 @@ Deltarune chapter (see Deltarune below).
 ## Installing your own game data
 
 For a prebuilt core, follow [Add your own game files](GAME-DATA.md). The
-Python preparation tool selects the host converters, prepares textures and
-audio, and produces the exact SD-card filenames without rebuilding the core.
+Standalone Go preparation tool converts textures and audio and produces the
+exact SD-card filenames without rebuilding the core or installing Python.
 The guide covers installing both the core and your prepared data through
 Pocket Sync, as well as copying the files manually.
 
