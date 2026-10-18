@@ -270,6 +270,10 @@ static void finish(void) {
             micros(t->loadNanos[OF_LOAD_ROOM]/divisor),micros(t->loadNanos[OF_LOAD_TEXTURE]/divisor),
             micros(t->loadNanos[OF_LOAD_MUSIC]/divisor),micros(t->loadNanos[OF_LOAD_SOUND]/divisor),
             (unsigned)(t->loadNanos[OF_LOAD_MIX_PAIRS]/divisor));
+        ofLogPrint("  audio output/voice/bulk-silent pairs per frame %u/%u/%u\n",
+            (unsigned)(t->loadNanos[OF_LOAD_MIX_PAIRS]/divisor),
+            (unsigned)(t->loadNanos[OF_LOAD_MIX_VOICE_PAIRS]/divisor),
+            (unsigned)(t->loadNanos[OF_LOAD_MIX_SILENT_PAIRS]/divisor));
         if (mode==4) {
             ofLogPrint("  detail %u; draw us spr/part/text/bkg/rect %u/%u/%u/%u/%u; mix/voices/write %u/%u/%u\n",t->detailFrames,
                 micros(t->drawNanos[0]/detail),micros(t->drawNanos[1]/detail),micros(t->drawNanos[2]/detail),

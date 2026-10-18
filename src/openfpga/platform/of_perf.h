@@ -81,10 +81,11 @@ void platformBusyTick(void);
 void ofAudioRoomChange(void);
 /* OF_LOAD_MIX is all of mixing, wherever in the frame it ran; MIX_VOICES
  * (decoding and summing the voices) and MIX_WRITE (handing the samples to
- * the OS) are parts of it. The last two are counts, not times: output sample
- * pairs mixed, and those times the voices playing. */
+ * the OS) are parts of it. The last three are counts, not times: output sample
+ * pairs mixed, those times the voices playing, and voice pairs advanced through
+ * proven silence. */
 typedef enum { OF_LOAD_ROOM, OF_LOAD_TEXTURE, OF_LOAD_SOUND, OF_LOAD_MIX, OF_LOAD_MUSIC,
-               OF_LOAD_MIX_VOICES, OF_LOAD_MIX_WRITE, OF_LOAD_MIX_PAIRS, OF_LOAD_MIX_VOICE_PAIRS, OF_LOAD_KINDS } OfLoadKind;
+               OF_LOAD_MIX_VOICES, OF_LOAD_MIX_WRITE, OF_LOAD_MIX_PAIRS, OF_LOAD_MIX_VOICE_PAIRS, OF_LOAD_MIX_SILENT_PAIRS, OF_LOAD_KINDS } OfLoadKind;
 typedef enum { OF_PHASE_OTHER, OF_PHASE_STEP, OF_PHASE_AUDIO, OF_PHASE_DRAW, OF_PHASE_OUT, OF_PHASES } OfPhase;
 #define OF_PERF_SLOW_FRAME_MS 150
 void ofPerfAddLoad(OfLoadKind kind, uint64_t nanos);
