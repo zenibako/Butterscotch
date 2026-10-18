@@ -1,6 +1,8 @@
 > [!NOTE]
-> This is a fork of Butterscotch. The Analogue Pocket port, Butterscotch Pocket, lives in
-> [`src/openfpga`](src/openfpga/README.md), which has its own README. Butterscotch's README follows unchanged.
+> This is a fork of Butterscotch. For **Butterscotch Pocket downloads and installation**,
+> start at [zenibako/butterscotch-pocket](https://github.com/zenibako/butterscotch-pocket).
+> The Pocket port source lives in [`src/openfpga`](src/openfpga/README.md).
+> Butterscotch's upstream README follows unchanged.
 
 <div align="center">
 <img width="256" height="256" alt="Butterscotch Logo" src="https://github.com/user-attachments/assets/ef8bdd5c-d407-4b3c-a4d5-07b25e8bbc70" />

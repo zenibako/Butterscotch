@@ -31,11 +31,12 @@ Deltarune chapter (see Deltarune below).
 
 ## Installing your own game data
 
-For a prebuilt core, follow [Add your own game files](GAME-DATA.md). The
-Standalone Go preparation tool converts textures and audio and produces the
-exact SD-card filenames without rebuilding the core or installing Python.
-The guide covers installing both the core and your prepared data through
-Pocket Sync, as well as copying the files manually.
+For prebuilt core downloads, Go preparation tools and the Pocket Sync plugin,
+start at [Butterscotch Pocket](https://github.com/zenibako/butterscotch-pocket).
+Its [game-data guide](https://github.com/zenibako/butterscotch-pocket/blob/main/GAME-DATA.md)
+covers preparing your own Undertale v1.08 or Deltarune Chapter 1 installation
+and installing through Pocket Sync or manually. This fork retains the runner,
+Pocket platform source and historical Python/C reference tools.
 
 ## Layout
 
@@ -70,9 +71,9 @@ The commands below match the layout as of 2026-10-08; check they still match how
 From nothing, with the SDK cloned next to this repository:
 
 ```bash
-git clone https://github.com/zenibako/Butterscotch.git butterscotch-pocket
+git clone https://github.com/zenibako/Butterscotch.git butterscotch-source
 git clone https://github.com/openfpgaOS/openfpgaSDK.git
-cd butterscotch-pocket/src/openfpga
+cd butterscotch-source/src/openfpga
 
 # Your own game data: data.win (named game.ios inside the macOS app) and
 # the folder holding the game's .ogg files.
