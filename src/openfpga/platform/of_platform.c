@@ -13,6 +13,7 @@
 #include "platformdefs.h"
 #include "gettime.h"
 #include "runner_keyboard.h"
+#include "of_buttons.h"
 
 #include "of_hooks.h"
 #include "of_perf.h"
@@ -388,9 +389,11 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
+    ofButtonsInstallFonts(runner->dataWin);
     ofFontSetRunner(runner);
     ofPatchStrings(runner->dataWin);
     ofNativeInstall(runner);
+    if (ofGame.installPrompts != NULL) ofGame.installPrompts(runner);
     if (ofGame.battleUiInstall != NULL) ofGame.battleUiInstall(runner);
     ofSavestateInit(runner);
     runner->setCursor = NULL;
@@ -1109,7 +1112,7 @@ bool platformHandleEvents(void) {
             keyToRelease = g_debugChords[i].key;
             chordUsed = true;
             if (g_debugChords[i].notice != NULL) showNotice(g_debugChords[i].notice);
-            if (g_debugChords[i].key == 'O' && !g_runner->paused) showNotice("Pause first: Select + Start");
+            if (g_debugChords[i].key == 'O' && !g_runner->paused) showNotice("Pause first: " OF_ICON_SELECT " + " OF_ICON_START);
             logInfo("Debug: %s\n", g_debugChords[i].what);
         }
     }

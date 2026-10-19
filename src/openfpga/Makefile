@@ -93,7 +93,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
-       platform/of_strings.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
+       platform/of_strings.c platform/of_buttons.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
        platform/of_font.c platform/of_menu.c platform/of_state_requests.c \
        platform/of_snapshot_envelope.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
@@ -124,7 +124,7 @@ endif
 
 BS_DEFS = $(FOCUS_DEFS) $(GAME_DEFS) -DOF_GAME_NAME='"$(APP)"' -DOF_SAVE_SLOT_FILE='"$(SAVE_SLOT_FILE)"' -DOF_LOG_SLOT_FILE='"$(LOG_SLOT_FILE)"' -DOF_FAST_LOOP $(foreach w,$(WADS),-DENABLE_WAD$(w)) -DENABLE_SW_RENDERER -DPIXEL_SIZE=16 \
           -DUSE_FLOAT_REALS -DNO_RVALUE_INT64 -DSW_DRAW_PROFILE -DPLATFORM_BUSY_TICK -DPLATFORM_PACK_READ -DSW_TEXTURE_PACK_HOST='"music.bin"' -DENABLE_VM_GML_PROFILER \
-          -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DDATAWIN_LOG_CHUNKS \
+          -DBUTTERSCOTCH_VIDEO_NULL -DUSE_PLATFORM_AUDIO -DUSE_PLATFORM_FILE_SYSTEM -DSW_PLATFORM_FRAMEBUFFER -DSW_PLATFORM_BUTTON_GLYPHS -DDATAWIN_LOG_CHUNKS \
           -DBUTTERSCOTCH_COMMIT_HASH='"openfpga"' -DBUTTERSCOTCH_COMMIT_DATE='"unknown"'
 
 # Decoded texture pages are cached up to TEXTURE_CACHE_MB, but on the device
@@ -507,3 +507,18 @@ clean: sdk-clean
 .PHONY: tile-motion-fixture
 tile-motion-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/tile-motion.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/sw/sw_renderer.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_motion_fixture
+
+
+# Asset-free prompt replacement, font metrics, and positional icon rendering.
+.PHONY: button-prompts-fixture
+button-prompts-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/button-prompts.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/platform/game_$(GAME).o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_button_prompts_fixture
+
+# Deltarune generated labels and interpreter fallbacks, without game assets.
+.PHONY: deltarune-button-prompts-fixture
+deltarune-button-prompts-fixture:
+	$(MAKE) GAME=deltarune deltarune-button-prompts-fixture-build
+
+.PHONY: deltarune-button-prompts-fixture-build
+deltarune-button-prompts-fixture-build: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/deltarune-button-prompts.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/platform/game_deltarune.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o deltarune_pc_button_names_fixture

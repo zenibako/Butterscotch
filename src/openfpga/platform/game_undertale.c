@@ -3,6 +3,7 @@
  */
 
 #include "of_game.h"
+#include "of_buttons.h"
 #include "sw_renderer.h"
 
 #include <string.h>
@@ -15,9 +16,9 @@
 static const OfStringPatch g_strings[] = {
     /* Papyrus's date. */
     { "\\XSTEP ONE..^1. PRESS&THE [ C ] KEY ON&YOUR KEYBOARD FOR&\"\\RDATING HUD\\X.\"/",
-      "\\XSTEP ONE..^1. PRESS&THE [ X ] KEY ON&YOUR POCKET FOR&\"\\RDATING HUD\\X.\"/" },
+      "\\XSTEP ONE..^1. PRESS&THE " OF_ICON_X " BUTTON ON&YOUR POCKET FOR&\"\\RDATING HUD\\X.\"/" },
     { "\\XSTEP ONE..^1. PRESS&THE [ C ] KEY ON&YOUR KEYBOARD FOR&\"\\RFRIENDSHIP HUD\\X.\"/",
-      "\\XSTEP ONE..^1. PRESS&THE [ X ] KEY ON&YOUR POCKET FOR&\"\\RFRIENDSHIP HUD\\X.\"/" },
+      "\\XSTEP ONE..^1. PRESS&THE " OF_ICON_X " BUTTON ON&YOUR POCKET FOR&\"\\RFRIENDSHIP HUD\\X.\"/" },
 };
 
 /* Undertale v1.08's instruction screen lists five keys from a table, the
@@ -47,6 +48,25 @@ static void patchInstructions(DataWin *dw) {
         logInfo("Strings: instruction screen shortened to four lines\n");
         return;
     }
+}
+
+/* The attack prompt's Z is artwork, not text. Keep its PRESS sprite and
+ * replace the separate keycap with the positional confirm icon. */
+static bool drawPressButton(VMContext *ctx) {
+    Instance *self = ctx->currentInstance;
+    Renderer *renderer = ctx->runner->renderer;
+    if (self == NULL || renderer == NULL) return false;
+    BuiltinFunc drawSelf = VM_findBuiltin(ctx, "draw_self");
+    if (drawSelf == NULL) return false;
+    drawSelf(ctx, NULL, 0);
+    ofButtonDraw(renderer, OF_ICON_FIRST, (float)self->x - 10, (float)self->y - 2, 26, 0xffffff, 1);
+    return true;
+}
+
+static void installPrompts(Runner *runner) {
+    bool installed = VM_setNativeCode(runner->vmContext, "gml_Object_obj_pressZ_Draw_0",
+                                     252, 0xb8d5cacb73e73f07ull, drawPressButton);
+    logInfo("Buttons: attack prompt %s\n", installed ? "installed" : "left unchanged (different code)");
 }
 
 /* Save states (of_state_requests.c) are taken anywhere the runner can store
@@ -112,6 +132,7 @@ static bool battleUiActive(Runner *runner) {
 }
 
 const OfGame ofGame = {
+    .installPrompts = installPrompts,
     .battleUiInstall = battleUiInstall,
     .battleUiActive = battleUiActive,
     .strings = g_strings,

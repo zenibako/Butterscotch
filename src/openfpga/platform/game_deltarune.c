@@ -3,6 +3,8 @@
  */
 
 #include "of_game.h"
+#include "of_buttons.h"
+#include "gml_array.h"
 #include "sw_renderer.h"
 
 #include <stdlib.h>
@@ -474,6 +476,37 @@ static bool backgroundGetElement(VMContext *ctx, RValue *args, int32_t argCount,
     return true;
 }
 
+/* Input names are assembled at runtime, outside STRG. Respect the game's
+ * current keyboard binding; unsupported keys and gamepads use its bytecode. */
+static bool inputName(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
+    if (argCount < 1 || args == NULL || ctx->globalScopeInstance == NULL || !isNumber(args[0])) return false;
+    Instance *globals = ctx->globalScopeInstance;
+    if (RValue_toBool(Instance_getSelfVar(globals, VM_getOrAllocateVarID(ctx, "is_console")))) return false;
+    Runner *runner = ctx->runner;
+    for (ptrdiff_t i = 0; i < arrlen(runner->instances); i++) {
+        Instance *inst = runner->instances[i];
+        if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
+            (uint32_t)inst->objectIndex >= runner->dataWin->objt.count) continue;
+        if (!strcmp(runner->dataWin->objt.objects[inst->objectIndex].name, "obj_gamecontroller") &&
+            RValue_toBool(Instance_getSelfVar(inst, VM_getOrAllocateVarID(ctx, "gamepad_active")))) return false;
+    }
+    RValue input = Instance_getSelfVar(globals, VM_getOrAllocateVarID(ctx, "input_k"));
+    int32_t action = RValue_toInt32(args[0]);
+    if (input.type != RVALUE_ARRAY || action < 0 || action >= GMLArray_length1D(input.array)) return false;
+    RValue key = GMLArray_get(input.array, action);
+    if (!isNumber(key)) return false;
+    const char *icon = ofButtonForKey(RValue_toInt32(key));
+    if (icon == NULL) return false;
+    *result = RValue_makeString(icon);
+    return true;
+}
+
+static void installPrompts(Runner *runner) {
+    bool installed = VM_setNativeScript(runner->vmContext, "gml_Script_scr_get_input_name",
+                                       596, 0x9edb73f2ab55ed00ull, inputName);
+    logInfo("Buttons: generated input names %s\n", installed ? "installed" : "left unchanged (different code)");
+}
+
 static const OfNativeScript g_nativeScripts[] = {
     { "gml_Script___background_get_element", 1340, 0xfd927fdac407744cull, backgroundGetElement },
     { "gml_Script_tile_layer_shift", 608, 0x7ba14ffb5cf975f3ull, tileLayerShift },
@@ -580,7 +613,7 @@ static const char *sleepTest(Runner *r) {
         RunnerKeyboard_clear(r->keyboard, VK_ENTER);
         logInfo("Sleep test: checkpoint %s\n", start ? "A (allowed)" : "B (cutscene)");
     }
-    if (RValue_toInt32(phase) == 1) return "A: sleep/wake, then START";
+    if (RValue_toInt32(phase) == 1) return "A: sleep/wake, then " OF_ICON_START;
     return inCutscene(r) ? "B: sleep/wake in cutscene" : "B: waiting for cutscene";
 }
 
@@ -631,6 +664,7 @@ static bool battleUiActive(Runner *runner) {
 }
 
 const OfGame ofGame = {
+    .installPrompts = installPrompts,
     .battleUiInstall = battleUiInstall,
     .battleUiActive = battleUiActive,
     .natives = g_natives,

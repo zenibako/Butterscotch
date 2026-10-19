@@ -99,6 +99,8 @@ make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make tile-motion-fixture  # builds the asset-free translated tile-cache regression
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
+make button-prompts-fixture  # builds the asset-free prompt, font and icon regression
+make deltarune-button-prompts-fixture  # builds generated-label and fallback checks
 make string-reads-fixture    # builds the asset-free string read/ownership regression
 make collision-work-fixture  # builds asset-free collision order/mutation checks
 make collision-precise-fixture GAME=undertale WADS=16 # checks precise pairs against scalar sampling
@@ -389,8 +391,10 @@ described where it is done, in the comments of `../sw/sw_renderer.c` and
 
 ## Controls
 
-D-pad = arrows, A = Z (confirm), B = X (cancel), X/Y = C (menu),
-Start = Enter, Select = the port's menu (below). L is "Toggle speed/accuracy" and shows the new setting in
+The right face button confirms, the bottom cancels, and either the top or
+left opens the game's menu. The D-pad moves. The right small button below
+the screen (Start) also confirms; the left (Select) opens the port's menu
+(below). The left shoulder toggles speed/accuracy and shows the new setting in
 the top right corner for two seconds. The core starts in speed (the desktop
 build in accuracy, since frames are compared against what the game asks
 for). Accuracy is the target: when an optimisation brings accuracy up to
@@ -560,9 +564,18 @@ deliberately not part of the SD tree, so copying a build never touches saves.
 
 ## Button prompts
 
-The game's on-screen key prompts ("[Z or ENTER]", "[C]", the instruction
-screen) are renamed to the Pocket's buttons in memory after loading; see
-`platform/of_strings.c`. `data.win` itself is not modified.
+The game's keyboard prompts use positional button icons: four circles in
+a diamond, with the matching face button filled. Confirm highlights the
+right button, cancel the bottom, and menu the top (the left also works).
+Start/Select use a pair of small buttons, shoulders a pair of shoulder
+shapes, and directions a D-pad. These appear in the port menu too.
+
+Strings and font glyphs are changed in memory after loading; see
+`platform/of_strings.c` and `platform/of_buttons.c`. Deltarune Chapter 1's
+generated input names and Undertale v1.08's graphical attack prompt have
+version-checked draw/script replacements. Other game versions keep their
+original generated/graphical prompts when the code differs. `data.win`
+and the texture packs are not modified.
 
 ## On-device diagnostics
 

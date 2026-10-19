@@ -19,6 +19,7 @@
 
 #include "log.h"
 #include "of_game.h"
+#include "of_buttons.h"
 
 #include <string.h>
 
@@ -27,23 +28,24 @@ static const OfStringPatch g_patches[] = {
      * the Pocket's own controls screen (dist/.../input.json) describe the
      * same buttons: keep their wording the same. Debug mode's buttons are
      * named on the Pocket's screen only. */
-    { "[PRESS Z OR ENTER]", "[PRESS A OR START]" },
-    { "[Z or ENTER]", "[A or START]" },
-    { "[X or SHIFT]", "[B]" },
-    { "[C or CTRL]", "[X or Y]" },
+    { "[PRESS Z OR ENTER]", "[PRESS " OF_ICON_A " OR " OF_ICON_START "]" },
+    { "[Z or ENTER]", "[" OF_ICON_A " or " OF_ICON_START "]" },
+    { "[X or SHIFT]", OF_ICON_B },
+    { "[C or CTRL]", "[" OF_ICON_X " or " OF_ICON_Y "]" },
     /* F4 toggled fullscreen; here L switches the 640x480 screens between
      * native resolution (accurate) and smoothed 320x240 (fast). The Esc-to-
      * quit line has no counterpart; Undertale's game_undertale.c drops it. */
-    { "[F4]", "[L]" },
+    { "[F4]", OF_ICON_L },
     { "Fullscreen", "Toggle speed/accuracy" },
     /* Settings / joystick screens. */
-    { "[Z / ENTER]", "[A / START]" },
-    { "[X / SHIFT]", "[B]" },
-    { "[C / CTRL]", "[X / Y]" },
-    /* Key names substituted into dialogue. */
-    { "[Z]", "[A]" },
-    { "[X]", "[B]" },
-    { "[C]", "[X]" },
+    { "[Z / ENTER]", "[" OF_ICON_A " / " OF_ICON_START "]" },
+    { "[X / SHIFT]", OF_ICON_B },
+    { "[C / CTRL]", "[" OF_ICON_X " / " OF_ICON_Y "]" },
+    /* The dialogue writer advances fixed character cells, not glyph widths.
+     * A blank second cell reserves 16 (or 32 doubled) pixels for a 13px icon. */
+    { "[Z]", OF_ICON_A " " },
+    { "[X]", OF_ICON_B " " },
+    { "[C]", OF_ICON_X " " },
 };
 #define OF_PATCH_COUNT (sizeof(g_patches) / sizeof(g_patches[0]))
 
