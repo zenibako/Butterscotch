@@ -277,4 +277,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Butterscotch-${{ matrix.os_config.name }}-${{ matrix.arch }}
-          path: build/butterscotch${{ matrix.os_config.executable_suffix }}
+          path: build/butterscotch

@@ -5,27 +5,116 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run workflow manually to override selection and use the full matrix.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  Changes:
+    name: Select CI domains
+    runs-on: ubuntu-latest
+    outputs:
+      unix: ${{ steps.select.outputs.unix }}
+      windows: ${{ steps.select.outputs.windows }}
+      macos: ${{ steps.select.outputs.macos }}
+      haiku: ${{ steps.select.outputs.haiku }}
+      ps2: ${{ steps.select.outputs.ps2 }}
+      ps3: ${{ steps.select.outputs.ps3 }}
+      vita: ${{ steps.select.outputs.vita }}
+      switch: ${{ steps.select.outputs.switch }}
+      web: ${{ steps.select.outputs.web }}
+      android: ${{ steps.select.outputs.android }}
+      compilers: ${{ steps.select.outputs.compilers }}
+      pocket: ${{ steps.select.outputs.pocket }}
+      pocket_tools: ${{ steps.select.outputs.pocket_tools }}
+      tests: ${{ steps.select.outputs.tests }}
+      full_matrix: ${{ steps.select.outputs.full_matrix }}
+      selection: ${{ steps.select.outputs.selection }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test CI routing and verdicts
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Select affected domains
+        id: select
+        run: python3 scripts/ci/selection.py select
+
   Unix:
+    needs: Changes
+    if: needs.Changes.outputs.unix == 'true'
     uses: ./.github/workflows/build-desktop.yml
     with:
-      full_matrix: ${{ github.event_name == 'push' }}
+      full_matrix: ${{ needs.Changes.outputs.full_matrix == 'true' }}
 
   Windows:
+    needs: Changes
+    if: needs.Changes.outputs.windows == 'true'
     uses: ./.github/workflows/build-windows.yml
 
   macOS:
+    needs: Changes
+    if: needs.Changes.outputs.macos == 'true'
     uses: ./.github/workflows/build-macos.yml
 
   Haiku:
+    needs: Changes
+    if: needs.Changes.outputs.haiku == 'true'
     uses: ./.github/workflows/build-haiku.yml
 
   Consoles:
+    needs: Changes
+    if: >-
+      needs.Changes.outputs.ps2 == 'true' || needs.Changes.outputs.ps3 == 'true' ||
+      needs.Changes.outputs.vita == 'true' || needs.Changes.outputs.switch == 'true'
     uses: ./.github/workflows/build-console.yml
+    with:
+      ps2: ${{ needs.Changes.outputs.ps2 == 'true' }}
+      ps3: ${{ needs.Changes.outputs.ps3 == 'true' }}
+      vita: ${{ needs.Changes.outputs.vita == 'true' }}
+      switch: ${{ needs.Changes.outputs.switch == 'true' }}
 
   Other:
+    needs: Changes
+    if: needs.Changes.outputs.web == 'true' || needs.Changes.outputs.android == 'true'
     uses: ./.github/workflows/build-other.yml
+    with:
+      web: ${{ needs.Changes.outputs.web == 'true' }}
+      android: ${{ needs.Changes.outputs.android == 'true' }}
 
   Compilers:
+    needs: Changes
+    if: needs.Changes.outputs.compilers == 'true'
     uses: ./.github/workflows/build-old-compilers.yml
+
+  Pocket:
+    needs: Changes
+    if: needs.Changes.outputs.pocket == 'true'
+    uses: ./.github/workflows/build-pocket.yml
+
+  PocketTools:
+    needs: Changes
+    if: needs.Changes.outputs.pocket_tools == 'true'
+    uses: ./.github/workflows/build-pocket-data-tools.yml
+
+  Tests:
+    needs: Changes
+    if: needs.Changes.outputs.tests == 'true'
+    uses: ./.github/workflows/tests.yml
+    secrets:
+      COMMERCIAL_GAMES_URL: ${{ secrets.COMMERCIAL_GAMES_URL }}
+
+  Result:
+    name: CI result
+    if: ${{ always() }}
+    needs: [Changes, Unix, Windows, macOS, Haiku, Consoles, Other, Compilers, Pocket, PocketTools, Tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require all selected jobs to succeed
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: printf '%s' "$CI_NEEDS" | python3 scripts/ci/selection.py check
