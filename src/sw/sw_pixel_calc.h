@@ -314,6 +314,55 @@ FORCE_INLINE uintpixel_t swrBlendPremultiplied(uintpixel_t dcolor, uint32_t srcR
     return (uintpixel_t)(0x8000 | ((redBlue >> 6) & 0x7C00) | ((green & 0x1F) << 5) | (redBlue & 0x1F));
 }
 
+// A constant translucent fill reads and writes pairs on a 32-bit bus. The
+// scalar ends keep unaligned rows and odd surface pitches within their bounds.
+// memcpy permits word access without aliasing uintpixel_t storage as uint32_t.
+FORCE_INLINE void swrBlendSolidRow(uintpixel_t* line, size_t count, uint32_t srcRedBlue, uint32_t srcGreen, uint32_t dstalpha)
+{
+    if (!count) return;
+    if (count && ((uintptr_t) line & 3)) {
+        uintpixel_t result = swrBlendPremultiplied(*line, srcRedBlue, srcGreen, dstalpha);
+        if (result != *line) *line = result;
+        line++;
+        count--;
+    }
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_assume_aligned)
+    line = (uintpixel_t*) __builtin_assume_aligned(line, 4);
+#endif
+#elif defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7))
+    line = (uintpixel_t*) __builtin_assume_aligned(line, 4);
+#endif
+    if (count >= 2) {
+        // Each channel occupies a separate 16-bit lane; its product plus
+        // premultiplied source is at most 31 * 256, so lanes cannot carry.
+        uint32_t red = (srcRedBlue >> 16) * 0x10001u;
+        uint32_t green = srcGreen * 0x10001u;
+        uint32_t blue = (srcRedBlue & 0xffffu) * 0x10001u;
+        uint32_t first;
+        memcpy(&first, line, sizeof(first));
+        uint32_t lastUnder = ~first, lastResult = 0;
+        while (count >= 2) {
+            uint32_t under;
+            memcpy(&under, line, sizeof(under));
+            if (under != lastUnder) {
+                uint32_t outRed = (((((under >> 10) & 0x001f001fu) * dstalpha + red) >> 8) & 0x001f001fu);
+                uint32_t outGreen = (((((under >> 5) & 0x001f001fu) * dstalpha + green) >> 8) & 0x001f001fu);
+                uint32_t outBlue = ((((under & 0x001f001fu) * dstalpha + blue) >> 8) & 0x001f001fu);
+                lastUnder = under;
+                lastResult = 0x80008000u | (outRed << 10) | (outGreen << 5) | outBlue;
+            }
+            if (lastResult != under) memcpy(line, &lastResult, sizeof(lastResult));
+            line += 2;
+            count -= 2;
+        }
+    }
+    if (count) {
+        uintpixel_t result = swrBlendPremultiplied(*line, srcRedBlue, srcGreen, dstalpha);
+        if (result != *line) *line = result;
+    }
+}
+
 #endif // PIXEL_SIZE == 16 && !defined SW_DITHERED_BLENDING
 
 // Calculates an internal "alpha" value from GML-provided "alpha" values.

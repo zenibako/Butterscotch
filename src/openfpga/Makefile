@@ -366,6 +366,10 @@ test: $(PC_BIN) $(GAME_PACKS)
 sprite-clipping-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/sprite-clipping.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_sprite_clipping_fixture
 
+.PHONY: solid-fill-fixture
+solid-fill-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/solid-fill.c $(filter-out $(PC_OBJ_DIR)/main.o $(filter %/sw_drawing.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_solid_fill_fixture
+
 # Asset-free doubled-font sampling and filter-isolation regression check.
 .PHONY: font-sampling-fixture
 font-sampling-fixture: $(PC_OBJS)

@@ -106,6 +106,7 @@ make collision-precise-fixture GAME=deltarune WADS=17 # checks the Chapter 1 con
 make font-sampling-fixture   # checks doubled fonts and unchanged fallback filters
 make menu-fixture            # checks menu help, scrolling and navigation without game data
 make battle-contrast-fixture # checks shared speech, battle labels and buttons
+make solid-fill-fixture      # builds exact RGB555 fill/blending and boundary checks
 make spatial-grid-fixture    # builds asset-free grid recovery/update checks
 make layer-lookup-fixture    # checks layer lookup order, mutation and repeated work
 make vm-call-args-fixture    # checks argument bounds, ownership and nested calls
@@ -339,6 +340,12 @@ flags as an ASan build to check memory safety too.
 crops of unclipped draws, including horizontal/vertical flips, scaling,
 transparency and an offset viewport. Pass sanitizer flags in `PC_EXTRA_CFLAGS`
 to check texture-read bounds as well.
+
+`make solid-fill-fixture WADS="16 17"` builds the asset-free
+`./<PC_BIN>_solid_fill_fixture`. Run it to compare constant translucent fills
+against the general pixel compositor, including every 16-bit destination,
+partial opacity, clipped rows, odd pitches and repeated pixel pairs. Passing
+`--negative` deliberately corrupts a pixel and must exit with failure.
 
 ## Deltarune (experimental)
 
