@@ -476,26 +476,45 @@ static bool backgroundGetElement(VMContext *ctx, RValue *args, int32_t argCount,
     return true;
 }
 
-/* Input names are assembled at runtime, outside STRG. Respect the game's
- * current keyboard binding; unsupported keys and gamepads use its bytecode. */
+/* Input names are assembled outside STRG. Follow the active binding array,
+ * retaining bytecode for foreign controllers or buttons the Pocket lacks. */
 static bool inputName(VMContext *ctx, RValue *args, int32_t argCount, RValue *result) {
     if (argCount < 1 || args == NULL || ctx->globalScopeInstance == NULL || !isNumber(args[0])) return false;
     Instance *globals = ctx->globalScopeInstance;
     if (RValue_toBool(Instance_getSelfVar(globals, VM_getOrAllocateVarID(ctx, "is_console")))) return false;
     Runner *runner = ctx->runner;
+    bool gamepad = false;
     for (ptrdiff_t i = 0; i < arrlen(runner->instances); i++) {
         Instance *inst = runner->instances[i];
         if (!inst->active || inst->destroyed || inst->objectIndex < 0 ||
             (uint32_t)inst->objectIndex >= runner->dataWin->objt.count) continue;
         if (!strcmp(runner->dataWin->objt.objects[inst->objectIndex].name, "obj_gamecontroller") &&
-            RValue_toBool(Instance_getSelfVar(inst, VM_getOrAllocateVarID(ctx, "gamepad_active")))) return false;
+            RValue_toBool(Instance_getSelfVar(inst, VM_getOrAllocateVarID(ctx, "gamepad_active")))) {
+            int pad = RValue_toInt32(Instance_getSelfVar(inst, VM_getOrAllocateVarID(ctx, "gamepad_id")));
+            if (!runner->gamepads || pad != 0 || !RunnerGamepad_isConnected(runner->gamepads, pad) ||
+                strcmp(RunnerGamepad_getGuid(runner->gamepads, pad), "openfpga-pocket")) return false;
+            gamepad = true;
+            break;
+        }
     }
-    RValue input = Instance_getSelfVar(globals, VM_getOrAllocateVarID(ctx, "input_k"));
+    RValue input = Instance_getSelfVar(globals, VM_getOrAllocateVarID(ctx, gamepad ? "input_g" : "input_k"));
     int32_t action = RValue_toInt32(args[0]);
     if (input.type != RVALUE_ARRAY || action < 0 || action >= GMLArray_length1D(input.array)) return false;
     RValue key = GMLArray_get(input.array, action);
     if (!isNumber(key)) return false;
-    const char *icon = ofButtonForKey(RValue_toInt32(key));
+    const char *icon = NULL;
+    if (gamepad) {
+        switch (RawToGPDelta(RValue_toInt32(key))) {
+            case GP_PADU: icon = OF_ICON_UP " "; break;
+            case GP_PADD: icon = OF_ICON_DOWN " "; break;
+            case GP_PADL: icon = OF_ICON_LEFT " "; break;
+            case GP_PADR: icon = OF_ICON_RIGHT " "; break;
+            case GP_FACE1: icon = OF_ICON_A " "; break;
+            case GP_FACE2: icon = OF_ICON_B " "; break;
+            case GP_FACE4: icon = OF_ICON_X " "; break;
+            case GP_START: icon = OF_ICON_START " "; break;
+        }
+    } else icon = ofButtonForKey(RValue_toInt32(key));
     if (icon == NULL) return false;
     *result = RValue_makeString(icon);
     return true;

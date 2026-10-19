@@ -51,6 +51,7 @@ device):
 | Variable | Effect |
 |---|---|
 | `BS_DUMP_FRAME=n`, `BS_DUMP_PATH=f.ppm` | write frame n and exit |
+| `BS_PAD="30:A,700:R*400"` | physical Pocket gameplay buttons through the GameMaker gamepad API; U D L R, A B X Y, E (Start); `*N` holds N frames. Use this for controller behavior; keyboard scripts/recordings exercise a different input path |
 | `BS_SCRIPT="30:Z,700:R*400"` | press keys on given frames; `*N` holds for N frames. Keys: U D L R, Z X C, E (Enter) |
 | `BS_SEED=n` | fix the game's random seed |
 | `BS_UNCAPPED=1` | no frame pacing (runs as fast as the display flip allows) |

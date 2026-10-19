@@ -93,7 +93,7 @@ BS_PHYSICS_SRCS = $(BS_SRC)/physics/physics.c $(BS_SRC)/physics/disabled/physics
 
 SRCS = main.c platform/game_$(GAME).c platform/of_platform.c platform/of_diag.c platform/of_log.c \
        platform/of_perf.c platform/of_audio_system.c platform/of_pack_read.c platform/of_bench.c \
-       platform/of_strings.c platform/of_buttons.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
+       platform/of_strings.c platform/of_buttons.c platform/of_gamepad.c platform/of_save_fs.c platform/of_native.c platform/of_focus.c platform/of_focus_stats.c \
        platform/of_font.c platform/of_menu.c platform/of_state_requests.c \
        platform/of_snapshot_envelope.c \
        $(BS_CORE_SRCS) $(BS_SW_SRCS) $(BS_IMAGE_SRCS) $(BS_FONT_SRCS) \
@@ -522,3 +522,7 @@ deltarune-button-prompts-fixture:
 .PHONY: deltarune-button-prompts-fixture-build
 deltarune-button-prompts-fixture-build: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/deltarune-button-prompts.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/platform/game_deltarune.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o deltarune_pc_button_names_fixture
+
+.PHONY: gamepad-input-fixture
+gamepad-input-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) tests/gamepad-input.c $(filter-out $(PC_OBJ_DIR)/main.o,$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_gamepad_input_fixture

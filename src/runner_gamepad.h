@@ -59,6 +59,7 @@ void RunnerGamepad_free(RunnerGamepadState* gp);
 void RunnerGamepad_beginFrame(RunnerGamepadState* gp);
 
 int RawToGPUndertale(int32_t gmlButton);
+int RawToGPDelta(int32_t gmlButton);
 int RunnerGamepad_getDeviceCount(RunnerGamepadState* gp);
 bool RunnerGamepad_isConnected(RunnerGamepadState* gp, int device);
 bool RunnerGamepad_buttonCheck(RunnerGamepadState* gp, int device, int button);

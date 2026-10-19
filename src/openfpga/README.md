@@ -99,6 +99,7 @@ make test       # desktop binary ./undertale_pc (run it from games/undertale/)
 make lint       # strict compiler warnings on this port's own files
 make tile-motion-fixture  # builds the asset-free translated tile-cache regression
 make builtin-compat-fixture  # builds the asset-free date/audio builtin regression
+make gamepad-input-fixture   # checks controller actions, edges, axes and restore/menu rebasing
 make button-prompts-fixture  # builds the asset-free prompt, font and icon regression
 make deltarune-button-prompts-fixture  # builds generated-label and fallback checks
 make string-reads-fixture    # builds the asset-free string read/ownership regression
@@ -326,7 +327,11 @@ Desktop extras: `BS_DUMP_FRAME=<n> BS_DUMP_PATH=out.ppm ../../undertale_pc` (fro
 writes frame `n` of the 320x240 output and exits. `BS_UNCAPPED=1` disables
 frame pacing for timing runs. `BS_SEED=<n>` fixes the game's RNG and
 `BS_SCRIPT="300:Z,340:D"` presses keys on given frames (U D L R, Z X C,
-E = Enter), which together make runs repeatable for pixel comparisons. `make test WADS="14 16"`
+E = Enter), which together make runs repeatable for pixel comparisons.
+`BS_PAD="300:A,340:D,400:X*5"` uses the same frame/hold notation for physical
+Pocket gameplay input through the GameMaker gamepad API (U D L R, A B X Y,
+E = Start). `BS_SCRIPT` and keyboard recordings still exercise keyboard input;
+use `BS_PAD` to verify controller behavior. `make test WADS="14 16"`
 enables older bytecode versions for testing other games. These settings were
 named `UT_*` until 2026-10-13; the old names still work and the log says so.
 
@@ -390,6 +395,11 @@ described where it is done, in the comments of `../sw/sw_renderer.c` and
 `../sw/sw_drawing.c`.
 
 ## Controls
+
+The built-in controls are exposed as one GameMaker gamepad, including the
+legacy joystick API used by Undertale. Instruction glyphs mark physical
+Pocket button positions; Deltarune's generated prompts follow the active
+controller bindings. Select and the shoulders remain port controls.
 
 The right face button confirms, the bottom cancels, and either the top or
 left opens the game's menu. The D-pad moves. The right small button below

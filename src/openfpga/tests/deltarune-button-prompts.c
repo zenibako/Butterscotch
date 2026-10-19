@@ -3,6 +3,7 @@
 #include "../platform/game_deltarune.c"
 #include <assert.h>
 #include <stdio.h>
+#include "of_gamepad.h"
 
 static void set(VMContext *vm, Instance *inst, const char *name, RValue value) {
     Instance_setSelfVar(inst, VM_getOrAllocateVarID(vm, name), value);
@@ -46,6 +47,32 @@ int main(void) {
     arrput(runner.instances, controller);
     set(&vm, controller, "gamepad_active", RValue_makeReal(1));
     assert(!inputName(&vm, &arg, 1, &result));
+    runner.gamepads = RunnerGamepad_create();
+    ofGamepadPoll(runner.gamepads, 0, false);
+    set(&vm, controller, "gamepad_id", RValue_makeInt32(0));
+    GMLArray *padInput = GMLArray_create(&dw, 10);
+    const int padDefaults[] = {GP_PADD, GP_PADR, GP_PADU, GP_PADL, GP_FACE1, GP_FACE2, GP_FACE4, 999, 999, 999};
+    for (int i=0;i<10;i++) *GMLArray_slot(padInput,i)=RValue_makeInt32(padDefaults[i]);
+    set(&vm, globals, "input_g", RValue_makeArrayWeak(padInput));
+    for (int i=0;i<7;i++) {
+        arg=RValue_makeInt32(i);
+        assert(inputName(&vm, &arg, 1, &result));
+        assert(!strncmp(result.string, expected[i],3));
+    }
+    arg=RValue_makeInt32(4); /* Rabbick Blow uses action 4, including after remapping. */
+    *GMLArray_slot(padInput,4)=RValue_makeInt32(GP_FACE2);
+    assert(inputName(&vm, &arg, 1, &result));
+    assert(!strncmp(result.string,OF_ICON_B,3));
+    *GMLArray_slot(padInput,4)=RValue_makeInt32(13); /* Legacy DR face1. */
+    assert(inputName(&vm, &arg, 1, &result));
+    assert(!strncmp(result.string,OF_ICON_A,3));
+    *GMLArray_slot(padInput,4)=RValue_makeInt32(GP_FACE3); /* Unmapped face button. */
+    assert(!inputName(&vm, &arg, 1, &result));
+    *GMLArray_slot(padInput,4)=RValue_makeInt32(GP_FACE1);
+    set(&vm, controller,"gamepad_id",RValue_makeInt32(1));
+    assert(!inputName(&vm, &arg, 1, &result));
+    RunnerGamepad_free(runner.gamepads); runner.gamepads=NULL;
+    GMLArray_decRef(padInput);
     set(&vm, controller, "gamepad_active", RValue_makeReal(0));
     assert(inputName(&vm, &arg, 1, &result));
     arg = RValue_makeInt32(-1);
