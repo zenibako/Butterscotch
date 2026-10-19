@@ -250,6 +250,13 @@ git add -A src .claude && git ... commit      # a branch off main
 - Conventional commit messages; commits must be GPG signed. In Codex, run
   `gpg-warm-agent` before the first commit and verify the resulting signature.
   If warming fails, ask for an unlock rather than disabling signing.
+- For Codex commits, supply `AI_CO_AUTHOR='Codex <noreply@openai.com>'`
+  and/or an explicit `Co-authored-by: Codex <noreply@openai.com>` trailer.
+  The inherited `prepare-commit-msg` hook otherwise inserts the placeholder
+  `AI Model <ai@example.com>`, even when Codex attribution is configured.
+  Verify `git log -1 --format=%B` as well as the signature after committing.
+  Correcting published commit trailers requires the user's approval to rewrite
+  history; preserve the old commits and use an explicit `--force-with-lease`.
 - `main` is upstream `main` merged with upstream's draft PR #429
   (`sw-renderer`) and this port. Bring upstream in with a merge, not a
   rebase: the branch is published.

@@ -1,0 +1,47 @@
+{
+  "source_commit": "6d9a3604e108f1f03a815e04389105a8218f1d6e",
+  "platform": "Pocket software renderer through desktop SDL shim; physical hardware untested",
+  "game": "Deltarune Chapter 1",
+  "data_sha256": "93ee8d4353f0d6189a740fc625bdd69acbb904e74597a4053c88b073b2e29058",
+  "resolution": [
+    640,
+    480
+  ],
+  "scale": 1,
+  "environment": {
+    "SDL_VIDEODRIVER": "dummy",
+    "SDL_AUDIODRIVER": "dummy",
+    "BS_SEED": "7",
+    "BS_UNCAPPED": "1",
+    "BS_NOFLIP": "1"
+  },
+  "captures": [
+    {
+      "file": "deltarune-controller-menu.png",
+      "frame": 1400,
+      "BS_PAD": "70:R*200,300:A,340:A,380:A,420:A,460:A,500:A,540:A,580:A,620:A,660:A,700:A,740:A,780:A,820:A,860:A,900:A,940:R*4,950:A,1010:A,1110:A,1210:A,1310:A",
+      "BS_SET": "30:darkzone=1,char[1]=1,char[2]=3,plot=0,interact=0",
+      "BS_GOTO": "31:47",
+      "verified_state": {
+        "obj_gamecontroller.gamepad_active": 1,
+        "obj_gamecontroller.gamepad_id": 0
+      },
+      "png_sha256": "c00053713d0db9bbe9b7b70cf6329aac26c49634887feae1bb1b70ca2fedc60a"
+    },
+    {
+      "file": "deltarune-rabbick-blow.png",
+      "frame": 1050,
+      "BS_PAD": "70:D*20,100:R*100,220:D*40,270:R*70,550:A,600:R,620:A,640:A,700:B,720:R,740:A,760:A,810:R,830:A,880:R,900:R,920:R,940:R,960:A",
+      "BS_SET": "30:darkzone=1,char[1]=1,char[2]=3,plot=60,interact=0",
+      "BS_GOTO": "31:74",
+      "behavior_check": {
+        "frame": 1140,
+        "without_additional_input_blowamt": 0,
+        "with_additional_input_blowamt": 108,
+        "additional_BS_PAD": "1060:A,1064:A,1068:A,1072:A,1076:A,1080:A,1084:A,1088:A,1092:A,1096:A,1100:A,1104:A,1108:A,1112:A,1116:A,1120:A,1124:A,1128:A,1132:A,1136:A",
+        "restore": "save at 1061 while confirm held; fresh-process load at 40; frame 1140 byte-identical to uninterrupted run"
+      },
+      "png_sha256": "d7c3e3a750dff6a2f9d65c6f0b19b165e63d6f0e0a6191b9cbf70f0f84327870"
+    }
+  ]
+}
