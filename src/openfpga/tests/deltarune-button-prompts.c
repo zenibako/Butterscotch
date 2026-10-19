@@ -9,7 +9,52 @@ static void set(VMContext *vm, Instance *inst, const char *name, RValue value) {
     Instance_setSelfVar(inst, VM_getOrAllocateVarID(vm, name), value);
 }
 
+/* The sleep-test checkpoints must accept physical Start independently of
+ * desktop keyboard scripting. A held button must advance only once. */
+static void checkSleepStart(void) {
+    DataWin dw = {0};
+    Room rooms[8] = {0};
+    rooms[7].name = "room_town_krisyard";
+    dw.room.count = 8; dw.room.rooms = rooms;
+    Runner r = {0}; VMContext vm = {0};
+    r.dataWin = &dw; r.vmContext = &vm;
+    vm.dataWin = &dw; vm.runner = &r;
+    vm.globalScopeInstance = Instance_create(1, -1, 0, 0);
+    r.keyboard = RunnerKeyboard_create();
+    r.gamepads = RunnerGamepad_create();
+    r.frameCount = 30; r.currentRoomIndex = 7; r.pendingRoom = -1;
+    sleepTest(&r);
+    int phase = VM_getOrAllocateVarID(&vm, "__pocket_sleep_test_phase");
+    assert(RValue_toInt32(Instance_getSelfVar(vm.globalScopeInstance, phase)) == 1);
+    r.pendingRoom = -1;
+    ofGamepadPoll(r.gamepads, OF_BTN_A, false);
+    sleepTest(&r);
+    assert(r.pendingRoom == -1); /* Confirm alone is not the diagnostic Start. */
+    ofGamepadPoll(r.gamepads, OF_BTN_START, false);
+    assert(!RunnerKeyboard_checkPressed(r.keyboard, VK_ENTER));
+    sleepTest(&r);
+    assert(RValue_toInt32(Instance_getSelfVar(vm.globalScopeInstance, phase)) == 2);
+    assert(r.pendingRoom == 7);
+    r.pendingRoom = -1;
+    ofGamepadPoll(r.gamepads, OF_BTN_START, false);
+    sleepTest(&r);
+    assert(r.pendingRoom == -1);
+    /* Existing desktop scripts still use Enter. */
+    Instance_setSelfVar(vm.globalScopeInstance, phase, RValue_makeInt32(1));
+    ofGamepadPoll(r.gamepads, 0, false);
+    RunnerKeyboard_onKeyDown(r.keyboard, VK_ENTER);
+    sleepTest(&r);
+    assert(RValue_toInt32(Instance_getSelfVar(vm.globalScopeInstance, phase)) == 2);
+    assert(r.pendingRoom == 7);
+    assert(!RunnerKeyboard_checkPressed(r.keyboard, VK_ENTER));
+    RunnerGamepad_free(r.gamepads); RunnerKeyboard_free(r.keyboard);
+    Instance_free(vm.globalScopeInstance);
+    for (ptrdiff_t i = 0; i < shlen(vm.varNameMap); i++) free(vm.varNameMap[i].key);
+    shfree(vm.varNameMap);
+}
+
 int main(void) {
+    checkSleepStart();
     DataWin dw = {0};
     dw.gen8.wadVersion = 17;
     Runner runner = {0};

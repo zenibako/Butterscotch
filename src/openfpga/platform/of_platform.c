@@ -1115,7 +1115,16 @@ bool platformHandleEvents(void) {
      * Undertale derives its own presses from held joystick state. */
     buttons = ofGamepadFilterButtons(&g_blockedGameButtons, buttons, chording || openMenu);
     ofGamepadPoll(g_runner->gamepads, buttons, openMenu);
-    if (g_sleepTest) g_sleepTestLabel = ofGame.sleepTest(g_runner);
+    if (g_sleepTest) {
+        int32_t pendingBefore = g_runner->pendingRoom;
+        g_sleepTestLabel = ofGame.sleepTest(g_runner);
+        if (g_runner->pendingRoom != pendingBefore) {
+            /* Consume the checkpoint's input, including Start's confirm
+             * alias, until release rather than carrying it into the scene. */
+            g_blockedGameButtons |= buttons;
+            ofGamepadPoll(g_runner->gamepads, 0, true);
+        }
+    }
     return false;
 }
 

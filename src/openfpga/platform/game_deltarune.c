@@ -622,7 +622,9 @@ static const char *sleepTest(Runner *r) {
     RValue phase = Instance_getSelfVar(globals, phaseId);
     bool start = phase.type == RVALUE_UNDEFINED;
     bool advance = !start && RValue_toInt32(phase) == 1 && r->currentRoomIndex == 7 &&
-        r->pendingRoom < 0 && RunnerKeyboard_checkPressed(r->keyboard, VK_ENTER);
+        r->pendingRoom < 0 &&
+        (RunnerKeyboard_checkPressed(r->keyboard, VK_ENTER) ||
+         RunnerGamepad_buttonCheckPressed(r->gamepads, 0, GP_START));
     if (start || advance) {
         Instance_setSelfVar(globals, VM_getOrAllocateVarID(vm, "plot"), RValue_makeReal(start ? 60 : 0));
         Instance_setSelfVar(globals, VM_getOrAllocateVarID(vm, "interact"), RValue_makeReal(0));
