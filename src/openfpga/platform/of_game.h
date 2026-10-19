@@ -52,6 +52,9 @@ typedef struct {
     size_t stringCount;
     /* Changes to the game's code, after its strings are patched (or NULL). */
     void (*patchCode)(DataWin *dw);
+    /* Cosmetic script/draw replacements; retained when performance natives
+     * are disabled for renderer comparisons. Each checks its own code hash. */
+    void (*installPrompts)(Runner *runner);
 
     const OfNativeCode *natives;
     size_t nativeCount;

@@ -4,6 +4,10 @@
 #include "text_utils.h"
 #include "sw_renderer_private.h"
 
+#ifdef SW_PLATFORM_BUTTON_GLYPHS
+extern void* platformButtonGlyphTexture(uint16_t codepoint);
+#endif
+
 #define SWR_DEBUG_FONT_LINE_HEIGHT  16
 #define SWR_DEBUG_FONT_CHAR_WIDTH   8
 
@@ -62,6 +66,10 @@ static bool swrFontHasDoubledPixels(Font* font, const TexturePageItem* item, con
     bool ink = false;
     for (uint32_t i = 0; i < font->glyphCount; ++i) {
         const FontGlyph* glyph = &font->glyphs[i];
+#ifdef SW_PLATFORM_BUTTON_GLYPHS
+        // Generated prompts live outside this font's atlas.
+        if (platformButtonGlyphTexture(glyph->character) != NULL) continue;
+#endif
         int sx = item->sourceX + glyph->sourceX - texture->originX;
         int sy = item->sourceY + glyph->sourceY - texture->originY;
         int sw = glyph->sourceWidth, sh = glyph->sourceHeight;
@@ -273,8 +281,23 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                     int fontTpagIndex = 0, pageId = 0;
                     int sx, sy, sw, sh, dw, dh;
                     float dx, dy;
+                    SWTexture* texture = NULL;
+                    bool resolved = false;
+#ifdef SW_PLATFORM_BUTTON_GLYPHS
+                    texture = (SWTexture*) platformButtonGlyphTexture(ch);
+                    if (texture != NULL) {
+                        sx = sy = 0;
+                        sw = texture->width; sh = texture->height;
+                        dx = cursorX + glyph->offset; dy = cursorY;
+                        resolved = true;
+                    } else
+#endif
                     if (swrResolveGlyph(swr, dwin, &fontState, glyph, cursorX, cursorY,
-                            &fontTpagIndex, &pageId, &sx, &sy, &sw, &sh, &dx, &dy))
+                            &fontTpagIndex, &pageId, &sx, &sy, &sw, &sh, &dx, &dy)) {
+                        texture = swrTextureForItem(swr, fontTpagIndex);
+                        resolved = texture != NULL;
+                    }
+                    if (resolved)
                     {
                         dx *= xscale; dx += x;
                         dy *= xscale; dy += y;
@@ -287,7 +310,6 @@ void swrDrawText(SWRenderer* swr, const char* text, float x, float y, float xsca
                         dy = roundf(dy * 2) / 2;
                         
                         // Resolving the glyph has already loaded this; it is the cached texture.
-                        SWTexture* texture = swrTextureForItem(swr, fontTpagIndex);
                         if (texture != NULL)
                         {
                             sx -= texture->originX;

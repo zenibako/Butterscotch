@@ -13,6 +13,8 @@
 #include "platformdefs.h"
 #include "gettime.h"
 #include "runner_keyboard.h"
+#include "of_buttons.h"
+#include "of_gamepad.h"
 
 #include "of_hooks.h"
 #include "of_perf.h"
@@ -99,26 +101,13 @@ static int g_modeW = 0; /* 0 until the first frame sets a mode */
 static int g_modeH = 0;
 static int g_modeStride = 0; /* bytes per row of the display surface */
 
-/* Pad button -> GML virtual key. Undertale reads Z/X/C with Enter/Shift/Ctrl
- * as aliases; the d-pad maps to the arrow keys. Select is not Esc (holding
- * Esc quits Undertale); Select opens the port's menu (see "The menu" below),
- * and L switches 640x480 rooms between native resolution and smoothed
- * 320x240. */
-static const struct {
-    uint32_t button;
-    int32_t key;
-} g_keymap[] = {
-    { OF_BTN_UP,     VK_UP },
-    { OF_BTN_DOWN,   VK_DOWN },
-    { OF_BTN_LEFT,   VK_LEFT },
-    { OF_BTN_RIGHT,  VK_RIGHT },
-    { OF_BTN_A,      'Z' },
-    { OF_BTN_B,      'X' },
-    { OF_BTN_X,      'C' },
-    { OF_BTN_Y,      'C' },
-    { OF_BTN_START,  VK_ENTER },
+/* Gameplay buttons also dismiss snapshot notices. */
+static const uint32_t g_gameButtons[] = {
+    OF_BTN_UP, OF_BTN_DOWN, OF_BTN_LEFT, OF_BTN_RIGHT,
+    OF_BTN_A, OF_BTN_B, OF_BTN_X, OF_BTN_Y, OF_BTN_START,
 };
-#define OF_KEYMAP_COUNT (sizeof(g_keymap) / sizeof(g_keymap[0]))
+static uint32_t g_blockedGameButtons = 0;
+#define OF_GAME_BUTTON_COUNT (sizeof(g_gameButtons) / sizeof(g_gameButtons[0]))
 
 /* Debug buttons ("debug mode"): the buttons that are for looking into the
  * port and not for playing. Off at start-up unless the game was started with
@@ -388,9 +377,11 @@ void platformExit(void) {
 
 void platformInitFunctions(Runner *runner) {
     g_runner = runner;
+    ofButtonsInstallFonts(runner->dataWin);
     ofFontSetRunner(runner);
     ofPatchStrings(runner->dataWin);
     ofNativeInstall(runner);
+    if (ofGame.installPrompts != NULL) ofGame.installPrompts(runner);
     if (ofGame.battleUiInstall != NULL) ofGame.battleUiInstall(runner);
     ofSavestateInit(runner);
     runner->setCursor = NULL;
@@ -1023,8 +1014,8 @@ bool platformHandleEvents(void) {
 
     /* A Pocket menu can hide the game longer than a timed toast lasts.
      * Keep rejection visible until a fresh game-button press. */
-    if (g_snapshotNotice) for (size_t i = 0; i < OF_KEYMAP_COUNT; i++) {
-        if (of_btn_pressed(g_keymap[i].button)) {
+    if (g_snapshotNotice) for (size_t i = 0; i < OF_GAME_BUTTON_COUNT; i++) {
+        if (of_btn_pressed(g_gameButtons[i])) {
             g_snapshotNotice = false; g_noticeUntil = 0; break;
         }
     }
@@ -1109,18 +1100,31 @@ bool platformHandleEvents(void) {
             keyToRelease = g_debugChords[i].key;
             chordUsed = true;
             if (g_debugChords[i].notice != NULL) showNotice(g_debugChords[i].notice);
-            if (g_debugChords[i].key == 'O' && !g_runner->paused) showNotice("Pause first: Select + Start");
+            if (g_debugChords[i].key == 'O' && !g_runner->paused) showNotice("Pause first: " OF_ICON_SELECT " + " OF_ICON_START);
             logInfo("Debug: %s\n", g_debugChords[i].what);
         }
     }
 
-    for (size_t i = 0; i < OF_KEYMAP_COUNT; i++) {
-        if (!chording && of_btn_pressed(g_keymap[i].button))
-            RunnerKeyboard_onKeyDown(g_runner->keyboard, g_keymap[i].key);
-        if (of_btn_released(g_keymap[i].button))
-            RunnerKeyboard_onKeyUp(g_runner->keyboard, g_keymap[i].key);
+    uint32_t buttons = 0;
+    for (size_t i = 0; i < OF_GAME_BUTTON_COUNT; i++)
+        if (of_btn(g_gameButtons[i])) buttons |= g_gameButtons[i];
+#ifdef OF_PC
+    buttons |= ofGamepadScriptButtons(getenv("BS_PAD"), g_scriptFrame);
+#endif
+    /* A menu-closing button must be released before it reaches gameplay.
+     * Undertale derives its own presses from held joystick state. */
+    buttons = ofGamepadFilterButtons(&g_blockedGameButtons, buttons, chording || openMenu);
+    ofGamepadPoll(g_runner->gamepads, buttons, openMenu);
+    if (g_sleepTest) {
+        int32_t pendingBefore = g_runner->pendingRoom;
+        g_sleepTestLabel = ofGame.sleepTest(g_runner);
+        if (g_runner->pendingRoom != pendingBefore) {
+            /* Consume the checkpoint's input, including Start's confirm
+             * alias, until release rather than carrying it into the scene. */
+            g_blockedGameButtons |= buttons;
+            ofGamepadPoll(g_runner->gamepads, 0, true);
+        }
     }
-    if (g_sleepTest) g_sleepTestLabel = ofGame.sleepTest(g_runner);
     return false;
 }
 
@@ -1185,8 +1189,11 @@ void ofPlatformSnapshotResumed(Runner *runner, const uint32_t values[3]) {
     memset(runner->keyboard->keyPressed, 0, sizeof(runner->keyboard->keyPressed));
     memset(runner->keyboard->keyReleased, 0, sizeof(runner->keyboard->keyReleased));
     of_input_poll();
-    for (size_t i = 0; i < OF_KEYMAP_COUNT; i++)
-        runner->keyboard->keyDown[g_keymap[i].key] |= of_btn(g_keymap[i].button) != 0;
+    uint32_t buttons = 0;
+    for (size_t i = 0; i < OF_GAME_BUTTON_COUNT; i++)
+        if (of_btn(g_gameButtons[i])) buttons |= g_gameButtons[i];
+    g_blockedGameButtons = 0;
+    ofGamepadPoll(runner->gamepads, buttons, true);
 #endif
     /* Old presentation timing must not cause frame skips after restore. */
     g_debtNanos = 0; g_skipThisFrame = false;

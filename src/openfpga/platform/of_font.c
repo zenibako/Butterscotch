@@ -15,6 +15,7 @@
  */
 
 #include "of_font.h"
+#include "of_buttons.h"
 
 #include "data_win.h"
 #include "log.h"
@@ -178,8 +179,13 @@ int ofFontLineHeight(int scale) {
 int ofFontWidth(const char *text, int scale) {
     if (!ready()) return (int) strlen(text) * OF_LOG_CELL_W;
     int width = 0;
-    for (const char *p = text; *p != '\0'; p++) {
-        int c = (unsigned char) *p;
+    int32_t pos = 0, len = (int32_t)strlen(text);
+    while (pos < len) {
+        int c = TextUtils_decodeUtf8(text, len, &pos);
+        if (ofButtonCodepoint((uint16_t)c)) {
+            width += (OF_ICON_SIZE + 1) * scale;
+            continue;
+        }
         if (c < OF_FONT_FIRST || c > OF_FONT_LAST) c = '?';
         width += g_glyphs[c - OF_FONT_FIRST].shift * scale;
     }
@@ -188,8 +194,21 @@ int ofFontWidth(const char *text, int scale) {
 
 int ofFontDraw(uint16_t *fb, int width, int height, int x, int y, const char *text, uint16_t color, int scale) {
     if (!ready()) return ofPerfDrawLogText(fb, width, height, x, y, text, color);
-    for (const char *p = text; *p != '\0'; p++) {
-        int c = (unsigned char) *p;
+    int32_t pos = 0, len = (int32_t)strlen(text);
+    while (pos < len) {
+        int c = TextUtils_decodeUtf8(text, len, &pos);
+        if (ofButtonCodepoint((uint16_t)c)) {
+            for (int iy = 0; iy < OF_ICON_SIZE * scale; iy++) {
+                for (int ix = 0; ix < OF_ICON_SIZE * scale; ix++) {
+                    int px = x + ix, py = y + iy;
+                    if (px >= 0 && px < width && py >= 0 && py < height &&
+                        ofButtonPixel((uint16_t)c, ix / scale, iy / scale))
+                        fb[py * width + px] = color;
+                }
+            }
+            x += (OF_ICON_SIZE + 1) * scale;
+            continue;
+        }
         if (c < OF_FONT_FIRST || c > OF_FONT_LAST) c = '?';
         const OfGlyph *glyph = &g_glyphs[c - OF_FONT_FIRST];
         const uint8_t *ink = g_ink + glyph->start;

@@ -16,6 +16,8 @@
 #include <stdint.h>
 
 struct Runner;
+/* Private-use Pocket prompt glyphs, consumed by the software text renderer. */
+void *platformButtonGlyphTexture(uint16_t codepoint);
 #if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 /* Positive proves the reserve now; zero requires the usual malloc probe. */
 int platformHeapCanReserve(size_t bytes);

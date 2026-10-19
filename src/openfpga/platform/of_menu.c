@@ -18,6 +18,7 @@
 
 #include "of.h"
 #include "of_font.h"
+#include "of_buttons.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -171,7 +172,7 @@ static void draw(const MenuState *all, uint16_t *fb, const uint16_t *game, int w
     drawDescription(fb, width, height, left, y, right - left,
                     page->rows[state->cursor].description, s, line);
     y += 2 * line;
-    ofFontDraw(fb, width, height, left, y, "A: change   B: back", OF_GREY, s);
+    ofFontDraw(fb, width, height, left, y, OF_ICON_A ": change   " OF_ICON_B ": back", OF_GREY, s);
 }
 
 /* Which buttons went down this frame. */

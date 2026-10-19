@@ -250,6 +250,13 @@ git add -A src .claude && git ... commit      # a branch off main
 - Conventional commit messages; commits must be GPG signed. In Codex, run
   `gpg-warm-agent` before the first commit and verify the resulting signature.
   If warming fails, ask for an unlock rather than disabling signing.
+- For Codex commits, supply `AI_CO_AUTHOR='Codex <noreply@openai.com>'`
+  and/or an explicit `Co-authored-by: Codex <noreply@openai.com>` trailer.
+  The inherited `prepare-commit-msg` hook otherwise inserts the placeholder
+  `AI Model <ai@example.com>`, even when Codex attribution is configured.
+  Verify `git log -1 --format=%B` as well as the signature after committing.
+  Correcting published commit trailers requires the user's approval to rewrite
+  history; preserve the old commits and use an explicit `--force-with-lease`.
 - `main` is upstream `main` merged with upstream's draft PR #429
   (`sw-renderer`) and this port. Bring upstream in with a merge, not a
   rebase: the branch is published.
@@ -273,9 +280,13 @@ git add -A src .claude && git ... commit      # a branch off main
   merged while follow-up fixes were being pushed to it, and they never
   reached `main`. After a merge, put further work on a new branch from
   `main`.
-- Follow the user's authorship instructions. When they reserve PR descriptions
-  or comments, offer a brief outline and use their supplied wording; do not
-  publish agent-written prose or automatic summary comments.
+- Read [PR preparation](references/pr-preparation.md) when creating or refreshing
+  a PR, especially after fork history changes or for visible UI changes. It
+  covers the current base, signed replay, post-conflict checks, screenshot
+  provenance and durable image links, and user-controlled description wording.
+- Follow the user's authorship instructions and supplied summary. Explicit
+  authorization to add screenshots/technical visual details covers those
+  additions; preserve other prose and do not publish unrelated comments.
 - CI runs about 33 checks: desktop gcc and clang, C++98, MSVC 4.0,
   GCC 2.95, Web, the consoles and the Analogue Pocket build. They build
   with warnings as errors, so the usual failures are:
@@ -293,19 +304,22 @@ git add -A src .claude && git ... commit      # a branch off main
 
 ## Syncing with upstream
 
-Upstream (`origin/main`) moves quickly. Bring it in locally, with a merge,
-and check the result before it is pushed. Do not use GitHub's "Sync fork"
-button on `main`: it merges without your signature and without any of
-the checks below, and when the branch is both ahead and behind it also
-offers to discard the branch's own commits.
+First identify remotes by URL: `origin` may be the fork, not the original
+runner. Refreshing a topic onto current fork main and merging the runner's
+upstream are different operations; use [PR preparation](references/pr-preparation.md)
+for baseline selection and rewritten fork history. The steps below apply to an
+authorized integration of the original upstream. Preserve published history
+with a signed local merge. Do not use GitHub's "Sync fork" button: it can merge
+without your signature or offer to discard the fork's own commits.
 
 1. **Capture reference frames first**, with the `undertale_pc` built from
    the tree as it is (see the butterscotch-pocket-verify skill): a new game,
    the user's save in an overworld room, and a battle. They are the only
    way to tell afterwards whether the merge changed what is drawn.
-2. **Merge:** `git fetch origin && git merge --no-ff origin/main`. If the
-   clone is shallow, `git fetch --unshallow origin` first, or the merge
-   finds no common history.
+2. **Merge:** fetch the identified upstream remote, then
+   `git merge -S --no-ff <upstream-remote>/<branch>`. Inspect ancestry first.
+   If the clone is shallow, deepen that remote as needed; do not mistake
+   rewritten history for a shallow checkout.
 3. **Make it build.** The port's Makefile lists Butterscotch's sources
    itself and does not read `CMakeLists.txt`, so read that file's diff for
    new source directories, vendored libraries and options, and mirror them
@@ -327,5 +341,6 @@ offers to discard the branch's own commits.
 6. **Build for the device and have it run once** before pushing: the
    desktop cannot show memory, timing or card behaviour, and upstream code
    has not been through the Pocket before.
-7. **Push** only when asked, to a branch on `fork`, and open a PR into
-   `main`.
+7. **Push** only when asked, to the identified fork remote's topic branch,
+   and open the PR against the intended fork base. Prepare visual evidence
+   using [PR preparation](references/pr-preparation.md).

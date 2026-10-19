@@ -126,6 +126,15 @@ jobs:
         working-directory: butterscotch/src/openfpga
         run: make lint
 
+      - name: Check Pocket controller input and button prompts
+        working-directory: butterscotch/src/openfpga
+        run: |
+          make gamepad-input-fixture button-prompts-fixture
+          ./undertale_pc_gamepad_input_fixture
+          ./undertale_pc_button_prompts_fixture
+          make GAME=deltarune deltarune-button-prompts-fixture-build
+          ./deltarune_pc_button_names_fixture
+
       - name: Check save-state regressions with sanitizers
         working-directory: butterscotch/src/openfpga
         env:
