@@ -1,7 +1,7 @@
 name: Pocket
 
-# The Analogue Pocket port (src/openfpga). A workflow of its own, so that
-# Butterscotch's build.yml stays as upstream has it.
+# The Analogue Pocket port (src/openfpga). Invoked by the domain selector
+# in build.yml; shared runtime changes still select this workflow.
 #
 # No game data is available here, so this builds what needs none: the RISC-V
 # program for each game, the desktop test binaries, and the port's lint. The
@@ -9,10 +9,7 @@ name: Pocket
 # data.win and are not made here.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 env:
   # The openfpgaOS SDK commit the port is built against. The build only reads it.

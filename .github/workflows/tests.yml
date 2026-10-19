@@ -1,10 +1,10 @@
 name: Tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
+    secrets:
+      COMMERCIAL_GAMES_URL:
+        required: false
 
 jobs:
   butterscotch-linux-x86_64:
