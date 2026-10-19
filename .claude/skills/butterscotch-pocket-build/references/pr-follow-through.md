@@ -50,6 +50,10 @@ route within the same scope, then verify the result. Check for an existing PR
 before retrying creation. A sandbox/approval rejection is a boundary, not a cue
 to route around it.
 
+For requested visual description updates, follow [PR preparation](pr-preparation.md).
+Read back the updated description and verify its published image URLs as well
+as its Markdown. Preserve the user's supplied prose and existing content.
+
 Verify a created PR's URL/head and attach it to the current Codex task. Verify
 resolved thread IDs, or the merged PR's closed/merged state and merge commit,
 before reporting completion. Leave worktrees and branches intact unless cleanup

@@ -1,0 +1,45 @@
+{
+  "source_commit": "d8b9602399019309a927ff915424e60e85039ee6",
+  "capture": "Desktop SDL shim; same software renderer as the port. Pocket hardware not tested.",
+  "seed": 7,
+  "config": {
+    "FOCUS_BENCH": 0,
+    "BS_UNCAPPED": 1,
+    "BS_NOFLIP": 1
+  },
+  "scenes": [
+    {
+      "image": "undertale-instructions.png",
+      "game": "undertale",
+      "frame": 150,
+      "resolution": "320 240",
+      "BS_SCRIPT": "30:Z,100:Z",
+      "image_scale": 2,
+      "game_version": "Undertale v1.08",
+      "data_sha256": "91a8acf1f40bd7c45d0bdb978de55187e7fb2cd76a1e2cda41c078dd44d3565e"
+    },
+    {
+      "image": "undertale-menu-prompt.png",
+      "game": "undertale",
+      "frame": 800,
+      "resolution": "320 240",
+      "BS_SCRIPT": "30:Z,100:Z,160:Z,220:Z,230:D,238:D,246:D,254:D,262:D,270:D,278:D,286:D,300:R,308:R,330:Z,370:R,380:Z,520:U*20,550:Z,610:Z,720:Z",
+      "BS_GOTO": "500:13",
+      "image_scale": 2,
+      "game_version": "Undertale v1.08",
+      "data_sha256": "91a8acf1f40bd7c45d0bdb978de55187e7fb2cd76a1e2cda41c078dd44d3565e"
+    },
+    {
+      "image": "deltarune-menu-prompt.png",
+      "game": "deltarune",
+      "frame": 1400,
+      "resolution": "640 480",
+      "BS_SCRIPT": "70:R*200,300:Z,340:Z,380:Z,420:Z,460:Z,500:Z,540:Z,580:Z,620:Z,660:Z,700:Z,740:Z,780:Z,820:Z,860:Z,900:Z,940:R*4,950:Z,1010:Z,1110:Z,1210:Z,1310:Z",
+      "BS_SET": "30:darkzone=1,char[1]=1,char[2]=3,plot=0,interact=0",
+      "BS_GOTO": "31:47",
+      "image_scale": 1,
+      "game_version": "Deltarune Chapter 1",
+      "data_sha256": "93ee8d4353f0d6189a740fc625bdd69acbb904e74597a4053c88b073b2e29058"
+    }
+  ]
+}

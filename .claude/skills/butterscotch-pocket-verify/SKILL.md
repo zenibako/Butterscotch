@@ -153,7 +153,13 @@ BS_RUN_DIR="$record_dir" \
 4. For a renderer change, repeat one capture with `-e BS_SKIP=2`: it must
    match the unskipped one (frame skipping relies on a skipped frame
    leaving nothing behind that a later frame needs).
-5. Report exactly which frames you compared.
+5. Report exactly which frames you compared. After a base refresh or conflict
+   resolution, rerun affected checks and captures on that integrated code.
+6. For user-visible changes, prepare reviewable PNGs with source commit, scene,
+   resolution and replay/configuration details. Follow
+   [PR preparation](../butterscotch-pocket-build/references/pr-preparation.md)
+   for matched baselines, durable publication and description authorization.
+   A mapping/disassembly check is not a screenshot of the requested scene.
 
 For audio, `BS_AUDIO_DUMP` supports listening and inspection, but its wall-clock
 sample demand does not establish deterministic PCM identity. Offset alignment
