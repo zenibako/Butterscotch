@@ -2,9 +2,23 @@ name: Console builds
 
 on:
   workflow_call:
+    inputs:
+      ps2:
+        type: boolean
+        default: true
+      ps3:
+        type: boolean
+        default: true
+      vita:
+        type: boolean
+        default: true
+      switch:
+        type: boolean
+        default: true
 
 jobs:
   build-ps2:
+    if: inputs.ps2
     name: Build (PS2)${{ matrix.label }}
     runs-on: ubuntu-24.04
     container:
@@ -133,6 +147,7 @@ jobs:
           path: build/butterscotch.elf
 
   build-ps3:
+    if: inputs.ps3
     name: Build (PS3)
     runs-on: ubuntu-24.04
     container: scummvm/dockerized-toolchains:ps3
@@ -164,6 +179,7 @@ jobs:
           path: build/butterscotch.elf
 
   build-vita:
+    if: inputs.vita
     name: Build (PS Vita)
     runs-on: ubuntu-24.04
     container: vitasdk/vitasdk:2026.08-20260919
@@ -282,6 +298,7 @@ jobs:
           path: build/Butterscotch.vpk
 
   build-switch:
+    if: inputs.switch
     name: Build (Nintendo Switch)
     runs-on: ubuntu-24.04
     container:
