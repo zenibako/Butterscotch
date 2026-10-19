@@ -50,6 +50,34 @@ to both Pocket and Go to cover transitive includes from `of_log.c`.
 The independent `Update Coverage` workflow is existing wiki-publishing automation,
 not a CI build/test gate. Its publishing policy is unchanged.
 
+## Pocket build reuse
+
+The Pocket workflow runs make with two jobs per invocation. Build/test steps
+remain sequential so configuration changes cannot race make's object-directory
+invalidation. The builtin, clipping, font/menu and Undertale battle fixtures share
+one Undertale sanitizer object directory because their compiler flags are
+identical. Deltarune, ordinary desktop builds, the default profiler and the
+generic profiler retain separate directories. All existing checks still run.
+
+`ccache` wraps host make compilation through `PC_CC`; device make commands select
+the cached RISC-V compiler explicitly. No cross compiler or multiword `CC` is
+exported to the standalone snapshot shell suite. That suite retains clang and
+its existing sanitizer checks.
+
+Only the 500 MB compiler cache is saved between runs, keyed by schema, runner
+OS/architecture, pinned SDK revision, actual host/cross compiler and ccache binary
+contents, and commit. Restore prefixes share compatible compiler results across
+source changes. Ccache checks compiler contents and individual compilation
+inputs; raw object directories are not restored. Cache hits never skip builds,
+tests, BRAM checks or artifact upload. Per-run cache statistics are printed even
+if a later test fails, provided build-tool installation succeeded.
+
+`scripts/ci/test_pocket_workflow.py` runs the workflow's shell commands against
+recording tools to check fixture coverage, configuration isolation, failure
+propagation and compiler fingerprints without commercial assets or an SDK. This
+does not measure real compiler-cache hit rates or GitHub runner speed; inspect
+the workflow's statistics and step timings for cold/warm comparisons.
+
 ## Manual full matrix
 
 In GitHub Actions, choose **Build → Run workflow**. Every manual invocation
