@@ -1,5 +1,5 @@
 {
-  "source_commit": "d8b9602399019309a927ff915424e60e85039ee6",
+  "source_commit": "9f977e728fc1fbf00c45f5c681f3638e9b9a73e8",
   "capture": "Desktop SDL shim; same software renderer as the port. Pocket hardware not tested.",
   "seed": 7,
   "config": {
@@ -41,5 +41,7 @@
       "game_version": "Deltarune Chapter 1",
       "data_sha256": "93ee8d4353f0d6189a740fc625bdd69acbb904e74597a4053c88b073b2e29058"
     }
-  ]
+  ],
+  "source_tree": "43b487883bb0ae24c7a69aec7049a400b91a075c",
+  "source_note": "The source commit was re-signed to correct attribution; its source tree is identical to the captured build."
 }
