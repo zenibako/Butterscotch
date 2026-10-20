@@ -65,7 +65,7 @@ void swrFreeGlyphHints(SWTexture* texture)
 
 // Includes entry metadata and pixels across all textures/renderers. The ordinary
 // sampler remains available when this optional budget or malloc is exhausted.
-static size_t swrButtonCacheBytes;
+MAYBE_UNUSED static size_t swrButtonCacheBytes;
 enum { SWR_BUTTON_CACHE_BYTES = 32 * 1024 };
 
 const SWButtonCache* swrButtonCache(SWTexture* texture, int sx, int sy, int sw, int sh)
