@@ -163,6 +163,19 @@ CALL bytecode and WAD17 CALLV bytecode, stack/heap argument boundaries, value
 ownership and nested script/event execution without game assets. Run it once
 for each game with a separate object directory.
 
+The Forest sentry fixture is `./<game>_pc_forest_sentry_fixture`. Build with
+`GAME=deltarune WADS=17 forest-sentry-fixture`, then pass your Chapter 1
+`data.win` to the executable. Real bytecode is the differential oracle; no game
+data is embedded. It checks active-state builtin order/arguments/results,
+numeric value types, bullet state, array aliases/owner tokens, spatial dirty
+order, RNG, disabled/mismatched natives, unsupported-state rejection and fresh
+VM variable-ID resolution. Instrumentation requires native acceptance and zero
+interpreter entries for supported cases. `--behavior-only` characterizes an
+unoptimized baseline without enforcing those work bounds. Run with the
+sanitizer flags above and also build `GAME=undertale WADS=16` to check exclusion.
+Creation and warm-up retain the interpreter; the native handles only bounded,
+finite active-state values behind the exact event length/hash guard.
+
 The tile-shift fixture is `./deltarune_pc_tile_shift_fixture`. Pass the path to
 your own Chapter 1 `data.win` as its argument. It compares the interpreted
 script and the guarded native, including ordered builtin calls, coordinates,

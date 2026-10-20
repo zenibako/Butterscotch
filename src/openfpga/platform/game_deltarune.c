@@ -16,6 +16,7 @@
 #include "runner.h"
 #include "rvalue.h"
 #include "vm.h"
+#include "vm_builtins.h"
 #include "stb_ds.h"
 #include "of_state_requests.h"
 #include "runner_keyboard.h"
@@ -32,6 +33,8 @@ static bool lessThan(GMLReal a, GMLReal b, GMLReal epsilon) {
 static bool isNumber(RValue value) {
     return value.type == RVALUE_REAL || value.type == RVALUE_INT32;
 }
+
+#include "game_deltarune_sentry.h"
 
 /* gml_Object_obj_purplegrass_Draw_0: the floor of the field, and
  * what is behind its battles. About 11,000 operations a frame for:
@@ -534,11 +537,13 @@ static const OfNativeScript g_nativeScripts[] = {
 };
 
 static const OfNativeCode g_natives[] = {
+    { "gml_Object_obj_darkponman_ow_Step_0", 2236, 0x2e65f505e4e7b03eull, forestSentryStep },
     { "gml_Object_obj_writer_Draw_0", 12780, 0xad8c918f7aad19f8ull, writerDraw },
     { "gml_Object_obj_purplegrass_Draw_0", 348, 0x8cf611b685a27620ull, purpleGrassDraw },
 };
 
 static void forgetVm(void) {
+    sentryResolved = false;
     writerResolved = 0;
     g_spriteMapVar = -1;
 }
