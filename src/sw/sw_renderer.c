@@ -7,6 +7,7 @@
 
 #include "sw_renderer_private.h"
 #include "gettime.h"
+#include "vm_builtins.h"
 
 #define MAX_TRIS 4096
 #define VERTICES_PER_TRIANGLE 3
@@ -202,6 +203,7 @@ static void SWRenderer_init(Renderer* renderer, DataWin* dataWin)
 static void SWRenderer_destroy(Renderer* renderer)
 {
     SWRenderer* swr = (SWRenderer*) renderer;
+    VMBuiltins_resetD3D(renderer);
 
     swr->primitiveBegun = false;
     swr->primitiveOverflow = false;
