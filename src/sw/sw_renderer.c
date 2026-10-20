@@ -1258,6 +1258,7 @@ static void SWRenderer_drawSurface(Renderer* renderer, int32_t surfaceID,
     SWTexture* surface, localSurface;
     localSurface.halfBuffer = NULL;
     localSurface.glyphHints = NULL;
+    localSurface.buttonCache = NULL;
     localSurface.rowBounds = NULL;
     localSurface.halfRowBounds = NULL;
     localSurface.halfFullBounds = NULL;

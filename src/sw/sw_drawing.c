@@ -1116,6 +1116,24 @@ static void swrDrawSpriteInternal(
     
 #ifdef SW_HAS_PREMUL_BLEND
     if (contrast == SWR_CONTRAST_BUTTON || contrast == SWR_CONTRAST_UI_GLYPH || contrast == SWR_CONTRAST_BUBBLE_GLYPH) {
+        // Only this exact white, full-opacity hybrid case has a derivative.
+        // Key the clipped source rectangle: an odd edge or shifted phase changes
+        // both the center tap and which box taps count as transparent.
+        if (contrast == SWR_CONTRAST_BUTTON && alpha == 256 && (tintColor & 0x7fff) == 0x7fff &&
+            sw == 2 * dw - (sw & 1) && sh == 2 * dh - (sh & 1)) {
+            const SWButtonCache* cache = swrButtonCache(texture, sx, sy, sw, sh);
+            if (cache) {
+                for (int y = 0; y < dh; ++y) {
+                    uintpixel_t* dst = swr->fb + (dy + y) * swr->fbPitch + dx;
+                    const SWButtonPixel* row = cache->pixels + y * dw;
+                    for (int x = 0; x < dw; ++x) {
+                        if (row[x].covered)
+                            dst[x] = swrBlendPremultiplied(dst[x], row[x].redBlue, row[x].green, row[x].keep);
+                    }
+                }
+                return;
+            }
+        }
         // Blend the source center with an ordinary 2x2 average, equally.
         // Full blocks stay solid; edge shades follow the centered shape without
         // the contrast curve's expansion, except for the bubble adjustment below.

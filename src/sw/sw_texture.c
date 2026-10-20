@@ -32,6 +32,7 @@ SWTexture* swrCreateTextureEx(const void* srcBuffer, int width, int height, bool
     txt->lastUsedFrame = 0;
     txt->halfBuffer = NULL;
     txt->glyphHints = NULL;
+    txt->buttonCache = NULL;
     txt->rowBounds = NULL;
     txt->halfRowBounds = NULL;
     txt->halfFullBounds = NULL;
@@ -62,12 +63,78 @@ void swrFreeGlyphHints(SWTexture* texture)
     }
 }
 
+// Includes entry metadata and pixels across all textures/renderers. The ordinary
+// sampler remains available when this optional budget or malloc is exhausted.
+MAYBE_UNUSED static size_t swrButtonCacheBytes;
+enum { SWR_BUTTON_CACHE_BYTES = 32 * 1024 };
+
+const SWButtonCache* swrButtonCache(SWTexture* texture, int sx, int sy, int sw, int sh)
+{
+#ifndef SW_HAS_PREMUL_BLEND
+    (void) texture; (void) sx; (void) sy; (void) sw; (void) sh;
+    return NULL;
+#else
+    if (!texture->immutable || sw <= 0 || sh <= 0 || sw > 32 || sh > 32 ||
+        sx < 0 || sy < 0 || sx > texture->width - sw || sy > texture->height - sh)
+        return NULL;
+    for (SWButtonCache* cache = texture->buttonCache; cache; cache = cache->next)
+        if (cache->sx == sx && cache->sy == sy && cache->sw == sw && cache->sh == sh)
+            return cache;
+    int width = (sw + 1) / 2, height = (sh + 1) / 2;
+    size_t bytes = sizeof(SWButtonCache) + (size_t) width * height * sizeof(SWButtonPixel);
+    if (bytes > SWR_BUTTON_CACHE_BYTES - swrButtonCacheBytes) return NULL;
+    SWButtonCache* cache = malloc(bytes);
+    if (!cache) return NULL; // Never evict the source texture while sampling it.
+    cache->sx = sx; cache->sy = sy; cache->sw = sw; cache->sh = sh;
+    for (int y = 0; y < height; ++y) {
+        int y0 = sy + y * 2, y1 = y0 + 1 < sy + sh ? y0 + 1 : y0;
+        for (int x = 0; x < width; ++x) {
+            int x0 = sx + x * 2, x1 = x0 + 1 < sx + sw ? x0 + 1 : x0;
+            uintpixel_t taps[5] = {
+                texture->buffer[y1 * texture->width + x1],
+                texture->buffer[y0 * texture->width + x0],
+                x0 + 1 < sx + sw ? texture->buffer[y0 * texture->width + x0 + 1] : 0,
+                y0 + 1 < sy + sh ? texture->buffer[(y0 + 1) * texture->width + x0] : 0,
+                x0 + 1 < sx + sw && y0 + 1 < sy + sh ? texture->buffer[(y0 + 1) * texture->width + x0 + 1] : 0
+            };
+            uint32_t redBlue = 0, green = 0, covered = 0;
+            for (int tap = 0; tap < 5; ++tap) {
+                if (!swrIsOpaque(taps[tap])) continue;
+                unsigned weight = tap == 0 ? 4 : 1;
+                redBlue += swrSpreadRedBlue(taps[tap]) * weight;
+                green += swrGreen(taps[tap]) * weight;
+                covered += weight;
+            }
+            cache->pixels[y * width + x] = (SWButtonPixel) {
+                .redBlue = redBlue << 5, .green = (uint16_t) (green << 5),
+                .keep = covered ? (uint8_t) (256 - covered * 32) : 0, .covered = (uint8_t) covered
+            };
+        }
+    }
+    cache->next = texture->buttonCache;
+    texture->buttonCache = cache;
+    swrButtonCacheBytes += bytes;
+    return cache;
+#endif
+}
+
+void swrFreeButtonCache(SWTexture* texture)
+{
+    while (texture->buttonCache) {
+        SWButtonCache* cache = texture->buttonCache;
+        texture->buttonCache = cache->next;
+        swrButtonCacheBytes -= sizeof(*cache) + (size_t) ((cache->sw + 1) / 2) * ((cache->sh + 1) / 2) * sizeof(SWButtonPixel);
+        free(cache);
+    }
+}
+
 void swrFreeTexture(SWTexture* texture)
 {
     if (UNLIKELY(!texture))
         return;
     
     swrFreeGlyphHints(texture);
+    swrFreeButtonCache(texture);
     free(texture->halfBuffer); // the coverage, if any, is in the same allocation
     free(texture->rowBounds);
     free(texture->buffer);
