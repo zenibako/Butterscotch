@@ -429,6 +429,11 @@ layer-lookup-fixture: $(PC_OBJS)
 tile-shift-fixture: $(PC_OBJS)
 	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/tile-shift.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_tile_shift_fixture
 
+# Real-asset oracle for the guarded active Forest sentry event.
+.PHONY: forest-sentry-fixture
+forest-sentry-fixture: $(PC_OBJS)
+	$(PC_CC) $(ALL_PC_CFLAGS) $(PC_SDL_CFLAGS) -finstrument-functions -fno-inline-functions tests/forest-sentry.c $(filter-out $(PC_OBJ_DIR)/main.o $(PC_OBJ_DIR)/up/vm.o $(filter %/src/vm.o,$(PC_OBJS)),$(PC_OBJS)) $(PC_SDL_LIBS) $(PC_EXTRA_CFLAGS) -lm -o $(PC_BIN)_forest_sentry_fixture
+
 # Real-asset oracle for live background lookup and its guarded native path.
 .PHONY: background-lookup-fixture
 background-lookup-fixture: $(PC_OBJS)

@@ -20,6 +20,7 @@
 #endif
 
 static uint64_t g_gameId;
+static uint64_t g_legacyGameId;
 #if defined(OF_NATIVE_SAVESTATES) && !defined(OF_PC)
 static bool g_service;
 /* UTS1 v2 stores its envelope checksum at byte 36. Logging it does not
@@ -90,6 +91,9 @@ void ofSavestateInit(Runner *runner) {
         HASH_BYTES(c->name, strlen(c->name));
         HASH_BYTES(dw->bytecodeBuffer + c->bytecodeAbsoluteOffset - dw->bytecodeBufferBase, c->length);
     }
+    /* Older builds bound Memories to loaded metadata and code alone. Keep
+     * that identity for reading, while new captures include the full-data hash. */
+    g_legacyGameId = h;
 #ifdef OF_STATE_GAME_ID
     uint64_t packaged = OF_STATE_GAME_ID;
     HASH_BYTES(&packaged, sizeof(packaged));
@@ -230,15 +234,19 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
                          const char **reason, void (*committed)(void)) {
     uint64_t phases[6] = {nowNanos(), 0, 0, 0, 0, 0};
     OfSnapshotSection parts[4];
-    if (!ofSnapshotUnpack(g_gameId, data, size, parts)) {
-        /* The Pocket lists every game's Memories under the one core, and a
-         * wake after a refused sleep save brings back the last state taken,
-         * whichever game it was. */
-        *reason = ofSnapshotFromOtherGame(g_gameId, data, size)
-            ? "This Memory is from another game or version"
-            : data && size >= 4 && memcmp(data, "UTS1", 4) != 0
-            ? "Not a Butterscotch save state" : "State is damaged or incompatible";
-        return false;
+    uint64_t gameId = g_gameId;
+    if (!ofSnapshotUnpack(gameId, data, size, parts)) {
+        gameId = g_legacyGameId;
+        if (!ofSnapshotUnpack(gameId, data, size, parts)) {
+            /* The Pocket lists every game's Memories under the one core, and a
+             * wake after a refused sleep save brings back the last state taken,
+             * whichever game it was. */
+            *reason = ofSnapshotFromOtherGame(g_gameId, data, size)
+                ? "This Memory is from another game or version"
+                : data && size >= 4 && memcmp(data, "UTS1", 4) != 0
+                ? "Not a Butterscotch save state" : "State is damaged or incompatible";
+            return false;
+        }
     }
     OfSnapshotReader platform = {parts[3].data, parts[3].size, 0, true};
     uint32_t values[3];
@@ -248,7 +256,7 @@ static bool restoreState(Runner *r, const uint8_t *data, size_t size,
         *reason = "Invalid platform state"; return false;
     }
     ofAudioSnapshotLock(true);
-    RunnerSnapshot *core = Runner_snapshotPrepare(r, g_gameId, parts[0].data, parts[0].size, reason);
+    RunnerSnapshot *core = Runner_snapshotPrepare(r, gameId, parts[0].data, parts[0].size, reason);
     phases[1] = nowNanos();
     void *audio = NULL, *files = NULL;
     if (core) {
