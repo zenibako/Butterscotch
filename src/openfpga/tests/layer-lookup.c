@@ -126,6 +126,47 @@ static void testSearch(void) {
     expect(f, 251, 5, 249);
     dispose(f);
 }
+static void testSequentialWalk(void) {
+    Fixture *f = fixture();
+    for (int i = 0; i < 3; ++i) addLayer(f, i + 1);
+    for (int i = 0; i < 20; ++i) addElement(f, 0, 500 + i);
+    for (int i = 0; i < 240; ++i) addElement(f, 2, 1000 + i);
+    /* Four lookups per tile, as tile_get_x/x/get_y/y plus type do in a shift. */
+    loopBodies = 0;
+    for (int pass = 0; pass < 2; ++pass)
+        for (int i = 0; i < 240; ++i)
+            for (int k = 0; k < 5; ++k) expect(f, 1000 + i, 2, i);
+    printf("2 ascending 240-tile walks: %u search-loop bodies\n", loopBodies);
+    /* Each walk pays one scan for its first tile and one prefix pass for its
+     * second (about 25 bodies each); the other 238 tiles take the next slot. */
+    if (!behaviorOnly && loopBodies > 4 * 30) ++workFailures;
+    /* An earlier duplicate of the next slot's ID must still win. */
+    addElement(f, 0, 1100);
+    expect(f, 1099, 2, 99);
+    expect(f, 1100, 0, 20);
+    expect(f, 1099, 2, 99);
+    expect(f, 1100, 0, 20);
+    /* Same, with the duplicate's ID already above the recorded prefix. */
+    expect(f, 1098, 2, 98);
+    expect(f, 1099, 2, 99);
+    expect(f, 1100, 0, 20);
+    /* Descending IDs fall back to the full first-match search. */
+    Fixture *g = fixture();
+    addLayer(g, 1);
+    for (int i = 0; i < 30; ++i) addElement(g, 0, 900 - i);
+    addElement(g, 0, 895); /* duplicate later in the walk */
+    for (int i = 0; i < 30; ++i) expect(g, 900 - i, 0, i);
+    expect(g, 895, 0, 5);
+    expect(g, 870, -1, -1);
+    dispose(g);
+    /* Ascending walk crossing an in-place ID change at the hinted slot. */
+    expect(f, 1000, 2, 0);
+    expect(f, 1001, 2, 1);
+    f->r.runtimeLayers[2].elements[1].id = 5000;
+    expect(f, 1002, 2, 2);
+    expect(f, 1001, -1, -1);
+    dispose(f);
+}
 static void testBuiltins(void) {
     Fixture *f = fixture();
     addLayer(f, 1); addLayer(f, 2);
@@ -294,7 +335,7 @@ static void testSnapshot(void) {
 }
 int main(int argc, char **argv) {
     behaviorOnly = argc > 1 && !strcmp(argv[1], "--behavior-only");
-    testSearch(); testBuiltins(); testInstances(); testDestroyCallback(); testRoomLifecycle(); testSnapshot();
+    testSearch(); testSequentialWalk(); testBuiltins(); testInstances(); testDestroyCallback(); testRoomLifecycle(); testSnapshot();
     printf("%u behavior checks, %u work-bound failures\n", checks, workFailures);
     return workFailures ? 1 : 0;
 }

@@ -789,6 +789,11 @@ struct Runner {
     size_t layerElementLookupLayer;
     size_t layerElementLookupElement;
     bool layerElementLookupValid;
+    // Largest ID before the hinted slot, valid only while prefixKnown. Lets a
+    // sequential walk accept the following slot without rescanning: an ID above
+    // every earlier ID cannot have an earlier duplicate.
+    uint32_t layerElementLookupPrefixMax;
+    bool layerElementLookupPrefixKnown;
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
     uint32_t nextLayerDrawOrder;
     SavedRoomState* savedRoomStates; // array of size dataWin->room.count, for persistent room support
