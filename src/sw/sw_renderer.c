@@ -1178,11 +1178,11 @@ static bool SWRenderer_gpuGetBlendEnable(Renderer* renderer)
     return false;
 }
 
-static void SWRenderer_gpuSetFog(Renderer* renderer, bool enable, uint32_t color)
+static void SWRenderer_gpuSetFog(Renderer* renderer, bool enable, uint32_t color, float start, float end)
 {
     swrOverlayFlush((SWRenderer*) renderer);
     UNIMP();
-    (void)renderer; (void)enable; (void)color;
+    (void)renderer; (void)enable; (void)color; (void)start; (void)end;
 }
 
 static int32_t SWRenderer_createSurface(Renderer* renderer, int32_t width, int32_t height)

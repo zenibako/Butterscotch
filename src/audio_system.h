@@ -20,6 +20,7 @@ typedef struct {
 // ===[ AudioSystem Vtable ]===
 
 typedef struct AudioSystem AudioSystem;
+struct FmodSystem;
 
 typedef struct {
     void (*init)(AudioSystem* audio, DataWin* dataWin, FileSystem* fileSystem);
@@ -56,6 +57,9 @@ typedef struct {
     bool (*destroyStream)(AudioSystem* audio, int32_t streamIndex);
     bool pauseStopsFades; // sample-driven mixers freeze gain ramps on paused voices
     bool (*isAllPaused)(AudioSystem* audio); // authoritative pause state, including after restore
+    // encoded data stays alive until the voice ends or is stopped.
+    // returns a voice id, -1 on failure, or -2 for the headless sink.
+    int32_t (*playEncoded)(AudioSystem* audio, const uint8_t* data, size_t bytes, bool loop);
 } AudioSystemVtable;
 
 // ===[ AudioSystem Base Struct ]===
@@ -67,6 +71,8 @@ struct AudioSystem {
     float listenerX, listenerY, listenerZ;
     AudioGroupGain* groupGains;
     uint32_t groupGainCount;
+    struct FmodSystem* fmodSystem;
+    int32_t fmodNextHandle;
 };
 
 static inline int32_t AudioSystem_soundGroup(const AudioSystem* audio, int32_t soundIndex) {
@@ -82,6 +88,7 @@ static inline float AudioSystem_getGroupGain(const AudioSystem* audio, int32_t g
 }
 
 static inline float AudioSystem_soundGroupGain(const AudioSystem* audio, int32_t soundIndex) {
+    if (soundIndex < 0) return 1; // encoded voices don't belong to a gamemaker audio group.
     return AudioSystem_getGroupGain(audio, AudioSystem_soundGroup(audio, soundIndex));
 }
 
