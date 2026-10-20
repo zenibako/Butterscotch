@@ -249,6 +249,12 @@ every game's Memories together, so loading one into the other game, or after
 the game's data has changed, is refused with "This Memory is from another
 game or version".
 
+Memories from older builds that omitted the whole-file fingerprint are also
+readable when their original metadata-and-code identity matches the loaded
+game. Those legacy states cannot verify changes elsewhere in `data.win`, so
+use the original game data. Loading one keeps all format, checksum, and resource
+validation; subsequent captures use the current whole-file fingerprint.
+
 The Pocket can still power off after a refused save. In the hardware test, wake
 then replayed an older sleep payload. A refusal therefore means the current
 position will not be restored; check eligibility before sleeping.
