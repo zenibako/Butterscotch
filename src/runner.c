@@ -2909,25 +2909,26 @@ void Runner_invalidateLayerElementLookup(Runner* runner) {
 }
 
 // Full first-match search up to and including (stopLayer, stopElement), also
-// recording the largest ID it passes. Used only when the slot after the hint
-// matches, so it does no more comparisons than the plain scan would.
+// recording the smallest ID it passes that is above the match. Used only when
+// the slot after the hint matches, so it compares no more slots than the scan.
 static RuntimeLayerElement* findLayerElementPrefix(Runner* runner, int32_t elementId, size_t stopLayer, size_t stopElement, RuntimeLayer** outLayer) {
-    uint32_t prefixMax = 0;
+    uint32_t target = (uint32_t) elementId;
+    uint32_t ceiling = UINT32_MAX;
     repeat(stopLayer + 1, i) {
         RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
         size_t elementCount = i == stopLayer ? stopElement + 1 : arrlenu(runtimeLayer->elements);
         repeat(elementCount, j) {
             uint32_t id = runtimeLayer->elements[j].id;
-            if ((int32_t) id == elementId) {
+            if (id == target) {
                 runner->layerElementLookupLayer = i;
                 runner->layerElementLookupElement = j;
                 runner->layerElementLookupValid = true;
-                runner->layerElementLookupPrefixMax = prefixMax;
+                runner->layerElementLookupPrefixCeiling = ceiling;
                 runner->layerElementLookupPrefixKnown = true;
                 if (outLayer != nullptr) *outLayer = runtimeLayer;
                 return &runtimeLayer->elements[j];
             }
-            if (id > prefixMax) prefixMax = id;
+            if (id > target && ceiling > id) ceiling = id;
         }
     }
     return nullptr;
@@ -2950,16 +2951,16 @@ RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t element
                 if (outLayer != nullptr) *outLayer = layer;
                 return &layer->elements[elementIndex];
             }
-            // Tile walks ask for each element in turn. The next slot is the
-            // first match when its ID exceeds every ID before it; otherwise the
-            // prefix search finds any earlier duplicate exactly as the scan would.
+            // Tile walks ask for each element in turn. No earlier ID lies between
+            // the hinted ID and the ceiling, so a next slot strictly inside that
+            // range is the first match, and the ceiling still holds for it.
+            // Otherwise the prefix search finds any earlier duplicate exactly as
+            // the scan would.
             size_t nextIndex = elementIndex + 1;
             if (nextIndex < elementCount && (int32_t) layer->elements[nextIndex].id == elementId) {
                 uint32_t nextId = layer->elements[nextIndex].id;
-                uint32_t prefixMax = runner->layerElementLookupPrefixMax > hintId ? runner->layerElementLookupPrefixMax : hintId;
-                if (runner->layerElementLookupPrefixKnown && nextId > prefixMax) {
+                if (runner->layerElementLookupPrefixKnown && nextId > hintId && runner->layerElementLookupPrefixCeiling > nextId) {
                     runner->layerElementLookupElement = nextIndex;
-                    runner->layerElementLookupPrefixMax = prefixMax;
                     if (outLayer != nullptr) *outLayer = layer;
                     return &layer->elements[nextIndex];
                 }

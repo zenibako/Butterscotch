@@ -159,6 +159,22 @@ static void testSequentialWalk(void) {
     expect(g, 895, 0, 5);
     expect(g, 870, -1, -1);
     dispose(g);
+    /* Spade layout: earlier layers hold runtime elements with higher IDs. */
+    Fixture *h = fixture();
+    for (int i = 0; i < 5; ++i) addLayer(h, i + 1);
+    for (int i = 0; i < 5; ++i) addElement(h, 1, 585 + i);
+    for (int i = 0; i < 20; ++i) addElement(h, 2, 100 + i);
+    for (int i = 0; i < 240; ++i) addElement(h, 4, 341 + i);
+    loopBodies = 0;
+    for (int pass = 0; pass < 2; ++pass)
+        for (int i = 0; i < 240; ++i)
+            for (int k = 0; k < 5; ++k) expect(h, 341 + i, 4, i);
+    printf("2 walks after higher earlier IDs: %u search-loop bodies\n", loopBodies);
+    if (!behaviorOnly && loopBodies > 4 * 35) ++workFailures;
+    /* An earlier duplicate inside the walk's range still wins, then the walk resumes. */
+    addElement(h, 0, 450);
+    for (int i = 0; i < 240; ++i) expect(h, 341 + i, 341 + i == 450 ? 0 : 4, 341 + i == 450 ? 0 : i);
+    dispose(h);
     /* Ascending walk crossing an in-place ID change at the hinted slot. */
     expect(f, 1000, 2, 0);
     expect(f, 1001, 2, 1);
