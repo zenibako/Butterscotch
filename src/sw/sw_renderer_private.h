@@ -35,6 +35,20 @@ typedef struct {
     const SWHintedGlyphAsset* asset;
 } SWHintedGlyphBinding;
 
+// Exact hybrid-filter intermediates for white, alpha-256 button draws. Channel
+// sums are premultiplied without rounding to RGB555; edges still blend with the
+// destination. Entries belong to their immutable source, not a frame or surface.
+typedef struct {
+    uint32_t redBlue;
+    uint16_t green;
+    uint8_t keep, covered;
+} SWButtonPixel;
+typedef struct SWButtonCache {
+    struct SWButtonCache* next;
+    int sx, sy, sw, sh;
+    SWButtonPixel pixels[];
+} SWButtonCache;
+
 // Struct Definitions
 typedef struct
 {
@@ -50,6 +64,7 @@ typedef struct
     // that such draws need no averaging. Only for a texture whose pixels never
     // change (immutable: one loaded from the game's data, not a surface).
     SWGlyphHintCache* glyphHints; // freed with the immutable source texture
+    SWButtonCache* buttonCache;
     uintpixel_t* halfBuffer;
     uint8_t* halfCoverage;  // how many of its four texels each copied one stands for, 0..4; NULL when every one is 0 or 4
     bool immutable;
@@ -69,6 +84,9 @@ typedef struct
     uint16_t* halfFullBounds; // per row of the half-size copy, the longest run of texels standing for all four of theirs: [start, end)
 }
 SWTexture;
+
+const SWButtonCache* swrButtonCache(SWTexture* texture, int sx, int sy, int sw, int sh);
+void swrFreeButtonCache(SWTexture* texture);
 
 typedef struct
 {

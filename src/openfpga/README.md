@@ -519,7 +519,10 @@ ordinary sampling.
 `make battle-contrast-fixture` builds `./<game>_pc_battle_contrast_fixture`
 without game assets. Run it once for each `GAME` to check game-specific
 selection as well as shared coverage, clipping, cache isolation and fallback
-modes. Use separate object directories when changing `GAME` or compiler flags.
+modes. It also checks exact button-cache output, warm renderer-state restoration,
+cold rebuilding and page eviction. `make snapshot-tests` includes allocation,
+budget and texture-ownership checks. Use separate object directories when
+changing `GAME` or compiler flags.
 
 ## Frame skipping
 

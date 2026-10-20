@@ -41,6 +41,7 @@ static void finish(SWRenderer *swr, SWTexture *texture) {
     free(swr->fb);
     free(swr->hintedGlyphs);
     free(swr->contrastItems); free(swr->contrastFonts);
+    swrFreeButtonCache(texture);
     free(texture->halfBuffer); free(texture->rowBounds); free(texture->buffer);
 }
 
@@ -526,6 +527,64 @@ static void hybridCrop(int kind, int clip, bool warm) {
     ++checked; finish(&swr, &texture);
 }
 
+/* A Memory restores renderer state, not immutable texture derivatives. Warm
+ * redraws and a cold rebuild must still produce the same complete framebuffer. */
+static void buttonCacheRestore(void) {
+    SWRenderer swr;
+    SWTexture texture = {0}; DataWin data = {0}; SWTexture *pages[] = {&texture};
+    setup(&swr, &texture, &data, pages);
+    for (int i = 0; i < TEX * TEX; ++i)
+        texture.buffer[i] = (uintpixel_t) ((i % 3 ? 0x8000 : 0) | ((i * 7919u) & 0x7fff));
+    // Independent per-channel five-tap result for crop (1,1,5,5) over
+    // RGB555 0xa937. The center weighs four and each in-bounds box tap one;
+    // transparent/missing taps keep their eighth of the destination channel.
+    const uintpixel_t crop[3][3] = {
+        {0xa537, 0xda4e, 0xa554}, {0x9a99, 0xb173, 0xd4af}, {0xb115, 0xc132, 0xa937}
+    };
+    uintpixel_t expected[SIZE * SIZE];
+    for (int y = 0; y < SIZE; ++y)
+        for (int x = 0; x < SIZE; ++x)
+            expected[y * SIZE + x] = x >= 2 && x < 5 && y >= 2 && y < 5 ? crop[y - 2][x - 2] : 0xa937;
+    clear(&swr, 0xa937);
+    swrDrawContrastSprite(&swr.base, 4, 4, 5, 5, &texture, 1, 1, 5, 5, 0xffffff, 1, SWR_CONTRAST_BUTTON);
+    swrOverlayFlush(&swr);
+    if (!texture.buttonCache || memcmp(expected, swr.fb, sizeof(expected))) abort();
+    const SWButtonCache *warm = texture.buttonCache;
+    SWRendererSnapshotState state;
+    if (!SWRenderer_snapshotGetState(&swr.base, &state)) abort();
+    swr.blendMode = bm_add; swr.writeMask = 0;
+    SWRenderer_snapshotApplyState(&swr.base, &state);
+    clear(&swr, 0xa937);
+    swrDrawContrastSprite(&swr.base, 4, 4, 5, 5, &texture, 1, 1, 5, 5, 0xffffff, 1, SWR_CONTRAST_BUTTON);
+    swrOverlayFlush(&swr);
+    if (texture.buttonCache != warm || memcmp(expected, swr.fb, sizeof(expected))) abort();
+    swrFreeButtonCache(&texture);
+    clear(&swr, 0xa937);
+    swrDrawContrastSprite(&swr.base, 4, 4, 5, 5, &texture, 1, 1, 5, 5, 0xffffff, 1, SWR_CONTRAST_BUTTON);
+    swrOverlayFlush(&swr);
+    if (!texture.buttonCache || memcmp(expected, swr.fb, sizeof(expected))) abort();
+    // Exercise the real page-cache eviction path with heap-owned textures.
+    // Recreate from the same synthetic source instead of requiring an asset pack.
+    size_t previousTextureCount = swr.textureCount;
+    swr.textureCount = 1;
+    for (int reload = 0; reload < 2; ++reload) {
+        SWTexture *page = swrCreateTextureEx(texture.buffer, TEX, TEX, false);
+        page->immutable = true;
+        page->lastUsedFrame = swr.frameCounter;
+        pages[0] = page;
+        if (page->buttonCache) abort();
+        clear(&swr, 0xa937);
+        swrDrawContrastSprite(&swr.base, 4, 4, 5, 5, page, 1, 1, 5, 5, 0xffffff, 1, SWR_CONTRAST_BUTTON);
+        swrOverlayFlush(&swr);
+        if (!page->buttonCache || memcmp(expected, swr.fb, sizeof(expected))) abort();
+        swrEvictTextureFromCache(&swr, 0);
+        if (pages[0] != NULL) abort();
+    }
+    pages[0] = &texture;
+    swr.textureCount = previousTextureCount;
+    ++checked; finish(&swr, &texture);
+}
+
 int main(void) {
     for (unsigned pattern = 0; pattern < 16; ++pattern)
         for (int kind = SWR_CONTRAST_GLYPH; kind <= SWR_CONTRAST_BUBBLE_GLYPH; ++kind)
@@ -541,6 +600,7 @@ int main(void) {
     textDispatch();
     hudSpriteDispatch();
     hintedName();
+    buttonCacheRestore();
     for (int kind = SWR_CONTRAST_GLYPH; kind <= SWR_CONTRAST_BUBBLE_GLYPH; ++kind)
         for (int clip = 0; clip < 16; ++clip)
             for (int warm = 0; warm < 2; ++warm) oddEdges(warm, clip, kind);
