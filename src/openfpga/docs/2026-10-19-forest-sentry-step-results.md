@@ -111,6 +111,14 @@ FPS**. Actual allocator behavior, OS/SD services, presentation/audio scheduling,
 interrupts, fitted hardware, Memories and sleep/wake still need Pocket testing.
 No update ZIP, SD installation or release publication is produced here.
 
+## Pocket follow-up
+
+The subsequent two-game update built from `d3345586` includes this optimization
+and the [legacy Memory identity fix](2026-10-19-legacy-memory-identity-results.md).
+The user tested that candidate, reported that it "works well", and approved
+shipping. No whole-room Pocket FPS measurement was recorded; the numerical
+savings above remain isolated simulated-event measurements.
+
 ## Private evidence
 
 Reproduction scripts, source snapshots, original failed attempts, captures,

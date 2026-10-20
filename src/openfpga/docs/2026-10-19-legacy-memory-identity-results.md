@@ -32,7 +32,9 @@ is 244 bytes and desktop is 252. The retained HUD and current Pocket ELFs have
 matching native layouts. All supplied files decompress with valid raw checksums,
 valid native epsilon and room-count boundaries, in rooms 80 and 81.
 
-This validates the identity fix and native layout continuity, not complete
-restoration of these files on hardware. Test the unchanged original Memories on
-a Pocket candidate before treating their recovery as confirmed. Private input
-files, decoded contents and detailed logs remain in ignored local evidence.
+This automated validation establishes the identity fix and native layout
+continuity; the desktop probe cannot establish complete Pocket restoration.
+After testing the update built from `d3345586`, the user reported that it
+"works well" and approved shipping. This is qualitative hardware confirmation,
+not an independently recorded restore result for every supplied file. Private
+input files, decoded contents and detailed logs remain in ignored local evidence.
