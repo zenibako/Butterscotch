@@ -183,7 +183,7 @@ typedef struct {
     void (*gpuGetColorWriteEnable)(Renderer* renderer, bool* red, bool* green, bool* blue, bool* alpha);
     bool (*gpuGetBlendEnable)(Renderer* renderer);
     // Optional: when enabled, replaces output RGB with the fog color (preserving alpha)
-    void (*gpuSetFog)(Renderer* renderer, bool enable, uint32_t color);
+    void (*gpuSetFog)(Renderer* renderer, bool enable, uint32_t color, float start, float end);
     // Optional: platform-specific tile rendering (nullptr = use default drawSpritePart path)
     void (*drawTile)(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY);
     // Optional: draw a run of tiles that nothing else is drawn between, in order. offsets holds each tile's layer shift as an x, y pair.
@@ -246,6 +246,9 @@ typedef struct {
     bool (*shaderIsCompiled)(Renderer* renderer, int32_t shader);
     bool (*shadersSupported)(void);
     void (*setMatrix)(Renderer* renderer, int32_t matrixType, Matrix4f matrix);
+    // Unlit 3D state. State changes flush previously submitted geometry.
+    void (*setDepthState)(Renderer* renderer, bool test, bool write, bool cull);
+    void (*clearDepth)(Renderer* renderer, float depth);
 } RendererVtable;
 
 // ===[ Renderer Base Struct ]===
@@ -271,6 +274,9 @@ struct Renderer {
     bool texFilter;
     BlendFactors blendFactors;
     int32_t cameraCurrent;
+    struct D3DState* d3d;
+    float drawDepth;
+    bool legacyTextureCoordinates;
 };
 
 // ===[ Shared Helpers (platform-agnostic) ]===

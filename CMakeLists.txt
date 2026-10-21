@@ -122,6 +122,7 @@ option(ENABLE_MODERN_GL "Enable the modern OpenGL renderer" ON)
 option(ENABLE_SW_RENDERER "Enable the software renderer" ON)
 option(ENABLE_NOOP_RENDERER "Enable the no-op renderer (headless stub, no drawing)" OFF)
 option(ENABLE_PHYSICS "Enable Box2D physics support" ON)
+option(ENABLE_FMOD "Enable standalone FMOD bank/event compatibility" ON)
 # Noop renderer is exclusive to the noop desktop backend (no window, no GL).
 # Auto-enable for BACKEND=noop and reject otherwise.
 if(BACKEND STREQUAL "noop")
@@ -159,11 +160,17 @@ endif()
 if(ENABLE_PHYSICS)
     add_compile_definitions(ENABLE_PHYSICS)
 endif()
+if(ENABLE_FMOD)
+    add_compile_definitions(ENABLE_FMOD)
+endif()
 
 file(GLOB SOURCES src/*.c)
 # Pocket snapshots and Zstandard are built by the port and its dedicated tests.
 # Generic frontends do not use the codec, including the legacy compiler targets.
 list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/runner_snapshot.c")
+if(ENABLE_FMOD)
+    list(APPEND SOURCES src/fmod/fmod.c src/fmod/fmod_bank.c src/fmod/fsb.c src/fmod/fmod_dsp.c)
+endif()
 if(ENABLE_PHYSICS)
     file(GLOB PHYSICS_SOURCES CONFIGURE_DEPENDS src/physics/*.c)
 else()
