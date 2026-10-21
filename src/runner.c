@@ -2905,6 +2905,34 @@ RoomLayer* Runner_findRoomLayerById(Room* room, int32_t id) {
 
 void Runner_invalidateLayerElementLookup(Runner* runner) {
     runner->layerElementLookupValid = false;
+    runner->layerElementLookupPrefixKnown = false;
+}
+
+// Full first-match search up to and including (stopLayer, stopElement), also
+// recording the smallest ID it passes that is above the match. Used only when
+// the slot after the hint matches, so it compares no more slots than the scan.
+static RuntimeLayerElement* findLayerElementPrefix(Runner* runner, int32_t elementId, size_t stopLayer, size_t stopElement, RuntimeLayer** outLayer) {
+    uint32_t target = (uint32_t) elementId;
+    uint32_t ceiling = UINT32_MAX;
+    repeat(stopLayer + 1, i) {
+        RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
+        size_t elementCount = i == stopLayer ? stopElement + 1 : arrlenu(runtimeLayer->elements);
+        repeat(elementCount, j) {
+            uint32_t id = runtimeLayer->elements[j].id;
+            if (id == target) {
+                runner->layerElementLookupLayer = i;
+                runner->layerElementLookupElement = j;
+                runner->layerElementLookupValid = true;
+                runner->layerElementLookupPrefixCeiling = ceiling;
+                runner->layerElementLookupPrefixId = id;
+                runner->layerElementLookupPrefixKnown = true;
+                if (outLayer != nullptr) *outLayer = runtimeLayer;
+                return &runtimeLayer->elements[j];
+            }
+            if (id > target && ceiling > id) ceiling = id;
+        }
+    }
+    return nullptr;
 }
 
 RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t elementId, RuntimeLayer** outLayer) {
@@ -2914,14 +2942,37 @@ RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t element
     // Indices avoid dangling pointers after array relocation; bounds and ID
     // checks reject a detached or stale slot before falling back to the scan.
     if (runner->layerElementLookupValid && runner->layerElementLookupLayer < layerCount) {
-        RuntimeLayer* layer = &runner->runtimeLayers[runner->layerElementLookupLayer];
+        size_t layerIndex = runner->layerElementLookupLayer;
+        RuntimeLayer* layer = &runner->runtimeLayers[layerIndex];
         size_t elementIndex = runner->layerElementLookupElement;
-        if (elementIndex < arrlenu(layer->elements) && (int32_t) layer->elements[elementIndex].id == elementId) {
-            if (outLayer != nullptr) *outLayer = layer;
-            return &layer->elements[elementIndex];
+        size_t elementCount = arrlenu(layer->elements);
+        if (elementIndex < elementCount) {
+            uint32_t hintId = layer->elements[elementIndex].id;
+            if ((int32_t) hintId == elementId) {
+                if (outLayer != nullptr) *outLayer = layer;
+                return &layer->elements[elementIndex];
+            }
+            // Tile walks ask for each element in turn. No earlier ID lies between
+            // the hinted ID and the ceiling, so a next slot strictly inside that
+            // range is the first match, and the ceiling still holds for it.
+            // The ceiling is only trusted while the hinted slot still holds the
+            // ID it was learned for. Otherwise the prefix search finds any
+            // earlier duplicate exactly as the scan would.
+            size_t nextIndex = elementIndex + 1;
+            if (nextIndex < elementCount && (int32_t) layer->elements[nextIndex].id == elementId) {
+                uint32_t nextId = layer->elements[nextIndex].id;
+                if (runner->layerElementLookupPrefixKnown && runner->layerElementLookupPrefixId == hintId && nextId > hintId && runner->layerElementLookupPrefixCeiling > nextId) {
+                    runner->layerElementLookupElement = nextIndex;
+                    runner->layerElementLookupPrefixId = nextId;
+                    if (outLayer != nullptr) *outLayer = layer;
+                    return &layer->elements[nextIndex];
+                }
+                return findLayerElementPrefix(runner, elementId, layerIndex, nextIndex, outLayer);
+            }
         }
     }
     runner->layerElementLookupValid = false;
+    runner->layerElementLookupPrefixKnown = false;
     repeat(layerCount, i) {
         RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
         size_t elementCount = arrlenu(runtimeLayer->elements);

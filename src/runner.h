@@ -789,6 +789,12 @@ struct Runner {
     size_t layerElementLookupLayer;
     size_t layerElementLookupElement;
     bool layerElementLookupValid;
+    // Smallest ID before the hinted slot that is above the hinted ID (UINT32_MAX
+    // if none), valid only while prefixKnown. A following slot whose ID lies
+    // strictly between the two cannot have an earlier duplicate.
+    uint32_t layerElementLookupPrefixCeiling;
+    uint32_t layerElementLookupPrefixId; // hinted ID the ceiling was learned for
+    bool layerElementLookupPrefixKnown;
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
     uint32_t nextLayerDrawOrder;
     SavedRoomState* savedRoomStates; // array of size dataWin->room.count, for persistent room support
