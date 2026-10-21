@@ -2,9 +2,9 @@
 
 This diagnostic extends the current writer/castle candidate. It measures the two
 reported Speed-mode slowdowns on the Pocket before choosing another optimization.
-The [existing optimization design](../../../docs/superpowers/specs/2026-10-15-deltarune-optimization-design.md)
+The [existing optimization design](https://github.com/zenibako/butterscotch-pocket/issues/27)
 requires separate host and device evidence; desktop route checks do not establish
-Pocket performance. The [sequential investigation](../../../docs/superpowers/specs/2026-10-17-sequential-optimization-design.md)
+Pocket performance. The [sequential investigation](https://github.com/zenibako/butterscotch-pocket/issues/28)
 also requires measured work removal before retaining a new optimization.
 
 ## Install and run

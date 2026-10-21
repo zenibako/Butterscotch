@@ -184,7 +184,7 @@ Its interpreter-work bound is fixture-only instrumentation. The Undertale
 configuration checks that the Deltarune-only script is not installed there.
 
 The translated tile-cache fixture and its recorded harness/Pocket comparisons
-are described in [the dated results](docs/2026-10-14-tile-cache-reuse-results.md).
+are described in [the dated results](https://github.com/zenibako/butterscotch-pocket/issues/31).
 
 ### Save states and sleep (experimental; Undertale and Deltarune Chapter 1)
 
