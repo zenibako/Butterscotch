@@ -175,6 +175,15 @@ static void testSequentialWalk(void) {
     addElement(h, 0, 450);
     for (int i = 0; i < 240; ++i) expect(h, 341 + i, 341 + i == 450 ? 0 : 4, 341 + i == 450 ? 0 : i);
     dispose(h);
+    /* A hinted ID lowered in place must not reuse its old ceiling. */
+    Fixture *c = fixture();
+    addLayer(c, 1);
+    addElement(c, 0, 50); addElement(c, 0, 90); addElement(c, 0, 100); addElement(c, 0, 50);
+    expect(c, 90, 0, 1);
+    expect(c, 100, 0, 2);
+    c->r.runtimeLayers[0].elements[2].id = 10;
+    expect(c, 50, 0, 0);
+    dispose(c);
     /* Ascending walk crossing an in-place ID change at the hinted slot. */
     expect(f, 1000, 2, 0);
     expect(f, 1001, 2, 1);

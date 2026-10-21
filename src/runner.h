@@ -793,6 +793,7 @@ struct Runner {
     // if none), valid only while prefixKnown. A following slot whose ID lies
     // strictly between the two cannot have an earlier duplicate.
     uint32_t layerElementLookupPrefixCeiling;
+    uint32_t layerElementLookupPrefixId; // hinted ID the ceiling was learned for
     bool layerElementLookupPrefixKnown;
     uint32_t nextLayerId;        // counter for IDs of layers/elements created at runtime
     uint32_t nextLayerDrawOrder;

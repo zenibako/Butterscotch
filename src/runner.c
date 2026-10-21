@@ -2924,6 +2924,7 @@ static RuntimeLayerElement* findLayerElementPrefix(Runner* runner, int32_t eleme
                 runner->layerElementLookupElement = j;
                 runner->layerElementLookupValid = true;
                 runner->layerElementLookupPrefixCeiling = ceiling;
+                runner->layerElementLookupPrefixId = id;
                 runner->layerElementLookupPrefixKnown = true;
                 if (outLayer != nullptr) *outLayer = runtimeLayer;
                 return &runtimeLayer->elements[j];
@@ -2954,13 +2955,15 @@ RuntimeLayerElement* Runner_findLayerElementById(Runner* runner, int32_t element
             // Tile walks ask for each element in turn. No earlier ID lies between
             // the hinted ID and the ceiling, so a next slot strictly inside that
             // range is the first match, and the ceiling still holds for it.
-            // Otherwise the prefix search finds any earlier duplicate exactly as
-            // the scan would.
+            // The ceiling is only trusted while the hinted slot still holds the
+            // ID it was learned for. Otherwise the prefix search finds any
+            // earlier duplicate exactly as the scan would.
             size_t nextIndex = elementIndex + 1;
             if (nextIndex < elementCount && (int32_t) layer->elements[nextIndex].id == elementId) {
                 uint32_t nextId = layer->elements[nextIndex].id;
-                if (runner->layerElementLookupPrefixKnown && nextId > hintId && runner->layerElementLookupPrefixCeiling > nextId) {
+                if (runner->layerElementLookupPrefixKnown && runner->layerElementLookupPrefixId == hintId && nextId > hintId && runner->layerElementLookupPrefixCeiling > nextId) {
                     runner->layerElementLookupElement = nextIndex;
+                    runner->layerElementLookupPrefixId = nextId;
                     if (outLayer != nullptr) *outLayer = layer;
                     return &layer->elements[nextIndex];
                 }
