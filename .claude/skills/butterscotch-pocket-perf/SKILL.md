@@ -448,8 +448,10 @@ It answers cycle questions without a card trip:
 - **A cheap way to find wasted work:** replace a draw with a wrong colour.
   If the frames still match, everything it drew is overdrawn. That is how
   dodge's redundant full-screen clear was found (5.6 ms simulated).
-- Write results up in `src/openfpga/docs/` with the window, frames and
-  build, and date them here.
+- Record results as a closed issue in zenibako/butterscotch-pocket titled
+  `Archived results (Butterscotch): <topic> (YYYY-MM-DD)`, with the window,
+  frames and build, and date them here. Don't add results markdown to the
+  repository.
 
 Results so far (Butterscotch main `05b0eef`, three frames per window):
 
@@ -480,7 +482,7 @@ not establish that instruction-cache misses are absent elsewhere: the
 probe is 2000 repeated renderer calls after warming the sprite, bypassing
 the GML builtin and VM. No cache-miss counters are measured.
 
-See the [result and exact device-report excerpts](../../../src/openfpga/docs/2026-10-10-sprite-layout-results.md).
+See the [result and exact device-report excerpts](https://github.com/zenibako/butterscotch-pocket/issues/30).
 
 ## Code layout is not it (2026-10-10)
 

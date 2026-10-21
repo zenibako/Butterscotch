@@ -38,7 +38,7 @@ select all domains. Changes to a known reusable workflow select the domains it
 defines; console and Web/Android workflows retain all of their leaves for such
 changes.
 
-This preserves the [existing Pocket-only snapshot codec boundary](superpowers/plans/2026-10-12-undertale-savestates.md#october-13-generic-ci-source-scope).
+This preserves the [existing Pocket-only snapshot codec boundary](https://github.com/zenibako/butterscotch-pocket/issues/18).
 It does not narrow ordinary `src/*.c` or `src/sw/` changes based on their original
 motivation: a Pocket renderer optimization still selects the shared builds.
 
