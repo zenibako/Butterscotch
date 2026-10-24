@@ -1,7 +1,7 @@
 ---
 name: butterscotch-pocket-perf
 description: Use when investigating Butterscotch Undertale or Deltarune performance on the Analogue Pocket, interpreting benchmark logs, diagnosing battle text or flashing-tile slowdowns, comparing optimization candidates, or assessing os20/os25 timing claims.
-argument-hint: "[card: SD mount path] [harness: path or host:path of the os25 harness, if any]"
+argument-hint: "[card: SD mount path] [harness: path or host:path of a zenibako/pocket-harness checkout, if any]"
 ---
 
 # Performance work on the Pocket
@@ -12,9 +12,10 @@ Take these from the arguments; if the task needs one that is missing, ask
 the user once rather than guessing a machine or path:
 
 - **card**: where the Pocket's SD card is mounted (written `$CARD` below).
-- **harness**: where the user's os25 harness checkout is, as a path or
-  `host:path`, for simulated runs. Without it, say a simulated check is
-  possible and ask; don't hunt for it.
+- **harness**: where the user's checkout of the private
+  [zenibako/pocket-harness](https://github.com/zenibako/pocket-harness)
+  repository is, as a path or `host:path`, for simulated runs. Without it,
+  say a simulated check is possible and ask; don't hunt for it.
 
 ## Reading the log off the card
 
@@ -208,9 +209,12 @@ uncached". What still holds, whatever the cause:
 ## Simulated runs: the os25 harness (2026-10-11)
 
 The user has a cycle-level simulator of the os25 CPU and memory system,
-the os25 harness. It lives only on the user's own machine (the **harness**
-input), with its own skill there, and is deliberately kept out of this
-repository. Read that skill before running it.
+the os25 harness, in the private repository zenibako/pocket-harness (the
+**harness** input). The Butterscotch workload is its original one, at the
+repository root. Read its `README.md` and its
+`.agents/skills/os25-harness/SKILL.md` before running it. Game data,
+captures and cases stay in its gitignored `inputs/` and `experiments/`;
+never commit them there or here.
 It answers cycle questions without a card trip:
 
 - **Everything from it is simulated.** Say so with every number, and
